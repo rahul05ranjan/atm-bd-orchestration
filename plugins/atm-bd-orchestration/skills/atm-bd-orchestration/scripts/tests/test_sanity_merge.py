@@ -10,6 +10,7 @@ import time
 import unittest
 
 from jev_receipts import CLIENT, env, receipted, split
+from rendering import render
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/sanity-merge"
@@ -410,11 +411,7 @@ class SanityMerge(unittest.TestCase):
         self.assertEqual(self.merge([], str(self.manifest), TASK).returncode, 1)
 
     def render_complete(self, vars_, expected_heading):
-        var_file = self.dir / "vars.json"
-        var_file.write_text(json.dumps(vars_))
-        out = subprocess.run(["sc-compose", "render", "--strict", "--root", str(TEMPLATES),
-                              "--file", "dev-sanity-complete.md.j2", "--var-file", str(var_file)],
-                             capture_output=True, text=True)
+        out = render(TEMPLATES / "dev-sanity-complete.md.j2", vars_)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn(expected_heading, out.stdout)
         self.assertIn(f'"verdict": "{vars_["verdict"]}"', out.stdout)

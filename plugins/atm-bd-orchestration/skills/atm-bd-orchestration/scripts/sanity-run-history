@@ -9,9 +9,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads" / "scripts"))
+import sc_render  # noqa: E402
 
 
 def fail(message: str) -> None:
@@ -233,17 +235,12 @@ def render_record(variables):
 
     No shell pipeline: failed render/validation cannot append any output.
     """
-    with tempfile.TemporaryDirectory(prefix="sanity-record-") as scratch:
-        var_file = Path(scratch) / "vars.json"
-        var_file.write_text(json.dumps(variables))
-        try:
-            result = subprocess.run(
-                ["sc-compose", "render", "--strict", "--root", str(RECORD_TEMPLATE.parent),
-                 "--file", str(RECORD_TEMPLATE),
-                 "--var-file", str(var_file)], check=True, capture_output=True, text=True)
-            record = json.loads(result.stdout)
-        except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-            fail(f"record render failed: {exc}; {getattr(exc, 'stderr', '')}")
+    try:
+        record = json.loads(sc_render.render(RECORD_TEMPLATE, variables))
+    except sc_render.RenderError as exc:
+        fail(f"record render failed: {sc_render.error_text(exc)}")
+    except json.JSONDecodeError as exc:
+        fail(f"record render failed: {exc}")
     return validate_record(record)
 
 

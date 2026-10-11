@@ -11,6 +11,8 @@ import time
 import unittest
 import unittest.mock
 
+from rendering import render
+
 SCRIPTS = Path(__file__).parents[1]
 SCRIPT = SCRIPTS / "sanity-split"
 MERGE = SCRIPTS / "sanity-merge"
@@ -254,9 +256,7 @@ class SanitySplit(unittest.TestCase):
                                                          "files_outside_owned_paths", "worktree_path", "branch",
                                                          "commit", "base_sha")},
                      "context": context}
-        rendered = subprocess.run(["sc-compose", "render", "--strict", "--root", str(SCRIPTS.parent / "templates"),
-                                   "--file", "dev-sanity-assignment.json.j2", "--var-file", "/dev/stdin"],
-                                  input=json.dumps(variables), capture_output=True, text=True)
+        rendered = render(SCRIPTS.parent / "templates/dev-sanity-assignment.json.j2", variables)
         self.assertEqual(rendered.returncode, 0, rendered.stderr)
         self.assertEqual(json.loads(rerun.stdout), json.loads(rendered.stdout))
         self.assertEqual(json.loads(rerun.stdout)["context"], context)

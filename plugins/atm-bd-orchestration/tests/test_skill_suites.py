@@ -70,12 +70,10 @@ def test_sprint_bead_template_renders_a_valid_sprint_bead(installed, example):
     """A strict render of the sprint-bead template is a valid SprintBead: a stage:sprint container with a numbered
     Deliverables list and its metadata (difficulty)."""
     skill = installed / ".claude/skills/atm-beads"
-    out = subprocess.run(["sc-compose", "render", "--file", str(skill / "templates/sprint-bead.json.j2"),
-                          "--var-file", str(skill / "examples" / example), "--strict"],
-                         cwd=installed, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    assert out.returncode == 0, out.stderr[-4000:]
-    bead = json.loads(out.stdout)
     sys.path.insert(0, str(skill / "scripts"))
+    import sc_render
+    bead = json.loads(sc_render.render(skill / "templates/sprint-bead.json.j2",
+                                       json.loads((skill / "examples" / example).read_text())))
     import bead_schema
     assert bead_schema.problems(bead, bead_schema.SprintBead) == []
     assert "stage:sprint" in bead["labels"]

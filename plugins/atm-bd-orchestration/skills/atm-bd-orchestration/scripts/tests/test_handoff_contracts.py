@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import rendering
+
 ROOT = Path(__file__).parents[2]
 AGENTS = ROOT.parents[1] / "agents"
 TEMPLATES = ROOT / "templates"
@@ -26,8 +28,7 @@ EXAMPLES = ROOT / "examples"
 
 
 def render(template: str, variables: Path) -> str:
-    result = subprocess.run(["sc-compose", "render", "--strict", "--file", str(TEMPLATES / template),
-                             "--var-file", str(variables)], capture_output=True, text=True)
+    result = rendering.render(TEMPLATES / template, variables)
     assert result.returncode == 0, result.stderr
     return result.stdout
 

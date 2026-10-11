@@ -134,14 +134,13 @@ Failed checks take precedence as ❌.
 
 ## Render command
 
-The template path is relative to the main repository root. The script invokes:
+The template path is relative to the main repository root. The script renders
+it with the sc-compose Python wheel. To render manually, write the variables
+JSON produced by the script to a temporary file and run:
 
 ```bash
-sc-compose render --file .claude/skills/sprint-report/report.md.j2 --var-file <json>
+atm compose --template .claude/skills/sprint-report/report.md.j2 --vars <json>
 ```
-
-To render manually, write the variables JSON produced by the script to a
-temporary file and run the same command from the repository root.
 
 ## Table variables
 

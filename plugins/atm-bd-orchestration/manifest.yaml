@@ -97,6 +97,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/fixtures/wrong-base.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/zero-delta.json
     - skills/atm-bd-orchestration/scripts/tests/jev_receipts.py
+    - skills/atm-bd-orchestration/scripts/tests/rendering.py
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_pour_mock.py
@@ -162,6 +163,7 @@ artifacts:
     - skills/atm-beads/scripts/plan_contract.py
     - skills/atm-beads/scripts/repo_config.py
     - skills/atm-beads/scripts/resolve-role
+    - skills/atm-beads/scripts/sc_render.py
     - skills/atm-beads/scripts/sprint_index_common.py
     - skills/atm-beads/scripts/validate-plan
     - skills/atm-beads/templates/dev-sanity-bead.json.j2
@@ -208,7 +210,7 @@ requires:
   - python3 >= 3.11
   - pyyaml
   - pydantic
-  - sc-compose >= 1.6.1
+  - sc-compose == 1.6.1  # CLI and Python wheel, one version: install.sc_compose_pin()
   - atm >= 1.6.1
   - bd >= 1.3.0
   - jq

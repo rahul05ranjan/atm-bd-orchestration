@@ -57,7 +57,7 @@ def test_no_repo_or_team_specific_strings_in_sources():
     hits = []
     for cat in ("skills", "agents", "config"):
         for path in (PKG / cat).rglob("*"):
-            if not path.is_file() or "node_modules" in path.parts or "__pycache__" in path.parts:
+            if not path.is_file() or {"node_modules", "__pycache__", ".sc-compose"} & set(path.parts):  # .sc-compose/: gitignored render logs
                 continue
             try:
                 text = path.read_text(encoding="utf-8")

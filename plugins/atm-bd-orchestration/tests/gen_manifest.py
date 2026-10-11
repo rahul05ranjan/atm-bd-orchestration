@@ -25,7 +25,8 @@ CATEGORIES = ("skills", "agents")
 def tree_artifacts() -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for cat in CATEGORIES:
-        files = [p for p in (PKG / cat).rglob("*") if p.is_file() and "node_modules" not in p.parts and "__pycache__" not in p.parts]
+        files = [p for p in (PKG / cat).rglob("*")
+                 if p.is_file() and not {"node_modules", "__pycache__", ".sc-compose"} & set(p.parts)]  # .sc-compose/: gitignored render logs
         out[cat] = sorted(str(p.relative_to(PKG)) for p in files)
     return out
 

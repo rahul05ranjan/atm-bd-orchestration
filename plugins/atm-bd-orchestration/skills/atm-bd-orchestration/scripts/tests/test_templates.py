@@ -6,6 +6,8 @@ import re
 import subprocess
 import unittest
 
+from rendering import render
+
 
 ROOT = Path(__file__).parents[2]
 
@@ -62,18 +64,14 @@ class TemplateContractTests(unittest.TestCase):
         loader = importlib.machinery.SourceFileLoader("sanity_split", str(ROOT / "scripts/sanity-split"))
         split = importlib.util.module_from_spec(importlib.util.spec_from_loader("sanity_split", loader))
         loader.exec_module(split)
-        result = subprocess.run(["sc-compose", "render", "--file", str(ROOT / "templates/finding-bead.json.j2"),
-                                 "--var-file", str(ROOT / "examples/finding-bead-vars.json"), "--strict"],
-                                capture_output=True, text=True)
+        result = render(ROOT / "templates/finding-bead.json.j2", ROOT / "examples/finding-bead-vars.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         items = split.parse_deliverables(json.loads(result.stdout)["description"])
         self.assertEqual(len(items), 1)
 
     def test_a_finding_bead_is_a_child_of_the_phase_or_feature_bead_not_the_sprint(self):
         import json, subprocess
-        result = subprocess.run(["sc-compose", "render", "--file", str(ROOT / "templates/finding-bead.json.j2"),
-                                 "--var-file", str(ROOT / "examples/finding-bead-vars.json"), "--strict"],
-                                capture_output=True, text=True)
+        result = render(ROOT / "templates/finding-bead.json.j2", ROOT / "examples/finding-bead-vars.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         bead = json.loads(result.stdout)
         edges = {d["type"]: d["depends_on_id"] for d in bead["dependencies"]}
@@ -148,9 +146,7 @@ class TemplateContractTests(unittest.TestCase):
                     if not valid:
                         self.assertIn("review completion:", checked.stderr)
                         continue
-                    result = subprocess.run([
-                        "sc-compose", "render", "--file", str(template),
-                        "--var-file", str(variables), "--strict"], capture_output=True, text=True)
+                    result = render(template, variables)
                     self.assertEqual(result.returncode == 0, valid, result.stderr)
                     if valid:
                         machine = json.loads(result.stdout.split("```json\n", 1)[1].split("```", 1)[0])
@@ -167,9 +163,7 @@ class TemplateContractTests(unittest.TestCase):
                 if not include:
                     del candidate["post_mortem_jev"]
                 path.write_text(json.dumps(candidate))
-                result = subprocess.run([
-                    "sc-compose", "render", "--file", str(ROOT / "templates/review-complete.md.j2"),
-                    "--var-file", str(path), "--strict"], capture_output=True, text=True)
+                result = render(ROOT / "templates/review-complete.md.j2", path)
                 self.assertEqual(result.returncode == 0, include, result.stderr)
                 if include:
                     machine = json.loads(result.stdout.split("```json\n", 1)[1].split("```", 1)[0])
@@ -184,9 +178,7 @@ class TemplateContractTests(unittest.TestCase):
             variables = examples / fixture_name
             with self.subTest(template=template_path.name):
                 self.assertTrue(variables.is_file(), f"missing strict-render fixture: {fixture_name}")
-                result = subprocess.run([
-                    "sc-compose", "render", "--file", str(template_path),
-                    "--var-file", str(variables), "--strict"], capture_output=True, text=True)
+                result = render(template_path, variables)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_sanity_assignment_context_shape_matches_reviewer_inputs(self):
@@ -196,10 +188,7 @@ class TemplateContractTests(unittest.TestCase):
         for fixture, expected_context in (("dev-sanity-assignment-vars.json", []),
                                           ("dev-sanity-assignment-context-vars.json", ["docs/retry.md"])):
             with self.subTest(fixture=fixture):
-                result = subprocess.run([
-                    "sc-compose", "render", "--strict", "--file", str(assignment),
-                    "--var-file", str(examples / fixture),
-                ], capture_output=True, text=True)
+                result = render(assignment, examples / fixture)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 rendered = json.loads(result.stdout)
                 self.assertEqual(rendered["context"], expected_context)
@@ -234,13 +223,7 @@ class TemplateContractTests(unittest.TestCase):
 
 
 def _render(template: str, values: dict) -> subprocess.CompletedProcess:
-    import json
-    import tempfile
-    with tempfile.TemporaryDirectory() as directory:
-        variables = Path(directory) / "vars.json"
-        variables.write_text(json.dumps(values))
-        return subprocess.run(["sc-compose", "render", "--file", str(ROOT / "templates" / template),
-                               "--var-file", str(variables), "--strict"], capture_output=True, text=True)
+    return render(ROOT / "templates" / template, values)
 
 
 def _example(name: str) -> dict:

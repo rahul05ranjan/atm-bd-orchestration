@@ -361,8 +361,8 @@ After the selected task closes, render the last ten runs (two rows each):
 
 ```bash
 set -o pipefail
-test -s "$log" && tail -n 20 "$log" | jq -s '{runs: .}' | sc-compose render --strict \
-  --file .claude/skills/atm-bd-orchestration/templates/sanity-run-table.md.j2 --var-file /dev/stdin
+test -s "$log" && tail -n 20 "$log" | jq -s '{runs: .}' | atm compose \
+  --template .claude/skills/atm-bd-orchestration/templates/sanity-run-table.md.j2 --vars -
 ```
 
 Include the entire rendered table in the user-visible completion reply before

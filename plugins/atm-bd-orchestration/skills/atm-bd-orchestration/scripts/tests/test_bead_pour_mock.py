@@ -22,6 +22,8 @@ import time
 import unittest
 from pathlib import Path
 
+from rendering import render
+
 SKILL = Path(__file__).resolve().parents[2]
 ATM_BEADS = SKILL.parent / "atm-beads"
 
@@ -579,10 +581,9 @@ class BeadPourMockTests(unittest.TestCase):
         assert ws.show(fix_group(sprint, "qa1-f1")[0]) is None
 
     def render(self, template: Path, values: dict) -> dict:
-        path = self.ws.root / f"vars-{values['id']}.json"
-        path.write_text(json.dumps(values))
-        out = self.ws.run("sc-compose", "render", "--file", template, "--var-file", path, "--strict").stdout
-        return json.loads(out)
+        out = render(template, values)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
 
     def test_an_assigned_important_finding_gets_its_sanity_and_qa_beads(self):
         """F1: assigning an important finding creates its sanity and QA beads in one import, finding <- sanity <- qa."""
