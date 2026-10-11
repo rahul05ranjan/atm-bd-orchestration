@@ -1,5 +1,5 @@
 name: atm-bd-orchestration
-version: 0.12.0
+version: 0.13.0
 description: >
   Bead-driven phase orchestration for ATM agent teams: the phase plan as a
   beads graph (atm-beads), dispatch, dev-sanity, QA and stack landing driven
@@ -103,6 +103,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_bead_queues.py
     - skills/atm-bd-orchestration/scripts/tests/test_bv_analyze.py
     - skills/atm-bd-orchestration/scripts/tests/test_fix_round_scope.py
+    - skills/atm-bd-orchestration/scripts/tests/test_handoff_contracts.py
     - skills/atm-bd-orchestration/scripts/tests/test_jev_client.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_jev.py

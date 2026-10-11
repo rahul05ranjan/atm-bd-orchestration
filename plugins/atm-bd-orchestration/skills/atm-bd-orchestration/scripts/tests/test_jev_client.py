@@ -177,7 +177,7 @@ class JevClientTests(unittest.TestCase):
             assignment = {"deliverable": {"number": 1, "text": "Keep the listener open and hand its fd to the child."},
                           "worktree_path": tmp, "commit": commit, "base_sha": base,
                           "changed_files": ["server.py"], "context": ["notes.md"]}
-            request = client.assignment_request(assignment)
+            (request,) = client.assignment_requests(assignment)
             self.assertEqual(request["state"]["deliverable"], assignment["deliverable"]["text"])
             self.assertIn("+hand_off_fd()", request["state"]["evidence"])
             self.assertIn("-rebind()", request["state"]["evidence"])
@@ -241,12 +241,126 @@ class JevClientTests(unittest.TestCase):
                 error = json.loads(output.getvalue())["error"]
                 self.assertEqual(error["code"], "SANITY.JEV_INCONCLUSIVE")
                 self.assertTrue(error["recoverable"] and client.is_client_message(error["message"]))
-                size = len(json.dumps(client.assignment_request(assignment), allow_nan=False).encode())
+                size = client.size(client.written_request(assignment["deliverable"]["text"], client.subprocess.run(
+                    ["git", "-C", tmp, "diff", "--no-color", f"{base}...{assignment['commit']}", "--", "server.py"],
+                    capture_output=True, text=True).stdout, {"big.md": "x" * client.MAX_REQUEST_BYTES}))
                 self.assertIn(f"The request is {size} bytes. Reduce context and retry", error["suggested_action"])
                 self.assertIn("`context`", error["suggested_action"])
-                client.validate_request(client.assignment_request({**assignment, "context": []}))  # the retry fits
+                self.assertIn("with `context` empty the client splits `changed_files`", error["suggested_action"])
+                self.assertNotIn("unchanged", error["suggested_action"])
+                (retry,) = client.assignment_requests({**assignment, "context": []})  # the retry fits
+                client.validate_request(retry)
             finally:
                 file.unlink()
+
+    def split_repo(self, tmp, files):
+        """A repository whose one commit changes `files` (name -> new text) from a one-line base."""
+        import subprocess
+        def git(*args):
+            return subprocess.run(["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "-q")
+        for name in files:
+            Path(tmp, name).write_text("start\n" + "\n".join(f"keep {i}" for i in range(0, 4000, 40)) + "\n")
+        git("add", "-A"); git("commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        for name, text in files.items():
+            Path(tmp, name).write_text(text)
+        git("commit", "-qam", "change")
+        return base, git("rev-parse", "HEAD")
+
+    def run_split(self, assignment, choices):
+        """Run `--assignment` with Jev answering each part in turn from `choices`; the sent requests and the output."""
+        sent, replies = [], iter(choices)
+        def connection(*_args, **_kwargs):
+            conn = MagicMock()
+            def request(_method, _path, body, headers):
+                sent.append(body)
+                choice = next(replies)
+                conn.getresponse.return_value.read.return_value = json.dumps({"model": client.MODEL, "id": f"r{len(sent)}",
+                    "answers": {"written": {"type": "choice", "choice": choice, "confidence": 0.9, "probabilities":
+                        {"yes": 0.8 if choice == "yes" else 0.3, "no": 0.2 if choice == "yes" else 0.7}}}}).encode()
+            conn.request.side_effect = request
+            conn.getresponse.return_value.status = 200
+            return conn
+        file = Path(assignment["worktree_path"], "..", Path(assignment["worktree_path"]).name + "-assignment.json").resolve()
+        file.write_text(json.dumps(assignment))
+        try:
+            output = io.StringIO()
+            with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                 patch.object(client.http.client, "HTTPSConnection", side_effect=connection), contextlib.redirect_stdout(output):
+                rc = client.main(["--assignment", str(file)])
+        finally:
+            file.unlink()
+        return rc, sent, json.loads(output.getvalue())
+
+    def test_a_diff_over_the_cap_is_split_by_hunks_and_every_part_returns_its_own_result(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            # one file whose diff alone is over the cap: 100 changed hunks of ~1.5 KB each, plus a small file
+            big = "start\n" + "\n".join(f"keep {i}\n" + "\n".join(f"added {i}.{j} " + "y" * 60 for j in range(20))
+                                       for i in range(0, 4000, 40)) + "\n"
+            base, commit = self.split_repo(tmp, {"big.py": big, "small.py": "start\nsmall change\n"})
+            assignment = {"deliverable": {"number": 1, "text": "Add the generated lines."}, "worktree_path": tmp,
+                          "commit": commit, "base_sha": base, "changed_files": ["big.py", "small.py"], "context": []}
+            whole = client.subprocess.run(["git", "-C", tmp, "diff", "--no-color", f"{base}...{commit}", "--", "big.py"],
+                                          capture_output=True, text=True).stdout
+            self.assertGreater(len(whole.encode()), client.MAX_REQUEST_BYTES)
+            requests = client.assignment_requests(assignment)
+            self.assertGreater(len(requests), 1)
+            for i, request in enumerate(requests, 1):
+                self.assertLessEqual(len(client.validate_request(request)), client.MAX_REQUEST_BYTES)
+                self.assertEqual(request["state"]["deliverable"], assignment["deliverable"]["text"])
+                self.assertEqual(request["state"]["part"], f"{i} of {len(requests)}")
+                self.assertEqual(request["state"]["changed_files"], ["big.py", "small.py"])
+            evidence = "".join(r["state"]["evidence"] for r in requests)
+            for line in whole.splitlines():
+                if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+                    self.assertIn(line, evidence)
+            self.assertIn("+small change", evidence)
+
+            for instruction in (r["questions"]["written"]["instructions"] for r in requests):
+                self.assertNotIn("every part", instruction)  # a part is asked only about its own share
+
+            choices = ["yes"] + ["no"] + ["yes"] * (len(requests) - 2)
+            rc, sent, result = self.run_split(assignment, choices)
+            self.assertEqual((rc, result["error"]), (0, None))
+            self.assertEqual([json.loads(b) for b in sent], requests)
+            data = result["data"]
+            self.assertEqual(set(data), {"model", "parts"})  # no combined choice, answer or receipt
+            self.assertEqual(len(data["parts"]), len(requests))
+            for i, (part, request, choice) in enumerate(zip(data["parts"], requests, choices), 1):
+                self.assertEqual(set(part), {"part", "changed_files", "response", "receipt"})
+                self.assertEqual((part["part"], part["changed_files"]), (f"{i} of {len(requests)}", ["big.py", "small.py"]))
+                self.assertEqual(part["response"]["id"], f"r{i}")
+                self.assertEqual(part["response"]["answers"]["written"]["choice"], choice)
+                receipt = part["receipt"]
+                self.assertEqual((receipt["question"], receipt["choice"], receipt["response_id"]), ("written", choice, f"r{i}"))
+                self.assertEqual(receipt["probabilities"], part["response"]["answers"]["written"]["probabilities"])
+                self.assertEqual(receipt["request_sha256"], client.hashlib.sha256(client.canonical(request)).hexdigest())
+                self.assertTrue(client.verify_receipt(receipt, "test-only-key"))
+
+    def test_a_hunk_over_the_cap_is_cut_by_lines_and_a_line_by_characters(self):
+        pieces = client.diff_pieces("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n" + "+" + "z" * 9000 + "\n"
+                                    + "".join(f"+line {i}\n" for i in range(2000)), 4000)
+        self.assertGreater(len(pieces), 3)
+        for piece in pieces:
+            self.assertLessEqual(len(json.dumps(piece)) - 2, 4000)
+            self.assertTrue(piece.startswith("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n"))
+        body = "".join(p.split("@@ -1 +1,2 @@\n", 1)[1] for p in pieces)
+        self.assertEqual(body, "+" + "z" * 9000 + "\n" + "".join(f"+line {i}\n" for i in range(2000)))
+
+    def test_deliverable_text_alone_over_the_cap_names_the_plan_fix(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base, commit = self.split_repo(tmp, {"a.py": "start\nchanged\n"})
+            with self.assertRaises(client.JevError) as raised:
+                client.assignment_requests({"deliverable": {"number": 1, "text": "d" * client.MAX_REQUEST_BYTES},
+                                            "worktree_path": tmp, "commit": commit, "base_sha": base,
+                                            "changed_files": ["a.py"], "context": []})
+            action = client.failure(raised.exception)["error"]["suggested_action"]
+            self.assertIn("split into smaller numbered deliverables", action)
+            self.assertNotIn("unchanged", action)
 
     def test_each_known_error_returns_its_fix(self):
         cases = {

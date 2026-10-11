@@ -8,5 +8,6 @@
   "primary_checkout": "/path/to/{{ repo_name }}",
   "phase_root": "{{ bead_prefix }}-phase-d",
   "test_command": "make test",
-  "policy_path": ".claude/project/quality-policy.md"
+  "policy_path": ".claude/project/quality-policy.md",
+  "lint_command": "just lint"
 }

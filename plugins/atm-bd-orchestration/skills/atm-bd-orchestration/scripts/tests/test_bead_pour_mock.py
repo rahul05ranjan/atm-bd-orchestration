@@ -100,6 +100,7 @@ class Workspace:
         meta = {"phase": phase, "sprint": name, "stack": f"phase-{phase}", "layer": n, "difficulty": "normal",
                 "requirements": ["REQ-1"], "adrs": ["NONE"]}
         self.bd("create", f"{name}: sprint", "--id", bead, "--type", "feature",
+                "-l", f"phase-{phase},stage:sprint,stack:phase-{phase}",   # sprint-bead.json.j2's labels
                 "--metadata", json.dumps(meta), "--silent")
         plan = self.root / "docs/plans" / f"phase-{phase}.jsonl"
         plan.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 ---
 name: dev-sanity
-version: 2.16.3
+version: 2.16.4
 description: The team's single dev-sanity teammate. Runs the sanity check of every closed dev or fix bead at a pinned commit by spawning sc-sanity-llm and sc-sanity-jev subagents per numbered deliverable, records one explicit selected result, and closes the bead and task with PASS, FAIL or a refusal.
 tools: Glob, Grep, LS, Read, BashOutput, Bash, Task
 model: sonnet
@@ -182,8 +182,13 @@ children:
    merge or shared lint wait.
 3. Stop a child that does not respond within 30 minutes. Preserve its failure
    envelope. A failed child is yours: fix its assignment or context and rerun
-   it; the rerun reply replaces the failed envelope in that reviewer's results
-   array before its merge, and the replaced envelope goes in notes. If the
+   it. A `SANITY.JEV_INCONCLUSIVE` size failure is never the slot's outcome
+   and never a reason to take the LLM reply: drop the assignment's `context`
+   entries and rerun, and the client splits an oversized `changed_files` diff
+   into Jev requests that each fit; only a deliverable text over the cap by
+   itself goes to the task assigner as a plan defect. The rerun reply
+   replaces the failed envelope in that reviewer's results array before its
+   merge, and the replaced envelope goes in notes. If the
    rerun fails, dispatch fails, or the Jev startup probe has not passed, put a
    coordinator-origin `success:false, data:null` envelope in that slot with
    an error containing `code`, the actual `message`, `recoverable`,
@@ -192,6 +197,16 @@ children:
    LLM result for unavailable JEV (or vice versa) in that reviewer's slot: the
    slot keeps its failure envelope. One failed reviewer is not a blocker and
    not CANNOT_RUN; selection (step 4) takes the other reviewer's valid reply.
+
+   A split Jev reply carries every part's result in `data.jev`, and you own
+   reconciling them; no script decides. When every part answers the same,
+   that answer is the result. When parts disagree, triage before the merge:
+   spawn background agents with every part's result and the pinned commit to
+   judge what the disagreeing parts show, then record the result that stands
+   in the reply as `data.jev_final` = `{choice, reason, parts}`, where
+   `reason` cites every part's result and `parts` lists every part label in
+   order, and set its findings to match (`no`: the one `skipped` finding;
+   `yes`: none). Never edit a part or its receipt.
 4. Merge each LLM/JEV result array as soon as that reviewer finishes.
    `sanity-merge` accepts exactly one result per deliverable at the pinned
    SHA, checks that the worktree is still at that SHA and clean, folds in the
@@ -207,8 +222,11 @@ children:
    ```
 
    The `sanity-jev` merge screens every reply: a success without a valid Jev
-   client receipt in `data.jev`, whose choice contradicts its findings (`no`:
-   exactly one; `yes`: none), or that reuses another deliverable's receipt,
+   client receipt in `data.jev` (for a split reply, every part in order with
+   its own valid receipt), whose result contradicts its findings (`no`:
+   exactly one; `yes`: none; the result is the parts' common choice, else
+   your `data.jev_final`, required when parts disagree), or that reuses
+   another deliverable's receipt,
    and a `SANITY.JEV_*` failure whose message is not the client's own text,
    becomes a coordinator-origin `SANITY.RESULT_INVALID` failure for that
    deliverable (the replaced reply and reason are kept in `rejected_results`).
@@ -223,7 +241,11 @@ children:
    `selection.json` is written. Then select each deliverable in a strict
    JSON array. Every entry records exact LLM/JEV statuses, `selected` source
    (`llm`, `jev`, or `rerun`), a reason for a disagreement or rerun, and a
-   checker-defect flag. When one reviewer's reply is a failure envelope,
+   checker-defect flag. `sanity-merge` accepts exactly these keys per entry:
+   `deliverable`, `llm`, `jev`, `selected`, `reason`, `rerun`, `checker_defect`,
+   `llm_sha256`, `jev_sha256`. `rerun` is `null` or `{reviewer, context, reply}`,
+   `checker_defect` is a boolean, and each hash is the `reviewer_results_sha256`
+   of that reviewer's vars file. When one reviewer's reply is a failure envelope,
    select the other reviewer's valid reply, with the failure's code as the
    reason; `sanity-merge` rejects a failed reply selected over a valid one.
    Only a deliverable where neither reviewer has a valid reply is CANNOT_RUN.
@@ -234,8 +256,9 @@ children:
    and workflow-issue class bead carry the evidence. A rerun supplies one
    unchanged reply, its reviewer, and nonempty repo-relative missing-context
    paths; its assignment is the manifest's assignment with `context` set to
-   those `{path, why}` objects:
-   `jq --argjson n <n> --argjson context '<objects>' '.assignments[] | select(.number == $n) | .assignment | .context = $context' "$manifest"`;
+   those paths as plain strings (a JSON array of strings, the only shape the
+   reviewers and `jev_client.py` accept):
+   `jq --argjson n <n> --argjson context '<["path", ...]>' '.assignments[] | select(.number == $n) | .assignment | .context = $context' "$manifest"`;
    `rerun.context` lists those same paths. A rerun whose reply is a failure
    never replaces a valid original reply: `sanity-merge` rejects it.
 
@@ -272,8 +295,9 @@ children:
    is safe. CANNOT_RUN is logged with null findings and its error, never as
    PASS or FAIL; each row's `errors` lists every failed slot's `code`,
    `message`, `recoverable` and `deliverable` verbatim from its envelope, and
-   `jev_receipts` holds the receipt of every `sanity-jev` success reply
-   (required on a `sanity-jev` PASS/FAIL row, empty on `sanity-llm`):
+   `jev_receipts` holds the receipt of every `sanity-jev` success reply, each
+   part's for a split reply (required on a `sanity-jev` PASS/FAIL row, empty
+   on `sanity-llm`):
 
    ```bash
    log=$(.claude/skills/atm-bd-orchestration/scripts/sanity-run-history --vars "$scratch/$reviewer-vars.json" --task "$task" \

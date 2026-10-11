@@ -67,11 +67,14 @@ def slot_errors(value: dict[str, object]) -> list[dict[str, object]]:
 
 
 def jev_receipts(value: dict[str, object]) -> list[object]:
-    """The receipt (`data.jev`) of every sanity-jev success reply, copied verbatim; sanity-llm rows carry none."""
+    """The receipt (`data.jev`) of every sanity-jev success reply, or each part's receipt of a split reply, copied
+    verbatim; sanity-llm rows carry none."""
     if value.get("reviewer") != "sanity-jev":
         return []
-    return [result["data"].get("jev") for result in value.get("reviewer_results") or []
-            if isinstance(result, dict) and result.get("success") is True and isinstance(result.get("data"), dict)]
+    found = [result["data"].get("jev") for result in value.get("reviewer_results") or []
+             if isinstance(result, dict) and result.get("success") is True and isinstance(result.get("data"), dict)]
+    return [receipt for jev in found for receipt in (
+        [part.get("receipt") if isinstance(part, dict) else part for part in jev] if isinstance(jev, list) else [jev])]
 
 
 def phase_from_sprint(sprint: str) -> str:

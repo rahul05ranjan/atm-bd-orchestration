@@ -104,7 +104,7 @@ one fails the render.
 | `qa_member` | `qa-bead.json.j2` (`qa_member`), a parallel quick fix's QA bead |
 | `worktree_base` | sprint bead `worktree` = `<worktree_base>/<branch>` |
 | `test_command` | `dev-template`, `fix-assignment`, `dev-fix` |
-| `lint_command` | `dev-sanity-template` |
+| `lint_command` | `dev-template`, `fix-assignment`, `dev-fix`, `dev-sanity-template` |
 | `integration_branch_pattern` | the root's `integration_branch` (`plan-root.json.j2`), then `review-template` and `plan-review-template` (`integration_branch`) |
 | `plans_dir` | `sprint_index_common.py` (`phase_path`), `sprint-report`, `sprint-review`, `plan-review-template` |
 | `requirements_globs`, `adr_globs` | `plan-review-template`, `fix-assignment` |
@@ -343,7 +343,7 @@ Then, on each task close:
 
 Re-run `bd ready` after every close. Never cache the ready list. The open
 phase root also appears in it; it is never dispatched.
-On each Loop pass also run `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` and act on every row it reports.
+While phase work is under way, a cron must run `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` every 15 minutes, and the lead acts on every row it reports; it is the only report of what the loop missed. Disable the cron when phase work is paused or the phase is complete.
 
 Close a sprint container when every child is closed (`bd children <sprint>
 --json | jq -e 'all(.[]; .status == "closed")'`): `bd close <sprint> --reason

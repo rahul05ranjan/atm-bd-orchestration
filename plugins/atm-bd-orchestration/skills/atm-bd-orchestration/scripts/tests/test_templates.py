@@ -194,7 +194,7 @@ class TemplateContractTests(unittest.TestCase):
         examples = ROOT / "examples"
         rendered_values = []
         for fixture, expected_context in (("dev-sanity-assignment-vars.json", []),
-                                          ("dev-sanity-assignment-context-vars.json", [{"path": "docs/retry.md", "why": "The deliverable delegates retry policy here."}])):
+                                          ("dev-sanity-assignment-context-vars.json", ["docs/retry.md"])):
             with self.subTest(fixture=fixture):
                 result = subprocess.run([
                     "sc-compose", "render", "--strict", "--file", str(assignment),
@@ -227,7 +227,7 @@ class TemplateContractTests(unittest.TestCase):
         spec.loader.exec_module(client)
         # every field the client reads is in the documented input; only the example's paths are not a repository
         with self.assertRaises(client.JevError) as raised:
-            client.assignment_request(assignment)
+            client.assignment_requests(assignment)
         self.assertEqual(raised.exception.message, "Committed evidence unreadable at the pinned commits")
         for code in ("SANITY.JEV_UNAVAILABLE", "SANITY.JEV_RESPONSE_INVALID", "SANITY.JEV_INCONCLUSIVE"):
             self.assertIn(code, text)
@@ -568,9 +568,9 @@ class PlanFixRoundTests(unittest.TestCase):
 
 # Config-backed dispatch variables (the lead fills them from .claude/project/atm-bd-orchestration.yaml).
 CONFIG_VARS = {
-    "dev-template.xml.j2": ("test_command", "policy_path"),
-    "fix-assignment.xml.j2": ("test_command", "policy_path", "requirements_globs", "adr_globs"),
-    "dev-fix.xml.j2": ("test_command",),
+    "dev-template.xml.j2": ("test_command", "lint_command", "policy_path"),
+    "fix-assignment.xml.j2": ("test_command", "lint_command", "policy_path", "requirements_globs", "adr_globs"),
+    "dev-fix.xml.j2": ("test_command", "lint_command"),
     "dev-sanity-template.xml.j2": ("lint_command",),
     "qa-template.xml.j2": ("policy_path", "reviewers_round1"),
     "plan-review-template.xml.j2": ("integration_branch", "plans_dir", "requirements_globs", "adr_globs"),

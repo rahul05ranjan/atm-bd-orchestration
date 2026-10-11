@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.13.0] - 2026-10-10
+
+### Fixed
+- `validate-plan --ci` fails on a tracked `<plans_dir>/phase-<x>.jsonl` with no tracked `.atm-bd/phase-<x>.toml` (#95), reporting `<plan>: no tracked .atm-bd/phase-<x>.toml; the planner commits it with the plan` (exit 5). It used to pass with "no tracked .atm-bd/phase-*.toml to check".
+- A sanity request over Jev's 96000-byte cap is no longer INCONCLUSIVE (#94). With `context` empty, `jev_client.py --assignment` splits `changed_files` into groups whose requests each fit (a file by hunks, a hunk by lines) and asks Jev once per part. It returns every part's full result (label, `changed_files`, Jev response, own receipt) and no combined verdict. `sc-sanity-jev` returns the parts verbatim; when they disagree, dev-sanity triages them with background agents and records the result that stands as `data.jev_final` citing every part. `sanity-merge` verifies every part's receipt, rejects a part reused across deliverables, and checks the findings against that result; the run history logs each part's receipt. The size error tells the sender to drop `context` entries and resend; dev-sanity and sc-sanity-jev never fall back to the LLM reply for a size failure.
+- `bead-queues` reads only the phase's beads: one `bd list --all -l phase-<x>` and `bd ready -l phase-<x>` instead of an unscoped `--all`, which read the whole database. A descendant of the root without the `phase-<x>` label is not read; every phase template and formula adds it. A root without the label exits 2.
+- `bead-queues` stack rows work under gh-stack 0.1, which does not count the trunk as a stack member: `gh stack view --json` falls back to worktrees on open stacks' layer branches, top first.
+- Every handoff sends what its receiver's fenced JSON input accepts. The dev-sanity rerun sends `context` as plain path strings (not `{path, why}`), and dev-sanity.md lists the exact selection-entry keys sanity-merge requires. `scripts/tests/test_handoff_contracts.py` checks each handoff against its receiver.
+
+## [0.12.1] - 2026-10-10
+
+### Changed
+- The lead's `bead-queues` run is a cron, mandatory while phase work is under way: every 15 minutes, and the lead acts on every row, since it is the only report of what the loop missed. The cron is disabled when phase work is paused or the phase is complete. It replaces "on each Loop pass", which leads skipped.
+- The dev, dev-fix and fix-assignment templates require `lint_command` and run it with `test_command` to zero failures, again after the stack-top rebase. A lint failure inherited from a lower layer is the dev's to fix on its own layer; sanity still FAILs on lint.
+
 ## [0.12.0] - 2026-10-10
 
 ### Changed
