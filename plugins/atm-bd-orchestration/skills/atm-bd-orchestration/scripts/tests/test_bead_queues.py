@@ -219,6 +219,17 @@ class BeadQueuesTests(unittest.TestCase):
         self.ws.close(sanity, "PASS at 1234567")
         assert q.queues().get("no_qa_record") == {sanity}
 
+    def test_a_descendant_without_the_phase_label_is_not_read(self):
+        q = Queues(self.ws, "nl")
+        sprint = q.sprint(1)
+        dev, sanity, qa = group(sprint)
+        self.ws.bd("delete", qa, "--force")
+        self.ws.close(dev, "dev complete (PR #6)")
+        self.ws.close(sanity, "PASS at 1234567")
+        assert q.queues().get("no_qa_record") == {sanity}
+        self.ws.bd("update", sanity, "--remove-label", "phase-nl")
+        assert sanity not in str(q.queues())
+
     def test_stack_rows(self):
         q = Queues(self.ws, "st")
         l1, l2, l3, l4 = layer(1, "a"), layer(2, "b"), layer(3, "c", rebase=True), layer(4, "d")

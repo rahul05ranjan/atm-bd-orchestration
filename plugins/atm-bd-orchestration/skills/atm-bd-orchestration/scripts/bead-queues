@@ -11,7 +11,8 @@ variable is required in a repository that has both.
 
 Scope: the parent-child descendants of the phase root (`root` in
 `.atm-bd/phase-P.toml`, or --root), read with one `bd list --all -l phase-P`
-(closed beads included, other phases never read). Each open bead with no open ATM task lands
+(closed beads included, other phases never read; a descendant without the
+`phase-P` label is not read, and every phase template and formula adds it). Each open bead with no open ATM task lands
 in one action queue once its prerequisite is met; pairing is by metadata
 (`dev_bead`, `checked_bead`) and dependency edges, never by bead-id patterns.
 Stack rows come from `gh api repos/{owner}/{repo}/stacks` for the open stacks

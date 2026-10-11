@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.0] - 2026-10-10
+
+### Fixed
+- `validate-plan --ci` fails on a tracked `<plans_dir>/phase-<x>.jsonl` with no tracked `.atm-bd/phase-<x>.toml` (#95), reporting `<plan>: no tracked .atm-bd/phase-<x>.toml; the planner commits it with the plan` (exit 5). It used to pass with "no tracked .atm-bd/phase-*.toml to check".
+- A sanity request over Jev's 96000-byte cap is no longer INCONCLUSIVE (#94). With `context` empty, `jev_client.py --assignment` splits `changed_files` into groups whose requests each fit (a file by hunks, a hunk by lines), asks Jev once per part and answers yes only if every part does, with one receipt over every part. The size error tells the sender to drop `context` entries and resend; dev-sanity and sc-sanity-jev never fall back to the LLM reply for a size failure.
+- `bead-queues` reads only the phase's beads: one `bd list --all -l phase-<x>` and `bd ready -l phase-<x>` instead of an unscoped `--all`, which read the whole database. A descendant of the root without the `phase-<x>` label is not read; every phase template and formula adds it. A root without the label exits 2.
+- `bead-queues` stack rows work under gh-stack 0.1, which does not count the trunk as a stack member: `gh stack view --json` falls back to worktrees on open stacks' layer branches, top first.
+- Every handoff sends what its receiver's fenced JSON input accepts. The dev-sanity rerun sends `context` as plain path strings (not `{path, why}`), and dev-sanity.md lists the exact selection-entry keys sanity-merge requires. `scripts/tests/test_handoff_contracts.py` checks each handoff against its receiver.
+
 ## [0.12.1] - 2026-10-10
 
 ### Changed
