@@ -231,6 +231,18 @@ def _example(name: str) -> dict:
     return json.loads((ROOT / "examples" / name).read_text())
 
 
+class TaskRefusedLayoutTests(unittest.TestCase):
+    def test_the_machine_status_heading_starts_its_own_line(self):
+        values = _example("task-refused-vars.json")
+        for branch, commit in (("sprint/d-4-x", "abc1234"), ("sprint/d-4-x", ""), ("", "")):
+            with self.subTest(branch=branch, commit=commit):
+                out = _render("task-refused.md.j2", {**values, "branch": branch, "commit": commit})
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertIn("\n## Machine Status (JSON)\n", out.stdout)
+                if branch:
+                    self.assertIn(f"Branch: `{branch}`" + (f" at `{commit}`" if commit else "") + "\n", out.stdout)
+
+
 class FixRoundReviewerScopeTests(unittest.TestCase):
     """A fix is verified only by its filing reviewer, locked to the original finding; sprint rounds keep the full set."""
 
@@ -318,6 +330,27 @@ class FixRoundReviewerScopeTests(unittest.TestCase):
         self.assertEqual(qa.returncode, 0, qa.stderr)
         self.assertIn("This is a sprint review: run the full reviewer set", qa.stdout)
         self.assertNotIn("fix-round-scope", qa.stdout)
+
+    def test_without_a_pr_number_step_a_reads_the_branch_head(self):
+        values = _example("qa-template-fix-round-vars.json")
+        for given in ({k: v for k, v in values.items() if k != "pr_number"}, {**values, "pr_number": 41}):
+            qa = _render(self.QA, given)
+            self.assertEqual(qa.returncode, 0, qa.stderr)
+            step_a = qa.stdout[qa.stdout.index('<step id="a">'):qa.stdout.index('<step id="a1">')]
+            self.assertNotIn("gh pr view  ", step_a)
+            if "pr_number" in given:
+                self.assertIn("`gh pr view 41 --json baseRefName,headRefOid", step_a)
+            else:
+                self.assertNotIn("gh pr view", step_a)
+                self.assertIn(f"`git rev-parse origin/{values['branch']}` (no PR given", step_a)
+
+    def test_fix_verification_passes_each_reply_by_path_and_rust_best_practices_reviews_all(self):
+        qa = _render(self.QA, _example("qa-template-fix-round-vars.json"))
+        self.assertEqual(qa.returncode, 0, qa.stderr)
+        task = _example("qa-template-fix-round-vars.json")["task_id"]
+        self.assertIn(f"--result <scratch>/{task}-<reviewer>-result.json`", qa.stdout)
+        self.assertNotIn("--result <its result>", qa.stdout)
+        self.assertIn("`rust-best-practices-agent` also gets `practice_mode` = `all`", qa.stdout)
 
     def test_carried_finding_on_a_sprint_branch_is_fix_verification(self):
         qa = _render(self.QA, {**_example("qa-template-vars.json"), "carry_forward": "x-d-4.qa1-f1-r1-fix"})
@@ -545,6 +578,17 @@ class PlanFixRoundTests(unittest.TestCase):
         self.assertEqual(data["carry_forward_findings"], ["PLAN-SCOPE-003"])
         plan = _render(self.PLAN, _example("plan-review-template-fix-round-vars.json"))
         self.assertIn("`round_index` = 2", plan.stdout)
+
+    def test_ceremony_qa_fix_round_gets_its_contract_keys_and_the_plan_file_is_named(self):
+        values = _example("plan-review-template-fix-round-vars.json")
+        plan = _render(self.PLAN, values)
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertIn("`carry_forward_findings` for `ceremony-qa`", plan.stdout)
+        self.assertIn(f"`ceremony-qa`, when it filed a carried finding, also gets `review_mode` = `doc_review`, "
+                      f"`worktree_path` = `{values['worktree_path']}`", plan.stdout)
+        for given in (values, _example("plan-review-template-vars.json")):
+            out = _render(self.PLAN, given).stdout
+            self.assertIn(f"the plan file `{given['plans_dir']}/phase-{given['phase']}.jsonl`", out)
 
     def test_removed_variable_is_not_required(self):
         values = {**_example("plan-review-template-fix-round-vars.json"), "reviewers_scope_locked": ["x"]}

@@ -3,8 +3,8 @@
 Scripts and tests render through `render()` instead of running the
 `sc-compose render` CLI: no var files, no stdout parsing, and the template's
 own directory is the confining root, so the result never depends on the
-caller's working directory. The wheel and the CLI are the same version (the
-`sc-compose ==` line in the package manifest).
+caller's working directory. The wheel and the CLI are the same version, in the
+`sc-compose >=` range in the package manifest.
 """
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ def render(template: str | Path, variables: Mapping[str, Any]) -> str:
     Always strict (`--strict`); there is no lenient render. A referenced
     variable that is missing or undeclared raises, naming the variable and the
     template. A `.json` template's output must parse, as the CLI's checked render requires;
-    the wheel does not check it. Raises `RenderError`; `error_text(exc)` is its
-    message.
+    the wheel does not check it (sc-compose#787; delete this check when it does). Raises
+    `RenderError`; `error_text(exc)` is its message.
     """
     path = Path(template).resolve()
     request = sc_compose.ComposeRequest(

@@ -35,6 +35,14 @@ class StrictRenderTests(unittest.TestCase):
         template.write_text("---\nrequired_variables:\n  - needed\n---\n{{ needed }}\n")
         self.assert_rejected(template, {}, "needed")
 
+    def test_a_json_template_that_renders_invalid_json_is_rejected(self):
+        # The wheel has no checked render (sc-compose#787); sc_render's own JSON check is what refuses this.
+        template = self.dir / "record.json.j2"
+        template.write_text('---\nrequired_variables:\n  - a\n---\n{"a": {{ a }}, }\n')
+        with self.assertRaises(sc_render.RenderError) as caught:
+            sc_render.render(template, {"a": 1})
+        self.assertIn("ERR_RENDER_JSON_MALFORMED", sc_render.error_text(caught.exception))
+
     def test_there_is_no_lenient_render(self):
         self.assertEqual(list(inspect.signature(sc_render.render).parameters), ["template", "variables"])
 
