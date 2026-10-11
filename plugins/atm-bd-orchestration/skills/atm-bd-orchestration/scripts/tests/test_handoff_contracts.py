@@ -87,7 +87,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         client = load_client()
         for fixture in ("dev-sanity-assignment-vars.json", "dev-sanity-assignment-context-vars.json"):
             with self.subTest(fixture=fixture):
-                request = client.assignment_request(self.assignment(fixture))
+                (request,) = client.assignment_requests(self.assignment(fixture))
                 self.assertIn("deliverable", request["state"])
 
     def test_rerun_instruction_sends_context_the_receivers_accept(self):
@@ -107,14 +107,14 @@ class DevSanityHandoffTests(unittest.TestCase):
         self.assertEqual(rerun.returncode, 0, rerun.stderr)
         sent = json.loads(rerun.stdout)
         self.assertEqual(sent["context"], context)
-        request = load_client().assignment_request(sent)   # a path-string context is what the client reads
+        (request,) = load_client().assignment_requests(sent)   # a path-string context is what the client reads
         self.assertEqual(request["state"]["context"], {"docs/retry.md": "retry policy\n"})
 
     def test_the_old_rerun_shape_is_rejected_by_the_receiver(self):
         sent = {**self.assignment("dev-sanity-assignment-vars.json"), "context": [{"path": "docs/retry.md", "why": "x"}]}
         client = load_client()
         with self.assertRaises(client.JevError):
-            client.assignment_request(sent)
+            client.assignment_requests(sent)
 
     def test_selection_entry_keys_in_the_instruction_are_the_ones_sanity_merge_requires(self):
         text = (AGENTS / "dev-sanity.md").read_text()
