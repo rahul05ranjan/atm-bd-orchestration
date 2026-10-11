@@ -3,21 +3,23 @@
 Formulas live in the package at
 `plugins/atm-bd-orchestration/skills/atm-bd-orchestration/formulas/`, two files
 each: `<name>.formula.toml.j2` (the sc-compose source) and
-`<name>.relations.json` (attach ref and post-pour edges). A file of the same
+`<name>.relations.json` (attach ref and attach relations). A file of the same
 name in the repository's `.atm-bd/formula/` (tracked) overrides the package
 one.
 
 Pouring has three stages:
 
-1. sc-compose pours the formula, schema `sc-compose/beads/v1`. Until
-   sc-compose has an attach pour, `scripts/sc-compose-pour-mock` stands in.
-2. A post-pour step adds the edges a formula cannot express: `validates`,
-   `discovered-from` and cross-sprint `blocks`.
+1. `sc-compose bead attach` pours the formula under its parent, schema
+   `sc-compose/beads/v1`.
+2. The same attach adds the request's `relations`, the edges a formula
+   cannot express: `validates`, `discovered-from` and cross-sprint `blocks`.
+   A relation's bead must already exist, so `bead-groups` attaches sprints
+   in dependency order, then findings.
 3. Everything else is created from templates or by package scripts.
 
 `scripts/bead-groups` runs stages 1 and 2. Targets: one sprint (`--sprint`), a
 list (`--sprint a,b`), a whole phase (`--phase`), or one QA round's blocking
-findings (`--findings FILE`). `--validate` changes no bead and reports what is
+findings (`--findings FILE`). `--validate` (`sc-compose bead preview-attach`) changes no bead and reports what is
 missing or wrong. It creates only what is missing, so it is safe to re-run
 after sprints are added. Requests and receipts go to `.atm-bd/pour/`
 (ignored).
@@ -36,9 +38,9 @@ flowchart TB
   PLAN["planning: sprint containers by bd import,<br/>plan file #lt;plans_dir#gt;/#lt;phase#gt;.jsonl committed"]:::tmpl
   QM["quality-mgr at QA FAIL, before closing qa:<br/>bead-groups --findings"]:::tmpl
   BG["scripts/bead-groups<br/>one sprint, a list, a phase, or findings<br/>--validate, idempotent"]:::post
-  REQ[/"request: sc-compose/beads/v1<br/>compose_variables, bead_variables: parent, ref"/]:::file
-  POUR["stage 1: pour (sc-compose-pour-mock)<br/>beads, parent-child to the parent,<br/>blocks between its own steps"]:::poured
-  PP["stage 2: validates, discovered-from,<br/>cross-sprint blocks (from the plan file)"]:::post
+  REQ[/"request: sc-compose/beads/v1<br/>compose_variables, parent, ref, relations"/]:::file
+  POUR["stage 1: sc-compose bead attach<br/>beads, parent-child to the parent,<br/>blocks between its own steps"]:::poured
+  PP["stage 2: attach relations: validates, discovered-from,<br/>cross-sprint blocks (from the plan file)"]:::post
   REVIEW["plan review"]:::tmpl
 
   PLAN --> BG

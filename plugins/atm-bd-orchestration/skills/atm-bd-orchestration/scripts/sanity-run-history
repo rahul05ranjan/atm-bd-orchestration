@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -246,7 +247,8 @@ def render_record(variables):
 
 def append_record(log_path, record):
     """Append one row; an identical retry of a logged run/reviewer is a no-op, a differing one fails.
-    The row is one os.write on an O_APPEND descriptor, so concurrent writers never interleave."""
+    `sc-compose render --strict --append` renders the row again from the same values and writes it as one
+    compact line under its lock, so concurrent writers never interleave."""
     validate_record(record)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     records = load_log(log_path)
@@ -261,21 +263,20 @@ def append_record(log_path, record):
         if {**prior[-1], "completed_local": None} != {**{k: v for k, v in record.items() if k not in later}, "completed_local": None}:
             fail("run/reviewer already logged with different results")
         return
-    # A valid last JSON object without newline is readable, but needs a
-    # separator before the next append; preserve all existing bytes.
-    separator = ""
-    if log_path.exists() and log_path.stat().st_size:
-        with log_path.open("rb") as existing:
-            existing.seek(-1, os.SEEK_END)
-            separator = "" if existing.read(1) == b"\n" else "\n"
-    line = (separator + json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-    fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as var_file:
+        json.dump(record, var_file)
     try:
-        if os.write(fd, line) != len(line):
-            fail(f"{log_path}: short append")
-        os.fsync(fd)
+        proc = subprocess.run(["sc-compose", "render", "--strict", "--root", str(RECORD_TEMPLATE.parent),
+                               "--file", str(RECORD_TEMPLATE), "--var-file", var_file.name, "--append", str(log_path)],
+                              text=True, capture_output=True)
     finally:
-        os.close(fd)
+        os.unlink(var_file.name)
+    if proc.returncode:
+        detail = (proc.stderr or proc.stdout).strip()
+        if "ERR_RENDER_APPEND_NO_FINAL_NEWLINE" in detail:
+            fail(f"{log_path} does not end with a newline; append the newline (printf '\\n' >> {log_path}), then rerun: {detail}")
+        fail(f"append to {log_path} failed: {detail}")
+
 
 if __name__ == "__main__":
     main()

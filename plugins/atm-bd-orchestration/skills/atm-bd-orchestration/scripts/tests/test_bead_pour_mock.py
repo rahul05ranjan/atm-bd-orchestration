@@ -1,10 +1,9 @@
-"""bead-groups and sc-compose-pour-mock against a real bd 1.3.0 database.
+"""bead-groups and `sc-compose bead attach` against a real bd 1.3.0 database.
 
 The module starts its own `dolt sql-server` on a free loopback port and
 initializes one throwaway workspace against it (`bd init --server --external`,
 the mode consuming repositories run in), laid out like an installed
-repository, so these tests need `bd`, `dolt` and `sc-compose` (the mock
-renders with the real one). Proxied-server mode is not used: its proxy stops
+repository, so these tests need `bd`, `dolt` and `sc-compose`. Proxied-server mode is not used: its proxy stops
 and restarts the dolt child, and the restart can find the old child still on
 the port (#88). Nothing here mocks bd. Each test uses its own phase.
 """
@@ -276,7 +275,7 @@ class BeadPourMockTests(unittest.TestCase):
         assert ws.deps(dev) == {sprint: "parent-child"}
         assert ws.deps(sanity) == {sprint: "parent-child", dev: "blocks"}
         assert ws.deps(qa) == {sprint: "parent-child", sanity: "blocks", dev: "validates"}
-        assert set(ws.show(sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_attach"}   # N9: minimal sanity bead
+        assert set(ws.show(sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_graph"}   # N9: minimal sanity bead
         assert ws.show(sanity)["metadata"]["dev_bead"] == dev
         assert ws.show(qa)["metadata"]["checked_bead"] == dev
         assert ws.show(dev)["metadata"]["layer"] == 1
@@ -367,49 +366,56 @@ class BeadPourMockTests(unittest.TestCase):
         handmade = ws.sprint("e", 1)
         dev, sanity, qa = group(handmade)
         ws.bd("create", "hand made", "--id", dev, "--silent")
-        assert target(ws.groups("--sprint", handmade, expect=2), handmade)["error"]["code"] == "BEADS_ATTACH_CONFLICT"
+        assert target(ws.groups("--sprint", handmade, expect=2), handmade)["error"]["code"] == "BEADS_GRAPH_CONFLICT"
         assert ws.show(sanity) is None and ws.show(qa) is None
 
-        # A second dependency type on a pair the post-pour step needs: refused, and its other edges are not written.
+        # A second dependency type on a pair a relation needs: refused, and its other edges are not written.
         sprint = ws.sprint("e", 2)
         dependent = ws.sprint("e", 3, (2,))
         dev, sanity, qa = group(sprint)
         d_dev, _, d_qa = group(dependent)
-        ws.groups("--sprint", sprint, "--sprint", dependent)
+        ws.groups("--sprint", dependent, "--sprint", sprint)   # attached in dependency order, predecessor first
+        assert ws.deps(d_dev)[sanity] == "blocks"
         ws.bd("dep", "remove", d_qa, d_dev)
         ws.bd("dep", "remove", d_dev, sanity)
         ws.bd("dep", "add", d_qa, d_dev, "--type", "related")
         entry = target(ws.groups("--sprint", dependent, expect=2), dependent)
-        assert entry["error"]["code"] == "BEAD_GROUPS_EDGE_REFUSED"
+        assert entry["error"]["code"] == "BEADS_GRAPH_EDGE_CONFLICT"
         assert sanity not in ws.deps(d_dev)           # the cross-sprint edge of the same target was not added
         assert ws.deps(d_qa)[d_dev] == "related"
-        problems = target(ws.groups("--validate", "--sprint", dependent, expect=5), dependent)["problems"]
-        assert any("exists as related" in p for p in problems)
-        assert any(p == f"missing edge {d_dev} -blocks-> {sanity}" for p in problems)
+        entry = target(ws.groups("--validate", "--sprint", dependent, expect=2), dependent)
+        assert entry["error"]["code"] == "BEADS_GRAPH_EDGE_CONFLICT"
+        assert f"{d_qa} -> {d_dev} has type `related`, requested `validates`" in entry["error"]["message"]
+        # A removed edge is refused too, and the error carries the repair.
+        ws.bd("dep", "remove", d_qa, d_dev)
+        ws.bd("dep", "add", d_qa, d_dev, "--type", "validates")
+        entry = target(ws.groups("--validate", "--sprint", dependent, expect=2), dependent)
+        assert entry["error"]["code"] == "BEADS_GRAPH_EDGE_MISSING"
+        assert f"bd dep add '{d_dev}' '{sanity}' --type 'blocks'" in entry["error"]["message"]
 
         # The same sprint poured again from a different formula revision (its priority changed).
         ws.bd("update", sprint, "--priority", "3")
-        assert target(ws.groups("--sprint", sprint, expect=2), sprint)["error"]["code"] == "BEADS_ATTACH_CONFLICT"
+        assert target(ws.groups("--sprint", sprint, expect=2), sprint)["error"]["code"] == "BEADS_GRAPH_CONFLICT"
         assert ws.show(dev)["priority"] == 2
 
 
-    def test_the_mock_refuses_unauthorized_and_mismatched_requests(self):
+    def test_sc_compose_refuses_unauthorized_and_invalid_attach_requests(self):
         ws = self.ws
         sprint = ws.sprint("h", 1)
         ws.groups("--validate", "--sprint", sprint, expect=5)   # writes the request file
         request = json.loads((ws.root / ".atm-bd/pour" / f"{sprint}.group.sprint-group.request.json").read_text())
         path = ws.root / "h-request.json"
-        mock = ws.scripts / "sc-compose-pour-mock"
 
-        path.write_text(json.dumps({**request, "pour_authorization": None}))
-        proc = ws.run(sys.executable, mock, "bead", "pour", "--request", path, "--json", check=False)
-        assert proc.returncode == 3 and json.loads(proc.stdout)["payload"]["error"]["code"] == "BEADS_POUR_AUTH_REQUIRED"
+        def attach(changes: dict) -> tuple[int, dict]:
+            path.write_text(json.dumps({**request, "operation": "attach", **changes}))
+            proc = ws.run("sc-compose", "bead", "attach", "--request", path, "--json", check=False)
+            return proc.returncode, json.loads(proc.stdout)["payload"]
 
-        path.write_text(json.dumps({**request, "pour_authorization": "CreatePersistentBeads",
-                                    "bead_variables": {"parent": "t-e-2", "ref": "group"}}))
-        proc = ws.run(sys.executable, mock, "bead", "pour", "--request", path, "--json", check=False)
-        assert proc.returncode == 2
-        assert json.loads(proc.stdout)["payload"]["outcome"] == {"refused": {"code": "BEADS_ATTACH_SCOPE_MISMATCH"}}
+        code, payload = attach({})   # no pour_authorization
+        assert code == 3 and payload["error"]["code"] == "BEADS_POUR_AUTH_REQUIRED", payload
+        code, payload = attach({"pour_authorization": "CreatePersistentBeads",
+                                "relations": [{"from": "step:dev", "to": "bead:t-nobody", "type": "blocks"}]})
+        assert code == 2 and payload["outcome"] == {"refused": {"code": "BEADS_GRAPH_RELATION_INVALID"}}, payload
         assert ws.show(f"{sprint}.group-dev") is None
 
 
@@ -421,18 +427,20 @@ class BeadPourMockTests(unittest.TestCase):
         assert ws.deps(sanity) == {sprint: "parent-child", dev: "validates"}
         assert ws.deps(qa) == {sprint: "parent-child", sanity: "blocks", dev: "validates"}
         # The option is baked into the render, so the same sprint under C is another formula revision.
-        assert target(ws.groups("--validate", "--option", "C", "--sprint", sprint, expect=2), sprint)["error"]["code"] == "BEADS_ATTACH_CONFLICT"
+        assert target(ws.groups("--validate", "--option", "C", "--sprint", sprint, expect=2), sprint)["error"]["code"] == "BEADS_GRAPH_CONFLICT"
         ws.bd("dep", "remove", sanity, dev)
-        problems = target(ws.groups("--validate", "--option", "B", "--sprint", sprint, expect=5), sprint)["problems"]
-        assert f"missing edge {sanity} -validates-> {dev}" in problems
+        entry = target(ws.groups("--validate", "--option", "B", "--sprint", sprint, expect=2), sprint)
+        assert entry["error"]["code"] == "BEADS_GRAPH_EDGE_MISSING", entry
+        assert f"bd dep add '{sanity}' '{dev}' --type 'validates'" in entry["error"]["message"]   # the error carries the repair
 
         # Under C the pour's own sanity -> dev blocks edge is checked too.
         other = ws.sprint("f", 2)
         o_dev, o_sanity, _ = group(other)
         ws.groups("--sprint", other)
         ws.bd("dep", "remove", o_sanity, o_dev)
-        problems = target(ws.groups("--validate", "--sprint", other, expect=5), other)["problems"]
-        assert any(p.startswith(f"option C expects {o_sanity} -> {o_dev} as blocks") for p in problems)
+        entry = target(ws.groups("--validate", "--sprint", other, expect=2), other)
+        assert entry["error"]["code"] == "BEADS_GRAPH_EDGE_MISSING"
+        assert f"bd dep add '{o_sanity}' '{o_dev}' --type 'blocks'" in entry["error"]["message"]
 
 
     def test_a_repository_override_formula_wins(self):
@@ -451,8 +459,7 @@ class BeadPourMockTests(unittest.TestCase):
             shutil.rmtree(override)
 
 
-    def test_an_unsupplied_compose_variable_is_refused_before_rendering(self):
-        # sc-compose bead render 1.6.1 renders an unbound {{{ x }}} empty (sc-compose#783); bead-groups refuses it.
+    def test_an_unsupplied_compose_variable_is_refused(self):
         ws = self.ws
         override = ws.root / ".atm-bd/formula"
         override.mkdir(parents=True, exist_ok=True)
@@ -464,10 +471,10 @@ class BeadPourMockTests(unittest.TestCase):
             sprint = ws.sprint("u", 1)
             for mode in (("--validate",), ()):
                 entry = target(ws.groups(*mode, "--sprint", sprint, expect=2), sprint)
-                assert entry["error"]["code"] == "BEAD_GROUPS_COMPOSE_UNBOUND", entry
-                assert "extra" in entry["error"]["message"] and "sprint-group.formula.toml.j2" in entry["error"]["message"]
+                assert entry["error"]["code"] == "BEADS_RENDER_FAILED", entry
+                assert "undefined variable: extra" in entry["error"]["message"]
+                assert "sprint-group.formula.toml.j2" in entry["error"]["message"]
             assert all(ws.show(b) is None for b in group(sprint))
-            assert not list((ws.root / ".atm-bd/pour").glob(f"{sprint}.*"))
         finally:
             shutil.rmtree(override)
 
@@ -514,7 +521,7 @@ class BeadPourMockTests(unittest.TestCase):
             "remedy": "return the typed error", "filed_by": qa, "round": 1, "sprint_bead": sprint,
             "found_at_commit": "abc1234", "requirements": ["REQ-1"], "adrs": ["NONE"], "difficulty": "normal"}
         assert "Remedy: return the typed error" in ws.show(fix)["description"]
-        assert set(ws.show(fix_sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_attach"}
+        assert set(ws.show(fix_sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_graph"}
         assert ws.show(fix_sanity)["metadata"]["dev_bead"] == fix
         assert ws.show(fix_qa)["metadata"]["checked_bead"] == fix
         assert [ws.show(b).get("assignee") for b in (fix, fix_sanity, fix_qa)] == [None] * 3

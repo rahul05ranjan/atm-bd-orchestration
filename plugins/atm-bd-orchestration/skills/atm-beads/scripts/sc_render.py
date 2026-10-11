@@ -23,8 +23,8 @@ def render(template: str | Path, variables: Mapping[str, Any]) -> str:
     Always strict (`--strict`); there is no lenient render. A referenced
     variable that is missing or undeclared raises, naming the variable and the
     template. A `.json` template's output must parse, as the CLI's checked render requires;
-    the wheel does not check it. Raises `RenderError`; `error_text(exc)` is its
-    message.
+    the wheel does not check it (sc-compose#787; delete this check when it does). Raises
+    `RenderError`; `error_text(exc)` is its message.
     """
     path = Path(template).resolve()
     request = sc_compose.ComposeRequest(

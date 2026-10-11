@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0] - 2026-10-11
+
+### Changed
+- sc-compose 1.7.0: the CLI and the Python wheel are pinned at `sc-compose == 1.7.0` (`manifest.yaml`, CI).
+- `bead-groups` attaches each group with the real `sc-compose bead attach` (`bead preview-attach` under `--validate`) and passes its edges as the request's `relations`. `scripts/sc-compose-pour-mock` and the post-pour edge step are deleted. The beads, fields and edges poured are the same as 0.13.1 on the same input; only the provenance metadata key changes, from `sc_compose_attach` to sc-compose's `sc_compose_graph`.
+- A relation's bead must exist when its group is attached, so `bead-groups` attaches sprints in dependency order (a predecessor named in the same run first), then findings. Under `--validate`, a relation to a bead that does not exist yet is reported as `missing bead <id> for <relation>`.
+- Refusals are sc-compose's typed codes: `BEADS_GRAPH_CONFLICT` (a bead at a poured id from another formula revision, was `BEADS_ATTACH_CONFLICT`), `BEADS_GRAPH_EDGE_CONFLICT` (an edge that exists with another type, was `BEAD_GROUPS_EDGE_REFUSED`) and `BEADS_GRAPH_RELATION_INVALID`. An edge removed from an attached group is now refused with `BEADS_GRAPH_EDGE_MISSING` (exit 2), and its message carries the `bd dep add` repair; under `--validate` it used to be a `missing edge` problem (exit 5).
+- The bead formulas carry front matter (`required_variables`) like every other template and declare no Beads `vars`: every value is a compose variable. `bead-groups` no longer checks for unbound `{{{ ... }}}` variables itself: `sc-compose bead render` 1.7.0 refuses one (`BEADS_RENDER_FAILED`, `undefined variable: <name>` with the formula path), fixing randlee/sc-compose#783 there, and drops front matter from the rendered formula (the front-matter half of randlee/sc-compose#785). `tests/test_frontmatter.py` no longer expects the formulas to fail.
+- `sanity-run-history` appends its row with `sc-compose render --strict --append` instead of its own `O_APPEND` write. A log whose last line has no newline is refused (`ERR_RENDER_APPEND_NO_FINAL_NEWLINE`) instead of being given a separator; the error says to append the newline and rerun.
+
+### Unchanged
+- `sc_render.py` keeps its own JSON check of `.json` templates: the wheel has no checked render (randlee/sc-compose#787). `tests/test_frontmatter.py` still ignores the Jinja keywords sc-compose 1.7.0 reports as undeclared tokens (randlee/sc-compose#784), and no template comment names a double-brace example, since `--strict` still reads tokens inside `{# #}` comments (randlee/sc-compose#785).
+- The formulas' front matter is not yet enforced for undeclared variables: `sc-compose bead render` 1.7.0 renders a `{{{ x }}}` the front matter does not declare when it is supplied, and `sc-compose validate` cannot read `{{{ }}}` (randlee/sc-compose#791). `tests/test_frontmatter.py` checks that each formula has front matter and renders with the variables it requires, and holds the undeclared case as a strict expected failure, so it fails when sc-compose starts refusing it.
+
 ## [0.13.1] - 2026-10-11
 
 ### Fixed

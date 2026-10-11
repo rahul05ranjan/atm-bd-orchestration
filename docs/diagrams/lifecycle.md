@@ -12,7 +12,7 @@ sequenceDiagram
   participant G as logs in .sc
 
   Note over L,B: planning: sprint containers by bd import
-  L->>B: scripts/bead-groups: pour each sprint group, add post-pour edges
+  L->>B: scripts/bead-groups: attach each sprint group with its relations
   Note over L,Q: plan review
   L->>B: bd ready
   B-->>L: dev (sanity and qa are blocked)

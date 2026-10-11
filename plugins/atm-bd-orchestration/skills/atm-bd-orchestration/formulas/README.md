@@ -1,7 +1,7 @@
 # Bead group formulas
 
-`scripts/bead-groups` pours these with the sc-compose beads pour (today
-`scripts/sc-compose-pour-mock`), then adds the edges in `<name>.relations.json`.
+`scripts/bead-groups` attaches these with `sc-compose bead attach`, together
+with the relations in `<name>.relations.json`.
 A file of the same name in `<repo>/.atm-bd/formula/` overrides the one here.
 
 | Formula | Attaches under | Poured ids | Shape |

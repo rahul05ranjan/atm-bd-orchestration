@@ -103,6 +103,20 @@ class SanityHistory(unittest.TestCase):
             HISTORY.append_record(self.log, record(run_id="new"))
         self.assertEqual(self.log.read_bytes(), before + b'{"truncated"')
 
+    def test_a_log_without_a_final_newline_is_refused_with_the_fix(self):
+        HISTORY.append_record(self.log, record())
+        before = self.log.read_bytes().rstrip(b"\n")
+        self.log.write_bytes(before)
+        with self.assertRaises(SystemExit) as caught:
+            HISTORY.append_record(self.log, record(run_id="new"))
+        self.assertIn("append the newline", str(caught.exception))
+        self.assertIn("ERR_RENDER_APPEND_NO_FINAL_NEWLINE", str(caught.exception))
+        self.assertEqual(self.log.read_bytes(), before)
+        with self.log.open("ab") as log:
+            log.write(b"\n")
+        HISTORY.append_record(self.log, record(run_id="new"))
+        self.assertEqual([json.loads(line)["run_id"] for line in self.log.read_text().splitlines()], ["run-one", "new"])
+
     def test_cli_real_render_concurrent_appends(self):
         # Real separate writer processes and installed sc-compose. The only fake
         # external dependency is bd (absent bead -> documented sprint fallback).

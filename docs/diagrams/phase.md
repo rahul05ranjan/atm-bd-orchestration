@@ -1,8 +1,8 @@
 # Phase level
 
 The plan import creates the phase root and the sprint containers from
-templates. `scripts/bead-groups` then pours each sprint's group and adds the
-post-pour edges (formula.md); it runs after planning and before plan review.
+templates. `scripts/bead-groups` then attaches each sprint's group with its
+relations (formula.md); it runs after planning and before plan review.
 When QA fails, quality-mgr pours one fix group per blocking finding under the
 sprint before it closes qa. Important and minor findings sit at phase level.
 

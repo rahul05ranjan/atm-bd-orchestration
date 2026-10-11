@@ -15,21 +15,21 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            sha256: 2e09706e0814f30adaacc88310db4ad629dcd9314d1182ecf12767686f828204
+            sha256: 5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84
             bd_asset: beads_1.3.0_linux_amd64.tar.gz
             bd_sha256: 2f92b904ecf35b607e44dc5c39229173af69c54f1183e8d709f1773540cdcf3b
             dolt_asset: dolt-linux-amd64.tar.gz
             dolt_sha256: 0a2a318f27c5e1088a2883038573c2054e00f356dc9752e74bca934f8321959a
           - os: macos-latest
             target: aarch64-apple-darwin
-            sha256: 23db29325d95c0f4bb94dead48d02883e00311e82dc66820fe51b1dd855b7168
+            sha256: d7590a41921bef5a428bcbd33dda48006c6f6df5eafa83217cb820240fe6544b
             bd_asset: beads_1.3.0_darwin_arm64.tar.gz
             bd_sha256: 7cc77367d0b84c50243a1108bc1f73648699211257d414b917540bf868e6bb85
             dolt_asset: dolt-darwin-arm64.tar.gz
             dolt_sha256: d738b9f523289e9c51dbe0e9f2623c8e032924c62fa72a443703020adf099d27
     runs-on: ${{ matrix.os }}
     env:
-      SC_COMPOSE_VERSION: "1.6.1"
+      SC_COMPOSE_VERSION: "1.7.0"
     steps:
       - uses: actions/checkout@v4
         with:

@@ -29,10 +29,10 @@ user's request.
   B; `A -->|parent-child| B` means A is a child of B; `A -->|discovered-from|
   B` means A was found while working B.
 - Who creates a bead or edge:
-  1. **poured** (sc-compose, mocked by `scripts/sc-compose-pour-mock`): purple
+  1. **poured** (`sc-compose bead attach`): purple
      dashed node; thick arrow `==>`. A pour makes only `parent-child` to the
      attach parent and `blocks` between its own steps.
-  2. **post-pour** (`scripts/bead-groups`): dotted arrow `-.->`, for
+  2. **relations** (the request's `relations`, from `scripts/bead-groups`): dotted arrow `-.->`, for
      `validates`, `discovered-from` and cross-sprint `blocks`.
   3. **template or script**: solid node and arrow `-->`; blue for a template
      plus `bd import`, green for a package script.
