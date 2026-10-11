@@ -182,8 +182,13 @@ children:
    merge or shared lint wait.
 3. Stop a child that does not respond within 30 minutes. Preserve its failure
    envelope. A failed child is yours: fix its assignment or context and rerun
-   it; the rerun reply replaces the failed envelope in that reviewer's results
-   array before its merge, and the replaced envelope goes in notes. If the
+   it. A `SANITY.JEV_INCONCLUSIVE` size failure is never the slot's outcome
+   and never a reason to take the LLM reply: drop the assignment's `context`
+   entries and rerun, and the client splits an oversized `changed_files` diff
+   into Jev requests that each fit; only a deliverable text over the cap by
+   itself goes to the task assigner as a plan defect. The rerun reply
+   replaces the failed envelope in that reviewer's results array before its
+   merge, and the replaced envelope goes in notes. If the
    rerun fails, dispatch fails, or the Jev startup probe has not passed, put a
    coordinator-origin `success:false, data:null` envelope in that slot with
    an error containing `code`, the actual `message`, `recoverable`,

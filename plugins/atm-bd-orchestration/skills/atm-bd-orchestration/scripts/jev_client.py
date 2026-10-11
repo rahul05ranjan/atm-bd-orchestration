@@ -43,9 +43,9 @@ FIXES = (  # message prefix -> what the calling agent does next
 
 def suggested_action(exc):
     if exc.message.startswith("Request exceeds"):
-        return (f"The request is {exc.size} bytes. Reduce context and retry: remove entries from the assignment's "
-                "`context` list, largest file first, and rerun `--assignment <file>` until it fits. Never remove the "
-                "deliverable text or `changed_files`. If it still exceeds with `context` empty, report this error unchanged.")
+        return getattr(exc, "fix", None) or (
+            f"The request is {exc.size} bytes. Send the same question as several requests whose `state` each fits, "
+            "or run `--assignment <file>`: the client splits a sanity request itself.")
     if exc.message.startswith("Jev HTTP"):
         return RETRY if exc.recoverable else "Jev rejected the request or the key. " + REPORT
     return next((fix for prefix, fix in FIXES if exc.message.startswith(prefix)), REPORT)
@@ -110,9 +110,7 @@ def validate_request(request):
     except (TypeError, ValueError):
         raise JevError("VALIDATION.INPUT", "Request must contain finite JSON values") from None
     if len(body) > MAX_REQUEST_BYTES:
-        exc = JevError("SANITY.JEV_INCONCLUSIVE", "Request exceeds 96000 bytes, the Jev state budget; no Jev evaluation ran", True)
-        exc.size = len(body)
-        raise exc
+        raise oversize(request)
     return body
 
 
@@ -206,9 +204,71 @@ def startup_request():
     }}
 
 
-def assignment_request(assignment):
-    """The sanity request, built from the assignment so no agent writes it: the deliverable text verbatim,
-    the committed diff of the changed files and the context files at the pinned commit."""
+def written_request(text, evidence, context=None, part=None):
+    state = {"deliverable": text, "evidence": evidence}
+    if context:
+        state["context"] = context
+    instructions = "Does the committed evidence deliver the deliverable?"
+    if part:
+        state["part"], state["changed_files"] = part
+        instructions = ("The evidence is one part of the committed diff of `changed_files`, split to fit the request "
+                        "budget; the deliverable is delivered only if every part says yes. Does this part deliver its "
+                        "share of the deliverable without contradicting it?")
+    return {"model": MODEL, "state": state, "questions": {"written": {
+        "type": "choice", "instructions": instructions, "criteria": {"yes": "delivered", "no": "not delivered"}}}}
+
+
+def size(request):
+    return len(json.dumps(request, allow_nan=False).encode("utf-8"))
+
+
+def oversize(request, fix=None):
+    exc = JevError("SANITY.JEV_INCONCLUSIVE", "Request exceeds 96000 bytes, the Jev state budget; no Jev evaluation ran", True)
+    exc.size = size(request)
+    exc.fix = fix and fix.format(size=exc.size)
+    return exc
+
+
+def diff_pieces(diff, budget):
+    """`diff` (one file's) as pieces each under `budget` encoded bytes: the file header with one hunk, a hunk too large
+    for that cut by lines under its header and @@ line, and a line too large for that cut by characters."""
+    def cost(text):
+        return len(json.dumps(text).encode("utf-8")) - 2
+    head, _, rest = diff.partition("\n@@")
+    if not rest:
+        head, rest = "", diff
+    else:
+        head, rest = head + "\n", "@@" + rest
+    hunks = [h if i == 0 else "@@" + h for i, h in enumerate(rest.split("\n@@"))] if head else [rest]
+    hunks = [h if h.endswith("\n") or i == len(hunks) - 1 else h + "\n" for i, h in enumerate(hunks)]
+    pieces = []
+    for hunk in hunks:
+        if cost(head + hunk) <= budget:
+            pieces.append(head + hunk)
+            continue
+        at, _, body = hunk.partition("\n")
+        prefix = head + at + "\n"
+        room = budget - cost(prefix)
+        lines = []
+        for line in body.splitlines(keepends=True):
+            step = max(1, room // 6)  # a character encodes to at most 6 JSON bytes
+            lines += [line] if cost(line) <= room else [line[i:i + step] for i in range(0, len(line), step)]
+        chunk = ""
+        for line in lines:
+            if chunk and cost(chunk + line) > room:
+                pieces.append(prefix + chunk)
+                chunk = ""
+            chunk += line
+        if chunk:
+            pieces.append(prefix + chunk)
+    return pieces
+
+
+def assignment_requests(assignment):
+    """The sanity requests, built from the assignment so no agent writes them: the deliverable text verbatim, the
+    committed diff of the changed files and the context files at the pinned commit. One request when it fits under
+    MAX_REQUEST_BYTES; with `context` empty and the diff over the cap, `changed_files` split into groups (a file whose
+    diff alone is over the cap split by hunks) whose requests each fit."""
     try:
         text, worktree = assignment["deliverable"]["text"], assignment["worktree_path"]
         commit, base, changed, context = (assignment[k] for k in ("commit", "base_sha", "changed_files", "context"))
@@ -224,12 +284,46 @@ def assignment_request(assignment):
             raise JevError("VALIDATION.INPUT", "Committed evidence unreadable at the pinned commits")
         return proc.stdout
 
-    state = {"deliverable": text, "evidence": git("diff", "--no-color", f"{base}...{commit}", "--", *changed) if changed else ""}
+    def diff(*paths):
+        return git("diff", "--no-color", f"{base}...{commit}", "--", *paths) if paths else ""
+
+    request = written_request(text, diff(*changed), {path: git("show", f"{commit}:{path}") for path in context})
+    if size(request) <= MAX_REQUEST_BYTES:
+        return [request]
     if context:
-        state["context"] = {path: git("show", f"{commit}:{path}") for path in context}
-    return {"model": MODEL, "state": state, "questions": {"written": {
-        "type": "choice", "instructions": "Does the committed evidence deliver the deliverable?",
-        "criteria": {"yes": "delivered", "no": "not delivered"}}}}
+        raise oversize(request, "The request is {size} bytes. Reduce context and retry: remove entries from the assignment's `context` list, "
+                       "largest file first, and rerun `--assignment <file>` until it fits. Never remove the deliverable "
+                       "text or `changed_files`: with `context` empty the client splits `changed_files` into requests "
+                       "that each fit and asks Jev once per part.")
+    label = (f"{len(changed) * 1000} of {len(changed) * 1000}", changed)  # the widest part label, so every part fits
+    budget = MAX_REQUEST_BYTES - size(written_request(text, "", part=label))
+    if budget <= 0:
+        raise oversize(request, "The deliverable text alone makes the request {size} bytes, over the 96000-byte Jev "
+                       "budget, so no split of `changed_files` fits. Tell the task assigner this deliverable's text "
+                       "must be split into smaller numbered deliverables in the plan.")
+    groups, evidence = [], ""
+    for piece in (p for path in changed for p in diff_pieces(diff(path), budget)):
+        if evidence and size(written_request(text, evidence + piece, part=label)) > MAX_REQUEST_BYTES:
+            groups.append(evidence)
+            evidence = ""
+        evidence += piece
+    groups.append(evidence)
+    return [written_request(text, part, part=(f"{i} of {len(groups)}", changed)) for i, part in enumerate(groups, 1)]
+
+
+def combined(requests, responses, key):
+    """One `written` answer and receipt across the parts: yes only if every part says yes; the deciding part's
+    probabilities (the surest no, else the least sure yes); the receipt bound to every part's request."""
+    answers = [r["answers"]["written"] for r in responses]
+    noes = [a for a in answers if a["choice"] == "no"]
+    deciding = max(noes, key=lambda a: a["probabilities"]["no"]) if noes else min(answers, key=lambda a: a["probabilities"]["yes"])
+    ids = [r.get("id") for r in responses]
+    body = {"model": MODEL, "question": "written", "choice": deciding["choice"],
+            "probabilities": deciding["probabilities"],
+            "response_id": ",".join(ids) if all(isinstance(i, str) for i in ids) else None,
+            "request_sha256": hashlib.sha256(canonical(requests)).hexdigest()}
+    return {"model": MODEL, "answers": {"written": deciding}, "parts": responses,
+            "receipt": {**body, "mac": receipt_mac({**body, "mac": None}, key)}}
 
 
 def escalation_recipients():
@@ -285,11 +379,15 @@ def main(argv=None):
         if args.startup:
             request = startup_request()
         elif args.assignment:
-            request = assignment_request(json.loads(args.assignment.read_text()))
+            requests = assignment_requests(json.loads(args.assignment.read_text()))
+            request = requests[0]
         else:
             request = json.loads(args.request.read_text())
-        data = evaluate(request)
-        if not args.startup and len(request["questions"]) == 1:
+        if args.assignment and len(requests) > 1:
+            data = combined(requests, [evaluate(r) for r in requests], api_key())
+        else:
+            data = evaluate(request)
+        if not args.startup and len(request["questions"]) == 1 and "receipt" not in data:
             data = {**data, "receipt": receipt(request, data, api_key())}
         if args.startup:
             if data["answers"]["startup"]["choice"] != "ready":

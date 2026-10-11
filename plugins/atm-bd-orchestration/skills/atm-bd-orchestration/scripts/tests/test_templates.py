@@ -227,7 +227,7 @@ class TemplateContractTests(unittest.TestCase):
         spec.loader.exec_module(client)
         # every field the client reads is in the documented input; only the example's paths are not a repository
         with self.assertRaises(client.JevError) as raised:
-            client.assignment_request(assignment)
+            client.assignment_requests(assignment)
         self.assertEqual(raised.exception.message, "Committed evidence unreadable at the pinned commits")
         for code in ("SANITY.JEV_UNAVAILABLE", "SANITY.JEV_RESPONSE_INVALID", "SANITY.JEV_INCONCLUSIVE"):
             self.assertIn(code, text)

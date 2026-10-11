@@ -58,8 +58,11 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    committed diff of `changed_files`, the `context` files); never write a
    request yourself. If it exits 2, do what its `error.suggested_action` says
    (for an oversized request: remove `context` entries, largest first, and run
-   it again); return its error only once that says to report it. Its answer is
-   `data.answers.written.choice`. Choice `no` means exactly one
+   it again; with `context` empty the client splits `changed_files`, by hunks
+   for a file too large alone, into requests that each fit, asks Jev once per
+   part and answers `yes` only if every part does, so an oversized request is
+   never your result); return its error only once that says to report it. Its
+   answer is `data.answers.written.choice`. Choice `no` means exactly one
    `skipped` finding; `yes` means none.
 4. Return the result with `commit_checked` exactly equal to `commit` and
    `jev` = the client's `data.receipt`, copied verbatim from its stdout. The
