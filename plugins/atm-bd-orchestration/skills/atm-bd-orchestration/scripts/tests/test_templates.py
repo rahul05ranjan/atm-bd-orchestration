@@ -436,12 +436,14 @@ class DevAssignmentTests(unittest.TestCase):
                 self.assertNotEqual(_render("fix-complete.md.j2", values).returncode, 0)
 
     def test_every_dev_lands_its_pr_on_the_current_stack_top(self):
+        primary = "/repo/primary"  # the examples' primary_checkout holds an install-time placeholder only the installer renders
         for name in ("dev-template.xml.j2", "dev-fix.xml.j2", "fix-assignment.xml.j2"):
-            result = _render(name, _example(name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json"))
+            values = _example(name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json")
+            result = _render(name, {**values, "primary_checkout": primary})
             with self.subTest(template=name):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("Rebase onto the stack's current top (it may have moved since dispatch)", result.stdout)
-                self.assertRegex(result.stdout, r"the top is what `\S+/\.claude/skills/atm-bd-orchestration/scripts/assignment-gates\.py stack-top --pr-target \S+` prints on exit 0")
+                self.assertRegex(result.stdout, r"the top is what `" + re.escape(primary) + r"/\.claude/skills/atm-bd-orchestration/scripts/assignment-gates\.py stack-top --pr-target \S+` prints on exit 0")
                 self.assertIn("any other exit prints a code (`STACK_AMBIGUOUS`, `GATE_CANNOT_RUN`): never guess, refuse with it by step ", result.stdout)
                 self.assertNotIn("no output means the top is", result.stdout)
                 self.assertNotIn("gh_stack_view.py", result.stdout)

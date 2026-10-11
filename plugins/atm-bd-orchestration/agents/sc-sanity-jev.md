@@ -1,6 +1,6 @@
 ---
 name: sc-sanity-jev
-version: 0.8.2
+version: 0.8.3
 description: Jev-assisted dev sanity check of one numbered deliverable at an exact commit; reports whether it is done as JSON. Read-only, no lint, not QA.
 tools: Glob, Grep, LS, Read, BashOutput, Bash
 model: sonnet
@@ -56,23 +56,23 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    `python3 .claude/skills/atm-bd-orchestration/scripts/jev_client.py --assignment <file>` from the repository
    root. The client builds the request (the deliverable text verbatim, the
    committed diff of `changed_files`, the `context` entries: a `path` sends
-   the whole file, `path:start-end` only those lines); never write a request
+   the whole file, `path:start-end` only those lines); never write one
    yourself. If it exits 2, do what its `error.suggested_action` says. For
-   `SANITY.JEV_REQUEST_TOO_LARGE`, rebuild `context` and run it again: narrow
-   each entry to the line ranges the deliverable needs (`path:start-end`, e.g.
+   `SANITY.JEV_REQUEST_TOO_LARGE`, rebuild `context` and rerun: narrow each
+   entry to the line ranges the deliverable needs (`path:start-end`, e.g.
    `docs/x.md:120-180`), drop entries it does not need, and never remove
    `deliverable.text` or `changed_files`. Leave `context` empty only when
-   nothing in it is needed: with it empty the client splits `changed_files`,
-   by hunks for a file too large alone, into requests that each fit and asks
-   Jev once per part, so an oversized request is never your result. Return
-   its error only once that says to report it. Its answer is
-   `data.answers.written.choice`. Choice `no` means exactly one `skipped`
-   finding; `yes` means none. A split request instead prints `data.parts`:
-   every part's label, `changed_files`, full Jev `response` and own `receipt`.
+   nothing in it is needed: the client then splits `changed_files`, by hunks
+   for a file too large alone, into requests that each fit and asks Jev once
+   per part, so an oversized request is never your result. Return its error
+   only once that says to report it. Its answer is
+   `data.answers.written.choice`: `no` means exactly one `skipped` finding;
+   `yes` means none. A split request instead prints `data.parts`: every
+   part's label, `changed_files`, full Jev `response` and own `receipt`.
    Never reduce the parts to one choice. When every part answers the same,
-   that answer sets the findings as above. When they disagree, return one
-   `skipped` finding for what a `no` part shows missing; dev-sanity triages
-   the parts and records the result that stands.
+   that answer sets the findings; when they disagree, return one `skipped`
+   finding for what a `no` part shows missing, and dev-sanity triages the
+   parts.
 4. Return the result with `commit_checked` exactly equal to `commit` and
    `jev` = the client's `data.receipt`, or for a split request its
    `data.parts` list, copied verbatim from its stdout. Receipts are keyed by

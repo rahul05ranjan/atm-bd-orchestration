@@ -6,6 +6,14 @@
 - An oversized Jev request is rebuilt by the caller, not just stripped of files. A `context` entry may name a line range, `path:start-end` (e.g. `docs/x.md:120-180`): `jev_client.py --assignment` sends only those lines at the pinned commit, labelled with the entry in `state.context`; a plain `path` still sends the whole file, and a range outside the file is a `VALIDATION.INPUT` error naming the entry. The size error tells the caller to rebuild `context` (narrow entries to the line ranges the deliverable needs, drop what it does not need) and rerun; `context` is left empty only when nothing in it is needed, and then the client splits `changed_files` as before. dev-sanity's rerun context and `sanity-merge`'s rerun check accept the range form; dev-sanity, sc-sanity-jev and sc-sanity-llm say how to use it.
 - The oversize error code is `SANITY.JEV_REQUEST_TOO_LARGE` (recoverable), not `SANITY.JEV_INCONCLUSIVE`: the request is the caller's to rebuild, not an inconclusive Jev result.
 
+- Every handoff that sends fenced JSON matches its receiver. dev-sanity passes each manifest entry's inner `assignment` object (not the `{number, assignment}` wrapper) to sc-sanity-llm and sc-sanity-jev. `jev_client.py --assignment` and `fix-round-scope --result` read a ```json-fenced file as well as raw JSON; both used to fail on the fence their callers are told to send. qa-template step g's round-1 `blocking.json` shape is valid JSON that `bead-groups --findings` accepts.
+- plan-review-template 3.10.0 requires `worktree_path` (a checkout of `integration_branch`). Each reviewer's assignment is rendered from its `<reviewer>-assignment.json.j2` (else the input its agent file names) and sent as a ```json fence; ceremony-qa now gets its required `worktree_path`, and ceremony-finding-screen gets `worktree_path`, `sprint_doc` and `findings`, as in qa-template step f.
+- `scripts/tests/test_handoff_contracts.py` checks every package JSON handoff against its real receiver (fences parse, `.json.j2` templates render to valid JSON, reviewer outputs, failure envelopes, Jev receipts, `blocking.json` and workflow-issue pours on a real bd), each with a planted negative.
+- The skill test suites pass when run from the package as well as installed: tests no longer depend on unrendered install-time values or an installed `.claude/skills` tree.
+
+### Changed
+- dev-sanity step 3, its selection paragraph, sc-sanity-jev steps 3-4 and the lead's cron line are shorter, with the same requirements (prompt-rewrite-judge; Jev confirmed no requirement dropped).
+
 ## [0.13.0] - 2026-10-10
 
 ### Fixed

@@ -33,6 +33,7 @@ REBUILD = ("Rebuild `context` and rerun `--assignment <file>`: narrow each entry
            "remove `deliverable.text` or `changed_files`. Leave `context` empty only when nothing in it is needed: "
            "with `context` empty the client splits `changed_files` into requests that each fit.")
 CONTEXT_RANGE = re.compile(r"(?P<path>.+):(?P<start>[0-9]+)-(?P<end>[0-9]+)")  # a `context` entry naming lines
+FENCED = re.compile(r"\s*```(?:json)?[ \t]*\n(.*?)\n```\s*", re.S)  # an assignment as received: fenced JSON
 FIXES = (  # message prefix -> what the calling agent does next
     ("TYPESAFE_API_KEY is missing", "No Jev call is possible without TYPESAFE_API_KEY. " + REPORT),
     ("TYPESAFE_API_KEY has invalid formatting", "TYPESAFE_API_KEY holds whitespace, quotes or control characters. " + REPORT),
@@ -389,7 +390,9 @@ def main(argv=None):
         if args.startup:
             request = startup_request()
         elif args.assignment:
-            requests = assignment_requests(json.loads(args.assignment.read_text()))
+            text = args.assignment.read_text()
+            fenced = FENCED.fullmatch(text)
+            requests = assignment_requests(json.loads(fenced.group(1) if fenced else text))
             request = requests[0]
         else:
             request = json.loads(args.request.read_text())

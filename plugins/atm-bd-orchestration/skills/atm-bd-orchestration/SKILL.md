@@ -343,7 +343,7 @@ Then, on each task close:
 
 Re-run `bd ready` after every close. Never cache the ready list. The open
 phase root also appears in it; it is never dispatched.
-While phase work is under way, a cron must run `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` every 15 minutes, and the lead acts on every row it reports; it is the only report of what the loop missed. Disable the cron when phase work is paused or the phase is complete.
+While phase work is under way, a cron must run `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` every 15 minutes, the only report of what the loop missed; the lead acts on every row it reports. Disable it when phase work is paused or the phase is complete.
 
 Close a sprint container when every child is closed (`bd children <sprint>
 --json | jq -e 'all(.[]; .status == "closed")'`): `bd close <sprint> --reason
