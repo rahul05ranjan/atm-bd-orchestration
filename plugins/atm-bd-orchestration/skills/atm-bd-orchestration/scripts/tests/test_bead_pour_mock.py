@@ -451,6 +451,41 @@ class BeadPourMockTests(unittest.TestCase):
             shutil.rmtree(override)
 
 
+    def test_an_unsupplied_compose_variable_is_refused_before_rendering(self):
+        # sc-compose bead render 1.6.1 renders an unbound {{{ x }}} empty (sc-compose#783); bead-groups refuses it.
+        ws = self.ws
+        override = ws.root / ".atm-bd/formula"
+        override.mkdir(parents=True, exist_ok=True)
+        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
+        marker = "description = \"Dev work for sprint"
+        assert marker in source
+        (override / "sprint-group.formula.toml.j2").write_text(source.replace(marker, "description = \"{{{ extra }}} Dev work for sprint", 1))
+        try:
+            sprint = ws.sprint("u", 1)
+            for mode in (("--validate",), ()):
+                entry = target(ws.groups(*mode, "--sprint", sprint, expect=2), sprint)
+                assert entry["error"]["code"] == "BEAD_GROUPS_COMPOSE_UNBOUND", entry
+                assert "extra" in entry["error"]["message"] and "sprint-group.formula.toml.j2" in entry["error"]["message"]
+            assert all(ws.show(b) is None for b in group(sprint))
+            assert not list((ws.root / ".atm-bd/pour").glob(f"{sprint}.*"))
+        finally:
+            shutil.rmtree(override)
+
+    def test_both_formulas_pour_under_every_option(self):
+        ws = self.ws
+        for n, option in enumerate("ABC", start=1):
+            sprint = ws.sprint("v", n)
+            dev, sanity, qa = group(sprint)
+            ws.groups("--option", option, "--sprint", sprint)
+            poured = [dev] if option == "A" else [dev, sanity, qa]
+            assert [b for b in (dev, sanity, qa) if ws.show(b) is not None] == poured, option
+            path = findings_file(ws, sprint, qa if option != "A" else dev, 1, {"ref": f"v{n}-f1"})
+            fix, fix_sanity, fix_qa = fix_group(sprint, f"v{n}-f1")
+            ws.groups("--option", option, "--findings", path)
+            poured = [fix] if option == "A" else [fix, fix_sanity, fix_qa]
+            assert [b for b in (fix, fix_sanity, fix_qa) if ws.show(b) is not None] == poured, option
+            assert ws.show(fix)["metadata"]["requirements"] == ["REQ-1"]
+
     def test_blocking_findings_pour_flat_fix_groups_under_the_sprint(self):
         ws = self.ws
         sprint = ws.sprint("g", 1)
