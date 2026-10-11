@@ -11,7 +11,7 @@ A file of the same name in `<repo>/.atm-bd/formula/` overrides the one here.
 
 Under the default E1 option C, sanity blocks on dev (or fix) and qa blocks on
 sanity; qa also `validates` dev (or fix). A sprint's dev bead `blocks` on the
-initial sanity bead of each predecessor in the plan file. A blocking finding
+initial sanity bead of each predecessor in the plan file (under option A, which pours no sanity bead, on its dev bead). A blocking finding
 has no bead of its own: its fix bead is the dev's task, carries `finding_ref`,
 `severity`, `reviewer`, `remedy`, `filed_by`, `found_at_commit`,
 `requirements` and `adrs`, and is `discovered-from` its `filed_by` qa bead.

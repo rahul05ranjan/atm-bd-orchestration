@@ -101,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     except ScopeError as exc:
         print(f"fix-round-scope: {exc}", file=sys.stderr)
         return 2
+    except OSError as exc:
+        print(f"fix-round-scope: cannot read --carried {args.carried}: {exc}; pass the path of the file `bd show <fix bead> --json` wrote", file=sys.stderr)
+        return 2
     if args.command == "owned":
         print(json.dumps(filing))
         return 0
@@ -114,7 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.reviewer not in filing or not args.result:
         print(f"filter needs --reviewer in {tuple(filing)} and --result", file=sys.stderr)
         return 2
-    text = open(args.result).read()
+    try:
+        text = open(args.result).read()
+    except OSError as exc:
+        print(f"fix-round-scope: cannot read --result {args.result}: {exc}; --result is a file path, not inline JSON: save the "
+              "reviewer's reply verbatim to <scratch>/<task>-<reviewer>-result.json and pass that path", file=sys.stderr)
+        return 2
     fenced = FENCED.fullmatch(text)
     try:
         result = json.loads(fenced.group(1) if fenced else text)

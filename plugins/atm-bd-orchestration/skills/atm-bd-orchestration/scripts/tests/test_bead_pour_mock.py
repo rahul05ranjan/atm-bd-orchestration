@@ -493,6 +493,23 @@ class BeadPourMockTests(unittest.TestCase):
             assert [b for b in (fix, fix_sanity, fix_qa) if ws.show(b) is not None] == poured, option
             assert ws.show(fix)["metadata"]["requirements"] == ["REQ-1"]
 
+    def test_option_a_dependent_sprints_block_on_the_predecessors_dev(self):
+        # Option A pours only dev; the predecessor's sanity bead does not exist until its dev closes.
+        ws = self.ws
+        first = ws.sprint("oa", 1)
+        second = ws.sprint("oa", 2, (1,))
+        f_dev, f_sanity, _ = group(first)
+        s_dev, _, _ = group(second)
+        problems = target(ws.groups("--validate", "--option", "A", "--phase", "oa", expect=5), second)["problems"]
+        assert problems == [f"missing bead {s_dev}", f"missing bead {f_dev} for step:dev -blocks-> bead:{f_dev}"], problems
+        ws.groups("--option", "A", "--phase", "oa")
+        assert ws.show(f_sanity) is None
+        assert ws.deps(s_dev) == {second: "parent-child", f_dev: "blocks"}
+        assert s_dev not in ws.ready()
+        ws.close(f_dev, "done")
+        assert s_dev in ws.ready()
+        assert [n["action"] for n in target(ws.groups("--option", "A", "--phase", "oa"), second)["nodes"]] == ["existing"]
+
     def test_blocking_findings_pour_flat_fix_groups_under_the_sprint(self):
         ws = self.ws
         sprint = ws.sprint("g", 1)

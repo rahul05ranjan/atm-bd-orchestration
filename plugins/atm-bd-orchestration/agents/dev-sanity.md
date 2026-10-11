@@ -195,7 +195,8 @@ children:
    plan defect to the task assigner only when the deliverable text alone is
    over the cap.
    The rerun reply replaces the failed envelope in that reviewer's results
-   array before its merge. Put the replaced envelope in notes.
+   array before its merge. Put the replaced envelope in the close vars'
+   `notes_md`.
    If the rerun fails, dispatch fails, or the Jev startup probe has not
    passed, put a coordinator-origin `success:false, data:null` envelope in
    that slot. Its error must contain `code`, the actual `message`,
@@ -247,7 +248,8 @@ children:
    known. Once both raw arrays are available, record `selected_started_at`
    immediately before selection and `selected_completed_at` when
    `selection.json` is written. Then select each deliverable in a strict
-   JSON array. Each entry records exact LLM/JEV statuses, `selected` source
+   JSON array. Each entry records exact LLM/JEV statuses (`done`, `undone` or
+   `cannot_run`, as `sanity-merge` derives them from each reply), `selected` source
    (`llm`, `jev`, or `rerun`), a reason for a disagreement or rerun, and a
    checker-defect flag; `sanity-merge` accepts exactly these keys:
    `deliverable`, `llm`, `jev`, `selected`, `reason`, `rerun`, `checker_defect`,
@@ -298,7 +300,8 @@ children:
    to the same ignored phase JSONL, keyed by shared `run_id` and explicit
    reviewer: strict `sanity-run-record.json.j2` render through `sc-compose
    render`, typed JSON validation and UTC timestamps, compact serialization
-   (one object per line), locked append (no sc-compose `--append` exists). A
+   (one object per line), appended under a lock by `sc-compose render
+   --strict --append`. A
    failed render or validation appends nothing; retrying the identical append
    is safe. CANNOT_RUN is logged with null findings and its error, never as
    PASS or FAIL; each row's `errors` lists every failed slot's `code`,
@@ -315,10 +318,11 @@ children:
 
    It prints the ledger path; keep it as `$log`.
 7. For each `checker_defect`, append the selection entry to the matching
-   workflow class bead (or report it to the task assigner) and cite it in notes.
+   workflow class bead (or report it to the task assigner) and cite it in the
+   close vars' `notes_md`.
    Complete the selected lifecycle (Verdicts below) using its vars copied to
    `sanity-$task-vars.json`. Retain LLM, JEV, selection, and rerun evidence in
-   completion notes.
+   its `notes_md`.
 
 The check leaves nothing in the repository: `sanity-split` writes only the
 lint log and the lint exit file under `--scratch`, the renderer's transient

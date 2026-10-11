@@ -135,8 +135,9 @@ Failed checks take precedence as ❌.
 ## Render command
 
 The template path is relative to the main repository root. The script renders
-it with the sc-compose Python wheel. To render manually, write the variables
-JSON produced by the script to a temporary file and run, from the repository
+it with the sc-compose Python wheel and prints only the rendered text. To
+render manually, write a variables JSON in the shape of "Table variables" or
+"Detailed variables" below to a temporary file and run, from the repository
 root:
 
 ```bash
