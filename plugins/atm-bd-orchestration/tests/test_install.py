@@ -88,6 +88,40 @@ def test_versions_agree():
     assert f"## [{version}]" in (PKG / "CHANGELOG.md").read_text()
 
 
+
+def shim_sc_compose(bin_dir: Path, cli: str, wheel: str) -> None:
+    """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
+    bin_dir.mkdir(exist_ok=True)
+    for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel)):
+        (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
+        (bin_dir / name).chmod(0o755)
+
+
+@pytest.mark.parametrize("cli, wheel, refusal", [
+    ("1.7.0", "1.7.0", None),
+    ("1.7.1", "1.7.1", None),
+    ("1.12.0", "1.12.0", None),
+    ("1.6.1", "1.6.1", "sc-compose CLI is sc-compose 1.6.1, the package needs >= 1.7.0, < 2"),
+    ("2.0.0", "2.0.0", "sc-compose CLI is sc-compose 2.0.0, the package needs >= 1.7.0, < 2"),
+    ("1.7.0", "1.6.1", "python3 on PATH has the sc-compose wheel 1.6.1, the package needs >= 1.7.0, < 2"),
+    ("1.7.1", "1.7.0", "the sc-compose CLI is 1.7.1 and the python3 wheel is 1.7.0; they must be the same version"),
+])
+def test_check_tools_accepts_one_sc_compose_version_in_the_range(tmp_path, monkeypatch, cli, wheel, refusal):
+    shim_sc_compose(tmp_path / "bin", cli, wheel)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    if refusal is None:
+        install.check_tools()
+        return
+    with pytest.raises(install.InstallError) as caught:
+        install.check_tools()
+    assert refusal in str(caught.value)
+    assert "python3 -m pip install 'sc-compose>=1.7.0,<2'" in str(caught.value)
+
+
+def test_the_manifest_requires_sc_compose_from_1_7_0_below_2():
+    assert install.sc_compose_range() == ("1.7.0", 2)
+
+
 VERSIONED_SKILLS = sorted(p for p in PKG.glob("skills/*/SKILL.md")
                           if "version" in yaml.safe_load(p.read_text().split("---\n", 2)[1]))
 

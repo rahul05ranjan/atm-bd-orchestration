@@ -3,8 +3,8 @@
 Scripts and tests render through `render()` instead of running the
 `sc-compose render` CLI: no var files, no stdout parsing, and the template's
 own directory is the confining root, so the result never depends on the
-caller's working directory. The wheel and the CLI are the same version (the
-`sc-compose ==` line in the package manifest).
+caller's working directory. The wheel and the CLI are the same version, in the
+`sc-compose >=` range in the package manifest.
 """
 from __future__ import annotations
 

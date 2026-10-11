@@ -38,8 +38,8 @@ file then takes its place. A repository installed by
 the bytes this version ships or bytes some 0.x version shipped
 (`config/legacy-owned.json`); any other existing file fails the install.
 
-Checks before anything is written: the sc-compose CLI and the python3 wheel at
-the manifest's `sc-compose ==` pin, pydantic and PyYAML present;
+Checks before anything is written: the sc-compose CLI and the python3 wheel the
+same version, in the manifest's `sc-compose >= X.Y.Z, < N` range, pydantic and PyYAML present;
 `.beads/metadata.json` shows `dolt_mode: server`; every agent named in
 `qa_member` and `reviewers_round1` has `.claude/agents/<name>.md` (in the
 repository or shipped by this install). `dev_sanity_member` is not checked: it
@@ -150,21 +150,33 @@ def package_version(pkg_dir: Path = PKG_DIR) -> str:
     return str(load_manifest(pkg_dir)["version"])
 
 
-SC_COMPOSE_PIN_RE = re.compile(r"sc-compose == ([0-9]+\.[0-9]+\.[0-9]+)")
+SC_COMPOSE_RANGE_RE = re.compile(r"sc-compose >= ([0-9]+\.[0-9]+\.[0-9]+), < ([0-9]+)")
 
 
-def sc_compose_pin(pkg_dir: Path = PKG_DIR) -> str:
-    """The one sc-compose version, CLI and Python wheel alike: the manifest's `sc-compose ==` requirement."""
+def sc_compose_range(pkg_dir: Path = PKG_DIR) -> Tuple[str, int]:
+    """(floor, major ceiling) for the sc-compose CLI and Python wheel: the manifest's `sc-compose >= X.Y.Z, < N`."""
     for entry in load_manifest(pkg_dir).get("requires") or []:
-        m = SC_COMPOSE_PIN_RE.fullmatch(str(entry))
+        m = SC_COMPOSE_RANGE_RE.fullmatch(str(entry))
         if m:
-            return m.group(1)
-    raise InstallError(f"{pkg_dir / MANIFEST_FILE}: requires has no `sc-compose == X.Y.Z` pin")
+            return m.group(1), int(m.group(2))
+    raise InstallError(f"{pkg_dir / MANIFEST_FILE}: requires has no `sc-compose >= X.Y.Z, < N` range")
 
 
-def sc_compose_upgrade(pin: str) -> str:
-    return (f"python3 -m pip install 'sc-compose=={pin}' and "
-            f"brew upgrade randlee/tap/sc-compose (or cargo install sc-compose --version {pin} --locked)")
+def sc_compose_supported(version: str, pkg_dir: Path = PKG_DIR) -> bool:
+    """True when `version` (X.Y.Z) is in the manifest's sc-compose range."""
+    floor, ceiling = sc_compose_range(pkg_dir)
+    m = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)", version)
+    if not m:
+        return False
+    parts = tuple(int(p) for p in m.groups())
+    return tuple(int(p) for p in floor.split(".")) <= parts and parts[0] < ceiling
+
+
+def sc_compose_upgrade(pkg_dir: Path = PKG_DIR) -> str:
+    floor, ceiling = sc_compose_range(pkg_dir)
+    return (f"python3 -m pip install 'sc-compose>={floor},<{ceiling}' and "
+            f"brew upgrade randlee/tap/sc-compose (or cargo install sc-compose --version '>={floor}, <{ceiling}' --locked), "
+            "the CLI and wheel at the same version")
 
 
 def config_variables(pkg_dir: Path = PKG_DIR) -> List[str]:
@@ -303,7 +315,7 @@ def _sc_compose(template_text: str, variables: Dict[str, Any], *, suffix: str) -
         import sc_render
     except ImportError as exc:
         raise InstallError(f"this python cannot import the sc-compose wheel ({exc}); "
-                           f"install {sc_compose_upgrade(sc_compose_pin())} and rerun") from exc
+                           f"install {sc_compose_upgrade()} and rerun") from exc
     finally:
         sys.path.pop(0)
     with tempfile.TemporaryDirectory(prefix="atm-bd-install-") as tmp:
@@ -363,24 +375,30 @@ def render_text(text: str, variables: Dict[str, str]) -> str:
 
 
 def check_tools() -> None:
-    pin = sc_compose_pin()
+    floor, ceiling = sc_compose_range()
+    needs = f"the package needs >= {floor}, < {ceiling}"
     if shutil.which("sc-compose") is None:
-        raise InstallError(f"sc-compose is not on PATH; install {sc_compose_upgrade(pin)} and rerun")
+        raise InstallError(f"sc-compose is not on PATH; install {sc_compose_upgrade()} and rerun")
     cli = subprocess.run(["sc-compose", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if cli.stdout.split()[-1:] != [pin]:
-        raise InstallError(f"sc-compose CLI is {cli.stdout.strip() or cli.stderr.strip()}, the package pins {pin}; "
-                           f"install {sc_compose_upgrade(pin)} and rerun")
+    cli_version = (cli.stdout.split() or [""])[-1]
+    if not sc_compose_supported(cli_version):
+        raise InstallError(f"sc-compose CLI is {cli.stdout.strip() or cli.stderr.strip()}, {needs}; "
+                           f"install {sc_compose_upgrade()} and rerun")
     # validate-plan runs scripts/bead_schema.py (pydantic) and the scripts render with the
     # sc-compose wheel, all with the python3 on PATH.
     probe = subprocess.run(["python3", "-c", "import pydantic, yaml, sc_compose, importlib.metadata as m; "
                             "print(m.version('sc-compose'))"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if probe.returncode != 0:
         raise InstallError("python3 on PATH cannot import pydantic, PyYAML and the sc-compose wheel, which the "
-                           f"scripts need; install them (python3 -m pip install pydantic pyyaml 'sc-compose=={pin}') "
+                           f"scripts need; install them (python3 -m pip install pydantic pyyaml 'sc-compose=={cli_version}') "
                            "and rerun")
-    if probe.stdout.strip() != pin:
-        raise InstallError(f"python3 on PATH has the sc-compose wheel {probe.stdout.strip()}, the package pins "
-                           f"{pin}; install {sc_compose_upgrade(pin)} and rerun")
+    wheel_version = probe.stdout.strip()
+    if not sc_compose_supported(wheel_version):
+        raise InstallError(f"python3 on PATH has the sc-compose wheel {wheel_version}, {needs}; "
+                           f"install {sc_compose_upgrade()} and rerun")
+    if wheel_version != cli_version:
+        raise InstallError(f"the sc-compose CLI is {cli_version} and the python3 wheel is {wheel_version}; they must "
+                           f"be the same version; install {sc_compose_upgrade()} and rerun")
 
 
 def check_beads_server_mode(repo_root: Path) -> None:
