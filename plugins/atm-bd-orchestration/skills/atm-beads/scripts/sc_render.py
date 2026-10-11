@@ -17,18 +17,19 @@ import sc_compose
 RenderError = sc_compose.ScComposeError
 
 
-def render(template: str | Path, variables: Mapping[str, Any], *, strict: bool = True) -> str:
+def render(template: str | Path, variables: Mapping[str, Any]) -> str:
     """The rendered text, newline-terminated as `sc-compose render` prints it.
 
-    `strict` makes undeclared referenced variables errors (`--strict`). A
-    `.json` template's output must parse, as the CLI's checked render requires;
+    Always strict (`--strict`); there is no lenient render. A referenced
+    variable that is missing or undeclared raises, naming the variable and the
+    template. A `.json` template's output must parse, as the CLI's checked render requires;
     the wheel does not check it. Raises `RenderError`; `error_text(exc)` is its
     message.
     """
     path = Path(template).resolve()
     request = sc_compose.ComposeRequest(
         str(path.parent), sc_compose.ComposeMode.file(str(path)), vars_input=dict(variables),
-        policy=sc_compose.ComposePolicy(strict_undeclared_variables=strict))
+        policy=sc_compose.ComposePolicy(strict_undeclared_variables=True))
     text = sc_compose.compose_file(request).rendered_text
     if path.name.removesuffix(".j2").endswith(".json"):
         try:

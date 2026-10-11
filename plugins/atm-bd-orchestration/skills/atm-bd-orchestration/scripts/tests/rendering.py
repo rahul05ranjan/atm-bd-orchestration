@@ -8,12 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "atm-beads" / "scri
 import sc_render  # noqa: E402
 
 
-def render(template, variables, *, strict=True) -> subprocess.CompletedProcess:
-    """`sc-compose render` as a completed process: returncode 0 and the text on stdout, or 1 and the
+def render(template, variables) -> subprocess.CompletedProcess:
+    """`sc-compose render --strict` as a completed process: returncode 0 and the text on stdout, or 1 and the
     sc-compose diagnostic on stderr. `variables` is a mapping or a JSON file."""
     if not isinstance(variables, dict):
         variables = json.loads(Path(variables).read_text())
     try:
-        return subprocess.CompletedProcess([str(template)], 0, sc_render.render(template, variables, strict=strict), "")
+        return subprocess.CompletedProcess([str(template)], 0, sc_render.render(template, variables), "")
     except sc_render.RenderError as exc:
         return subprocess.CompletedProcess([str(template)], 1, "", sc_render.error_text(exc))

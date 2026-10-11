@@ -140,7 +140,7 @@ JSON produced by the script to a temporary file and run, from the repository
 root:
 
 ```bash
-sc-compose render --file .claude/skills/sprint-report/report.md.j2 --var-file <json>
+sc-compose render --strict --file .claude/skills/sprint-report/report.md.j2 --var-file <json>
 ```
 
 ## Table variables

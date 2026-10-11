@@ -172,6 +172,7 @@ artifacts:
     - skills/atm-beads/tests/test_importing_docs.py
     - skills/atm-beads/tests/test_plan_root.py
     - skills/atm-beads/tests/test_repo_config.py
+    - skills/atm-beads/tests/test_sc_render.py
     - skills/atm-beads/tests/test_validate_plan.py
     - skills/prompt-rewrite-judge/SKILL.md
     - skills/prompt-rewrite-judge/scripts/judge.py

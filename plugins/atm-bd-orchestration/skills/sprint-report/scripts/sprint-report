@@ -456,7 +456,7 @@ def main() -> int:
         "integration_row": detailed_integration if args.detailed else integration_row,
     }
     try:
-        rendered = sc_render.render(repo / ".claude/skills/sprint-report/report.md.j2", variables, strict=False)
+        rendered = sc_render.render(repo / ".claude/skills/sprint-report/report.md.j2", variables)
     except sc_render.RenderError as exc:
         print(sc_render.error_text(exc), file=sys.stderr)
         return 1
