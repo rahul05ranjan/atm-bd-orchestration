@@ -182,11 +182,15 @@ children:
    merge or shared lint wait.
 3. Stop a child that does not respond within 30 minutes. Preserve its failure
    envelope. A failed child is yours: fix its assignment or context and rerun
-   it. A `SANITY.JEV_INCONCLUSIVE` size failure is never the slot's outcome
-   and never a reason to take the LLM reply: drop the assignment's `context`
-   entries and rerun, and the client splits an oversized `changed_files` diff
-   into Jev requests that each fit; only a deliverable text over the cap by
-   itself goes to the task assigner as a plan defect. The rerun reply
+   it. A `SANITY.JEV_REQUEST_TOO_LARGE` failure is never the slot's outcome
+   and never a reason to take the LLM reply: rebuild the assignment's
+   `context` and rerun. Narrow each entry to the line ranges the deliverable
+   needs (`path:start-end`, e.g. `docs/x.md:120-180`), drop entries it does
+   not need, and never remove `deliverable.text` or `changed_files`. Leave
+   `context` empty only when nothing in it is needed: with it empty the
+   client splits an oversized `changed_files` diff into Jev requests that
+   each fit. Only a deliverable text over the cap by itself goes to the task
+   assigner as a plan defect. The rerun reply
    replaces the failed envelope in that reviewer's results array before its
    merge, and the replaced envelope goes in notes. If the
    rerun fails, dispatch fails, or the Jev startup probe has not passed, put a
@@ -255,11 +259,12 @@ children:
    undone reply, needs its reason, and creates no child; its selection record
    and workflow-issue class bead carry the evidence. A rerun supplies one
    unchanged reply, its reviewer, and nonempty repo-relative missing-context
-   paths; its assignment is the manifest's assignment with `context` set to
-   those paths as plain strings (a JSON array of strings, the only shape the
-   reviewers and `jev_client.py` accept):
+   entries, each a whole file `path` or only the lines it needs,
+   `path:start-end`; its assignment is the manifest's assignment with
+   `context` set to those entries as plain strings (a JSON array of strings,
+   the only shape the reviewers and `jev_client.py` accept):
    `jq --argjson n <n> --argjson context '<["path", ...]>' '.assignments[] | select(.number == $n) | .assignment | .context = $context' "$manifest"`;
-   `rerun.context` lists those same paths. A rerun whose reply is a failure
+   `rerun.context` lists those same entries. A rerun whose reply is a failure
    never replaces a valid original reply: `sanity-merge` rejects it.
 
 5. Merge the selected report from the raw files and selection array:

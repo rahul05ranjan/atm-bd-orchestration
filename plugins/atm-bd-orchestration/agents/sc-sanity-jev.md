@@ -55,13 +55,17 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    assignment you received, unchanged, to a file outside the worktree and run
    `python3 .claude/skills/atm-bd-orchestration/scripts/jev_client.py --assignment <file>` from the repository
    root. The client builds the request (the deliverable text verbatim, the
-   committed diff of `changed_files`, the `context` files); never write a
-   request yourself. If it exits 2, do what its `error.suggested_action` says
-   (for an oversized request: remove `context` entries, largest first, and run
-   it again; with `context` empty the client splits `changed_files`, by hunks
-   for a file too large alone, into requests that each fit and asks Jev once
-   per part, so an oversized request is never your result); return its error
-   only once that says to report it. Its answer is
+   committed diff of `changed_files`, the `context` entries: a `path` sends
+   the whole file, `path:start-end` only those lines); never write a request
+   yourself. If it exits 2, do what its `error.suggested_action` says. For
+   `SANITY.JEV_REQUEST_TOO_LARGE`, rebuild `context` and run it again: narrow
+   each entry to the line ranges the deliverable needs (`path:start-end`, e.g.
+   `docs/x.md:120-180`), drop entries it does not need, and never remove
+   `deliverable.text` or `changed_files`. Leave `context` empty only when
+   nothing in it is needed: with it empty the client splits `changed_files`,
+   by hunks for a file too large alone, into requests that each fit and asks
+   Jev once per part, so an oversized request is never your result. Return
+   its error only once that says to report it. Its answer is
    `data.answers.written.choice`. Choice `no` means exactly one `skipped`
    finding; `yes` means none. A split request instead prints `data.parts`:
    every part's label, `changed_files`, full Jev `response` and own `receipt`.
@@ -103,7 +107,7 @@ combines every deliverable with mechanical lint.
 An unfinished check returns `success: false`, `data: null`, and
 `error: {code, message, recoverable, suggested_action, deliverable}`. When
 `jev_client.py` exits 2, copy its `error` (`SANITY.JEV_UNAVAILABLE`,
-`SANITY.JEV_RESPONSE_INVALID`, `SANITY.JEV_INCONCLUSIVE` or
+`SANITY.JEV_RESPONSE_INVALID`, `SANITY.JEV_REQUEST_TOO_LARGE` or
 `VALIDATION.INPUT`) verbatim, `message` included, and add `deliverable` =
 `deliverable.number`. A message the client did not write fails the merge.
 

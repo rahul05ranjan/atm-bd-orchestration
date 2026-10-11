@@ -7,6 +7,7 @@ by this package (arch-qa, req-qa, ...) is checked against its agent file only wh
 from __future__ import annotations
 
 import ast
+import importlib.machinery
 import importlib.util
 import json
 import re
@@ -39,6 +40,13 @@ def load_client():
     return client
 
 
+def load_merge():
+    loader = importlib.machinery.SourceFileLoader("sanity_merge", str(ROOT / "scripts" / "sanity-merge"))
+    merge = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(merge)
+    return merge
+
+
 def rerun_paragraph() -> str:
     text = (AGENTS / "dev-sanity.md").read_text()
     return text[text.index("A rerun supplies one"):text.index("never replaces a valid original reply")]
@@ -61,6 +69,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         (repo / "crates/example-otlp/src").mkdir(parents=True)
         (repo / "docs").mkdir()
         (repo / "docs/retry.md").write_text("retry policy\n")
+        (repo / "docs/limits.md").write_text("limits\nbackoff 2s\njitter on\n")
         (repo / "crates/example-otlp/src/lib.rs").write_text("// old\n")
         git("add", "-A")
         git("commit", "-qm", "base")
@@ -96,19 +105,26 @@ class DevSanityHandoffTests(unittest.TestCase):
         match = re.search(r"--argjson context '<\[(.*?)\]>'", paragraph)
         self.assertIsNotNone(match, "dev-sanity.md must show the rerun context as a JSON array of path strings")
         self.assertEqual(match.group(1), '"path", ...')
-        context = ["docs/retry.md"]  # the documented shape, filled with a real path at the pinned commit
+        self.assertIn("`path:start-end`", paragraph)
         base = self.assignment("dev-sanity-assignment-vars.json")
         manifest = Path(self.tmp.name) / "manifest.json"
         manifest.write_text(json.dumps({"assignments": [{"number": 1, "assignment": base}]}))
         jq = re.search(r"`(jq --argjson n <n> .*?)`;", paragraph, re.S).group(1)
         jq = jq.replace("<n>", "1").replace("'<[\"path\", ...]>'", "\"$CONTEXT\"").replace("$manifest", str(manifest))
-        rerun = subprocess.run(["bash", "-c", jq], env={"CONTEXT": json.dumps(context), "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"},
-                               capture_output=True, text=True)
-        self.assertEqual(rerun.returncode, 0, rerun.stderr)
-        sent = json.loads(rerun.stdout)
-        self.assertEqual(sent["context"], context)
-        (request,) = load_client().assignment_requests(sent)   # a path-string context is what the client reads
-        self.assertEqual(request["state"]["context"], {"docs/retry.md": "retry policy\n"})
+        pinned = {"worktree_path": str(self.repo), "sha": self.commit}
+        # the documented shapes, a whole file and a line range, filled with real entries at the pinned commit
+        for context, read in ((["docs/retry.md"], {"docs/retry.md": "retry policy\n"}),
+                              (["docs/limits.md:2-3"], {"docs/limits.md:2-3": "backoff 2s\njitter on\n"})):
+            with self.subTest(context=context):
+                rerun = subprocess.run(["bash", "-c", jq], env={"CONTEXT": json.dumps(context), "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"},
+                                       capture_output=True, text=True)
+                self.assertEqual(rerun.returncode, 0, rerun.stderr)
+                sent = json.loads(rerun.stdout)
+                self.assertEqual(sent["context"], context)
+                (request,) = load_client().assignment_requests(sent)   # what the client reads
+                self.assertEqual(request["state"]["context"], read)
+                self.assertTrue(load_merge().context_path_exists(pinned, context[0]))   # what sanity-merge's rerun check accepts
+        self.assertFalse(load_merge().context_path_exists(pinned, "docs/limits.md:3-9"))
 
     def test_the_old_rerun_shape_is_rejected_by_the_receiver(self):
         sent = {**self.assignment("dev-sanity-assignment-vars.json"), "context": [{"path": "docs/retry.md", "why": "x"}]}

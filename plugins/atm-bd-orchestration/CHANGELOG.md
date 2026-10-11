@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.1] - 2026-10-11
+
+### Fixed
+- An oversized Jev request is rebuilt by the caller, not just stripped of files. A `context` entry may name a line range, `path:start-end` (e.g. `docs/x.md:120-180`): `jev_client.py --assignment` sends only those lines at the pinned commit, labelled with the entry in `state.context`; a plain `path` still sends the whole file, and a range outside the file is a `VALIDATION.INPUT` error naming the entry. The size error tells the caller to rebuild `context` (narrow entries to the line ranges the deliverable needs, drop what it does not need) and rerun; `context` is left empty only when nothing in it is needed, and then the client splits `changed_files` as before. dev-sanity's rerun context and `sanity-merge`'s rerun check accept the range form; dev-sanity, sc-sanity-jev and sc-sanity-llm say how to use it.
+- The oversize error code is `SANITY.JEV_REQUEST_TOO_LARGE` (recoverable), not `SANITY.JEV_INCONCLUSIVE`: the request is the caller's to rebuild, not an inconclusive Jev result.
+
 ## [0.13.0] - 2026-10-10
 
 ### Fixed

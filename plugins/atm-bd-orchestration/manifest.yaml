@@ -1,5 +1,5 @@
 name: atm-bd-orchestration
-version: 0.13.0
+version: 0.13.1
 description: >
   Bead-driven phase orchestration for ATM agent teams: the phase plan as a
   beads graph (atm-beads), dispatch, dev-sanity, QA and stack landing driven

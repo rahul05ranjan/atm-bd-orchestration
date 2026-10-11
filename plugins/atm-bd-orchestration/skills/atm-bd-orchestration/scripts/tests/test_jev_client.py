@@ -126,7 +126,9 @@ class JevClientTests(unittest.TestCase):
         request["state"] = "x" * client.MAX_REQUEST_BYTES
         with self.assertRaises(client.JevError) as raised:
             client.validate_request(request)
-        self.assertEqual(raised.exception.code, "SANITY.JEV_INCONCLUSIVE")
+        self.assertEqual(raised.exception.code, "SANITY.JEV_REQUEST_TOO_LARGE")
+        self.assertTrue(raised.exception.recoverable)
+        self.assertIn("Rebuild it under 96000 bytes", client.suggested_action(raised.exception))
 
     def test_finite_request_values_only(self):
         request = client.startup_request()
@@ -214,7 +216,7 @@ class JevClientTests(unittest.TestCase):
             finally:
                 file.unlink()
 
-    def test_oversize_assignment_tells_the_agent_to_drop_context_and_retry(self):
+    def test_oversize_assignment_is_request_too_large_and_tells_the_agent_to_rebuild_context(self):
         import subprocess, tempfile
         with tempfile.TemporaryDirectory() as tmp:
             def git(*args):
@@ -222,7 +224,8 @@ class JevClientTests(unittest.TestCase):
                                       check=True, capture_output=True, text=True).stdout.strip()
             git("init", "-q")
             Path(tmp, "server.py").write_text("bind()\n")
-            Path(tmp, "big.md").write_text("x" * client.MAX_REQUEST_BYTES)
+            big = "".join(f"line {i} " + "x" * 90 + "\n" for i in range(1, 1201))  # ~120 KB, over the cap
+            Path(tmp, "big.md").write_text(big)
             git("add", "-A"); git("commit", "-qm", "base")
             base = git("rev-parse", "HEAD")
             Path(tmp, "server.py").write_text("bind()\nhand_off_fd()\n")
@@ -239,19 +242,45 @@ class JevClientTests(unittest.TestCase):
                     self.assertEqual(client.main(["--assignment", str(file)]), 2)
                 https.assert_not_called()
                 error = json.loads(output.getvalue())["error"]
-                self.assertEqual(error["code"], "SANITY.JEV_INCONCLUSIVE")
+                self.assertEqual(error["code"], "SANITY.JEV_REQUEST_TOO_LARGE")
                 self.assertTrue(error["recoverable"] and client.is_client_message(error["message"]))
                 size = client.size(client.written_request(assignment["deliverable"]["text"], client.subprocess.run(
                     ["git", "-C", tmp, "diff", "--no-color", f"{base}...{assignment['commit']}", "--", "server.py"],
-                    capture_output=True, text=True).stdout, {"big.md": "x" * client.MAX_REQUEST_BYTES}))
-                self.assertIn(f"The request is {size} bytes. Reduce context and retry", error["suggested_action"])
-                self.assertIn("`context`", error["suggested_action"])
+                    capture_output=True, text=True).stdout, {"big.md": big}))
+                self.assertIn(f"The request is {size} bytes, over the 96000-byte Jev budget. Rebuild `context`", error["suggested_action"])
+                self.assertIn("narrow each entry to the line ranges the deliverable needs (`path:start-end`", error["suggested_action"])
                 self.assertIn("with `context` empty the client splits `changed_files`", error["suggested_action"])
                 self.assertNotIn("unchanged", error["suggested_action"])
-                (retry,) = client.assignment_requests({**assignment, "context": []})  # the retry fits
+                (rebuilt,) = client.assignment_requests({**assignment, "context": ["big.md:600-602"]})  # the rebuild fits
+                client.validate_request(rebuilt)
+                self.assertEqual(rebuilt["state"]["context"], {"big.md:600-602": "".join(big.splitlines(keepends=True)[599:602])})
+                (retry,) = client.assignment_requests({**assignment, "context": []})
                 client.validate_request(retry)
             finally:
                 file.unlink()
+
+    def test_a_line_range_context_entry_sends_only_those_lines_and_a_bad_range_is_rejected(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base, commit = self.split_repo(tmp, {"a.py": "start\nchanged\n"})
+            Path(tmp, "notes.md").write_text("one\ntwo\nthree\nfour\n")
+            client.subprocess.run(["git", "-C", tmp, "add", "notes.md"], check=True)
+            client.subprocess.run(["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "notes"],
+                                  check=True, capture_output=True)
+            commit = client.subprocess.run(["git", "-C", tmp, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            assignment = {"deliverable": {"number": 1, "text": "d"}, "worktree_path": tmp, "commit": commit,
+                          "base_sha": base, "changed_files": ["a.py"], "context": ["notes.md:2-3", "notes.md"]}
+            (request,) = client.assignment_requests(assignment)
+            self.assertEqual(request["state"]["context"], {"notes.md:2-3": "two\nthree\n", "notes.md": "one\ntwo\nthree\nfour\n"})
+            for entry in ("notes.md:0-2", "notes.md:3-2", "notes.md:4-5"):
+                with self.subTest(entry=entry), self.assertRaises(client.JevError) as raised:
+                    client.assignment_requests({**assignment, "context": [entry]})
+                self.assertEqual((raised.exception.code, raised.exception.message),
+                                 ("VALIDATION.INPUT", f"Context entry {entry} names lines outside its file at the pinned commit"))
+                self.assertIn("Fix that `context` entry", client.failure(raised.exception)["error"]["suggested_action"])
+            with self.assertRaises(client.JevError) as raised:
+                client.assignment_requests({**assignment, "context": ["missing.md:1-2"]})
+            self.assertEqual(raised.exception.message, "Committed evidence unreadable at the pinned commits")
 
     def split_repo(self, tmp, files):
         """A repository whose one commit changes `files` (name -> new text) from a one-line base."""

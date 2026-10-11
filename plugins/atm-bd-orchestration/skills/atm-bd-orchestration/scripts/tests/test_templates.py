@@ -229,7 +229,7 @@ class TemplateContractTests(unittest.TestCase):
         with self.assertRaises(client.JevError) as raised:
             client.assignment_requests(assignment)
         self.assertEqual(raised.exception.message, "Committed evidence unreadable at the pinned commits")
-        for code in ("SANITY.JEV_UNAVAILABLE", "SANITY.JEV_RESPONSE_INVALID", "SANITY.JEV_INCONCLUSIVE"):
+        for code in ("SANITY.JEV_UNAVAILABLE", "SANITY.JEV_RESPONSE_INVALID", "SANITY.JEV_REQUEST_TOO_LARGE"):
             self.assertIn(code, text)
 
 
