@@ -440,8 +440,7 @@ class DocumentedShapeTests(unittest.TestCase):
                     with self.subTest(mode=values["mode"], case=case):
                         path = Path(tmp) / "vars.json"
                         path.write_text(json.dumps(sent))
-                        proc = subprocess.run(["sc-compose", "render", "--strict", "--file", str(report / "report.md.j2"),
-                                               "--var-file", str(path)], capture_output=True, text=True)
+                        proc = rendering.render(report / "report.md.j2", path)
                         self.assertEqual(proc.returncode == 0, ok, proc.stderr)
                         if ok:
                             self.assertIn(values["integration_row"], proc.stdout)
@@ -450,9 +449,7 @@ class DocumentedShapeTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT.parent / "atm-beads/scripts"))
         import bead_schema
         beads = ROOT.parent / "atm-beads"
-        proc = subprocess.run(["sc-compose", "render", "--strict", "--file", str(beads / "templates/dev-sanity-bead.json.j2"),
-                               "--var-file", str(beads / "examples/dev-sanity-bead-vars-d-4.json")],
-                              capture_output=True, text=True)
+        proc = rendering.render(beads / "templates/dev-sanity-bead.json.j2", beads / "examples/dev-sanity-bead-vars-d-4.json")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         bead = json.loads(proc.stdout)
         self.assertEqual(bead_schema.problems(bead, bead_schema.SanityBead), [])
@@ -522,8 +519,7 @@ class PlanReviewHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "vars.json"
             path.write_text(json.dumps(missing))
-            proc = subprocess.run(["sc-compose", "render", "--strict", "--file", str(TEMPLATES / "plan-review-template.xml.j2"),
-                                   "--var-file", str(path)], capture_output=True, text=True)
+            proc = rendering.render(TEMPLATES / "plan-review-template.xml.j2", path)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("worktree_path", proc.stderr)
 
@@ -664,8 +660,7 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
                                ("planted negative", {k: v for k, v in values.items() if k != "remedy"}, False)):
             with self.subTest(case=case):
                 path.write_text(json.dumps(sent))
-                proc = subprocess.run(["sc-compose", "render", "--strict", "--file", str(TEMPLATES / "workflow-issue-bead.json.j2"),
-                                       "--var-file", str(path)], capture_output=True, text=True)
+                proc = rendering.render(TEMPLATES / "workflow-issue-bead.json.j2", path)
                 self.assertEqual(proc.returncode == 0, ok, proc.stderr)
         rows = ws.root / "workflow.jsonl"
         path.write_text(json.dumps(values))
