@@ -88,6 +88,21 @@ def test_versions_agree():
     assert f"## [{version}]" in (PKG / "CHANGELOG.md").read_text()
 
 
+VERSIONED_SKILLS = sorted(p for p in PKG.glob("skills/*/SKILL.md")
+                          if "version" in yaml.safe_load(p.read_text().split("---\n", 2)[1]))
+
+
+def test_some_skills_carry_a_version_marker():
+    assert len(VERSIONED_SKILLS) >= 2, VERSIONED_SKILLS
+
+
+@pytest.mark.parametrize("skill", VERSIONED_SKILLS, ids=lambda p: p.parent.name)
+def test_a_skill_version_marker_is_the_package_version(skill):
+    """Drift audits read SKILL.md `version:`; it must be the version plugin.json ships."""
+    front = yaml.safe_load(skill.read_text().split("---\n", 2)[1])
+    assert str(front["version"]) == json.loads((PKG / ".claude-plugin/plugin.json").read_text())["version"]
+
+
 def test_legacy_owned_table_is_frozen_at_0_2_3():
     data = json.loads((PKG / install.LEGACY_OWNED).read_text())
     assert data["through"] == "d5b7301"
