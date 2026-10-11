@@ -203,8 +203,8 @@ class SanityHistory(unittest.TestCase):
 
 CONSOLE = (  # agents/dev-sanity.md "Mandatory Console Report"
     "set -o pipefail\n"
-    'test -s "$log" && tail -n 20 "$log" | jq -s \'{runs: .}\' | atm compose '
-    "--template .claude/skills/atm-bd-orchestration/templates/sanity-run-table.md.j2 --vars -")
+    'test -s "$log" && tail -n 20 "$log" | jq -s \'{runs: .}\' | sc-compose render --strict '
+    "--file .claude/skills/atm-bd-orchestration/templates/sanity-run-table.md.j2 --var-file /dev/stdin")
 
 
 def fenced(task, bead, number, sha, findings=()):
@@ -285,8 +285,8 @@ class ShippedFlow(unittest.TestCase):
         log = logs.pop()
         self.assertEqual(Path(log), self.repo.wt.resolve() / ".sc/sanity-log/phase-d.jsonl")
         rows = [json.loads(line) for line in Path(log).read_text().splitlines()]
-        # The table CONSOLE prints (test_console_renders_the_table runs CONSOLE itself where atm is installed).
-        table = render(SCRIPTS.parent / "templates/sanity-run-table.md.j2", {"runs": rows[-20:]})
+        table = subprocess.run(["bash", "-c", CONSOLE], cwd=self.primary, env=dict(self.env, log=log),
+                               capture_output=True, text=True)
         self.assertEqual(table.returncode, 0, table.stderr)
         return final, rows, table.stdout, log
 
@@ -334,17 +334,9 @@ class ShippedFlow(unittest.TestCase):
             fenced(self.task, self.bead, 2, self.repo.sha, [{"kind": "skipped", "file": "crates/types/src/retry.rs", "line": 1, "issue": "404 test not written"}]))]
         self.assertEqual([r["jev_receipts"] for r in rows], [[], jev])
 
-    @unittest.skipIf(shutil.which("atm") is None, "atm not on PATH (CI does not install it): CONSOLE not run")
-    def test_console_renders_the_table(self):
-        *_, table, log = self.run_flow(lambda selection: None)
-        console = subprocess.run(["bash", "-c", CONSOLE], cwd=self.primary, env=dict(self.env, log=log),
-                                 capture_output=True, text=True)
-        self.assertEqual(console.returncode, 0, console.stderr)
-        self.assertEqual(console.stdout, table)
-
     def test_console_fails_on_a_wrong_ledger_path(self):
         doc = (ROOT.parents[1] / "agents/dev-sanity.md").read_text()
-        self.assertIn(CONSOLE.replace("atm compose --template", "atm compose \\\n  --template"), doc)
+        self.assertIn(CONSOLE.replace("--strict --file", "--strict \\\n  --file"), doc)
         *_, log = self.run_flow(lambda selection: None)
         for wrong in (log + ".missing", str(self.root / "empty.jsonl")):
             Path(self.root / "empty.jsonl").touch()

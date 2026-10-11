@@ -143,9 +143,9 @@ Render each reviewer assignment to a file, gate it with `jq`, and send it to
 the reviewer as a fenced ```json block:
 
 ```bash
-atm compose --template .claude/skills/atm-bd-orchestration/templates/<reviewer>-assignment.json.j2 \
-  --vars <scratch>/<qa bead>-<reviewer>-vars.json \
-  > <scratch>/<qa bead>-<reviewer>.json && jq -e . <scratch>/<qa bead>-<reviewer>.json
+sc-compose render --file .claude/skills/atm-bd-orchestration/templates/<reviewer>-assignment.json.j2 \
+  --var-file <scratch>/<qa bead>-<reviewer>-vars.json --json-escape-mode auto \
+  --output <scratch>/<qa bead>-<reviewer>.json && jq -e . <scratch>/<qa bead>-<reviewer>.json
 ```
 
 - `review_mode` takes the reviewer's own value. For `arch-qa` and

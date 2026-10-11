@@ -529,7 +529,8 @@ written to beads with the `atm-beads` templates.
 | `finding-bead.json.j2` | bead | quality-mgr (QA, important and minor) and lead (review), one per finding |
 | `workflow-issue-bead.json.j2` | bead | anyone, a workflow class bead for a recurring failure signature |
 
-Bead templates render with `atm compose --template <t> --vars <v> > <file>`, then `jq -c .` into a JSONL file for `bd import`. Examples of every
+Bead templates render with `sc-compose render --file <t> --var-file <v>
+--strict`, then `jq -c .` into a JSONL file for `bd import`. Examples of every
 template's vars are in [`examples/`](examples/).
 
 ## Priority

@@ -6,7 +6,7 @@ Both `atm-beads` and `atm-bd-orchestration` need these CLIs:
 | --- | --- | --- | --- |
 | `bd` | 1.3.0 | `brew install beads` | the plan, the work graph, `bd sync` |
 | `atm` | 1.6.1 | `brew install randlee/tap/atm` | tasks, messages, `atm compose` |
-| `sc-compose` | 1.6.1, CLI and `python3` wheel the same version | `brew install randlee/tap/sc-compose` and `python3 -m pip install 'sc-compose==1.6.1'` | the scripts' renders (wheel) and the bead pour (CLI) |
+| `sc-compose` | 1.6.1, CLI and `python3` wheel the same version | `brew install randlee/tap/sc-compose` and `python3 -m pip install 'sc-compose==1.6.1'` | strict renders of bead and reviewer templates (CLI), the scripts' renders (wheel) |
 | `jq` | 1.6 | `brew install jq` | every bead query |
 | `gh` + gh-stack | gh 2.0, gh-stack 0.1.0 | `brew install gh`, then `gh extension install github/gh-stack` | the phase stack (lead only) |
 
@@ -40,6 +40,7 @@ which one, with its install line above. Do not work around a missing CLI.
 | `validate-plan` exits 2: "origin/<branch>:<plan> is missing" | the plan file is not pushed to the phase's integration branch | push the plan file and `.atm-bd/phase-<x>.toml` to it, or pass `--index` |
 | `validate-plan` exits 5: "metadata.integration_branch is …; .atm-bd/phase-<x>.toml names …" | the phase root's integration branch is missing or differs from the phase file | `bd update <root> --set-metadata integration_branch=<branch>` |
 | `bd doctor` reports an error | the beads database is unhealthy | report the check to the user; never import into or dispatch from it |
+| `sc-compose render` rejects `autoescape` or `}}}` | an XML or markdown template given to `sc-compose` | render those with `atm compose`; `sc-compose` is for the JSON templates |
 | `gh stack` hangs | an interactive form of the command | always pass branch names, `--auto`, `--json`, `--yes` (see the `sc-gh-stack` skill) |
 
 Identity problems (`BEADS_ACTOR`, assignees) are in

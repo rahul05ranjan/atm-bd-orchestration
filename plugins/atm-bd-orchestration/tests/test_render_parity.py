@@ -1,7 +1,7 @@
 """`atm compose`, the `sc-compose render` CLI and the sc-compose wheel render every template the same.
 
-Agents render with `atm compose`, scripts with the wheel, and tests with sc-compose; this is the
-proof they agree, over every template that has an example vars file. Local only (skipped when CI is
+`atm task --template` renders with atm's library, agents' `sc-compose render --strict` with the
+CLI, and scripts and tests with the wheel; this is the proof they agree, over every template that has an example vars file. Local only (skipped when CI is
 set; CI does not install atm).
 """
 from __future__ import annotations
@@ -32,13 +32,13 @@ def test_there_are_templates_to_compare():
     assert len(CASES) > 20, CASES
 
 
-# atm 1.6.1 renders a boolean nested in a list item as `False` where sc-compose renders `false`
-# (atm-core issue: atm compose and sc-compose render differently).
+# atm 1.6.1 renders every boolean as `False`/`True` where sc-compose renders `false`/`true`
+# (randlee/atm-core#1751).
 ATM_BOOL_CASE = "skills/atm-bd-orchestration/templates/dev-sanity-complete.md.j2"
 
 
 def case(template, vars_file):
-    marks = [pytest.mark.xfail(strict=True, reason="atm compose renders a nested boolean as False")] \
+    marks = [pytest.mark.xfail(strict=True, reason="randlee/atm-core#1751: atm compose renders a boolean as False")] \
         if str(template.relative_to(PKG)) == ATM_BOOL_CASE else []
     return pytest.param(template, vars_file, id=str(template.relative_to(PKG)), marks=marks)
 

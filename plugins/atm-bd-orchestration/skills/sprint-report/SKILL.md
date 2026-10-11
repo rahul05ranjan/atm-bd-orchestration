@@ -136,10 +136,11 @@ Failed checks take precedence as ❌.
 
 The template path is relative to the main repository root. The script renders
 it with the sc-compose Python wheel. To render manually, write the variables
-JSON produced by the script to a temporary file and run:
+JSON produced by the script to a temporary file and run, from the repository
+root:
 
 ```bash
-atm compose --template .claude/skills/sprint-report/report.md.j2 --vars <json>
+sc-compose render --file .claude/skills/sprint-report/report.md.j2 --var-file <json>
 ```
 
 ## Table variables
