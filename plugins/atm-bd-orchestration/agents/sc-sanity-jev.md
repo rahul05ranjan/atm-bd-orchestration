@@ -59,14 +59,20 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    request yourself. If it exits 2, do what its `error.suggested_action` says
    (for an oversized request: remove `context` entries, largest first, and run
    it again; with `context` empty the client splits `changed_files`, by hunks
-   for a file too large alone, into requests that each fit, asks Jev once per
-   part and answers `yes` only if every part does, so an oversized request is
-   never your result); return its error only once that says to report it. Its
-   answer is `data.answers.written.choice`. Choice `no` means exactly one
-   `skipped` finding; `yes` means none.
+   for a file too large alone, into requests that each fit and asks Jev once
+   per part, so an oversized request is never your result); return its error
+   only once that says to report it. Its answer is
+   `data.answers.written.choice`. Choice `no` means exactly one `skipped`
+   finding; `yes` means none. A split request instead prints `data.parts`:
+   every part's label, `changed_files`, full Jev `response` and own `receipt`.
+   Never reduce the parts to one choice. When every part answers the same,
+   that answer sets the findings as above. When they disagree, return one
+   `skipped` finding for what a `no` part shows missing; dev-sanity triages
+   the parts and records the result that stands.
 4. Return the result with `commit_checked` exactly equal to `commit` and
-   `jev` = the client's `data.receipt`, copied verbatim from its stdout. The
-   receipt is keyed by the client; one you write or edit fails the merge.
+   `jev` = the client's `data.receipt`, or for a split request its
+   `data.parts` list, copied verbatim from its stdout. Receipts are keyed by
+   the client; one you write or edit fails the merge.
 
 ## Output Format
 

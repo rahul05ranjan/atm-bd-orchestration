@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from jev_receipts import CLIENT, env as receipt_env, receipted
+from jev_receipts import CLIENT, env as receipt_env, receipted, split
 
 ROOT = Path(__file__).parents[2]
 SCRIPTS = ROOT / "scripts"
@@ -162,6 +162,9 @@ class SanityHistory(unittest.TestCase):
                                                                {"success": False, "data": None, "error": {}}]}
         self.assertEqual(HISTORY.jev_receipts(vars), [jev_reply(1)["data"]["jev"], jev_reply(2, [{"kind": "skipped"}])["data"]["jev"]])
         self.assertEqual(HISTORY.jev_receipts(dict(vars, reviewer="sanity-llm")), [])
+        parted = split(jev_reply(3), ["yes", "no"])
+        self.assertEqual(HISTORY.jev_receipts({"reviewer": "sanity-jev", "reviewer_results": [jev_reply(1), parted]}),
+                         [RECEIPT] + [part["receipt"] for part in parted["data"]["jev"]])  # every part's receipt
         jev = record(reviewer="sanity-jev", jev_receipts=[RECEIPT])
         self.assertEqual(HISTORY.render_record(jev), jev)
         for invalid in (record(reviewer="sanity-jev"), record(reviewer="sanity-jev", verdict="FAIL", findings=1),

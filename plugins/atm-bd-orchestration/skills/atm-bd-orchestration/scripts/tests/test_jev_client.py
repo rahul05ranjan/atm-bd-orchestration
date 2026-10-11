@@ -294,7 +294,7 @@ class JevClientTests(unittest.TestCase):
             file.unlink()
         return rc, sent, json.loads(output.getvalue())
 
-    def test_a_diff_over_the_cap_is_split_by_hunks_into_requests_that_fit_and_one_jev_verdict(self):
+    def test_a_diff_over_the_cap_is_split_by_hunks_and_every_part_returns_its_own_result(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             # one file whose diff alone is over the cap: 100 changed hunks of ~1.5 KB each, plus a small file
@@ -319,21 +319,26 @@ class JevClientTests(unittest.TestCase):
                     self.assertIn(line, evidence)
             self.assertIn("+small change", evidence)
 
-            rc, sent, result = self.run_split(assignment, ["yes"] * len(requests))
+            for instruction in (r["questions"]["written"]["instructions"] for r in requests):
+                self.assertNotIn("every part", instruction)  # a part is asked only about its own share
+
+            choices = ["yes"] + ["no"] + ["yes"] * (len(requests) - 2)
+            rc, sent, result = self.run_split(assignment, choices)
             self.assertEqual((rc, result["error"]), (0, None))
             self.assertEqual([json.loads(b) for b in sent], requests)
-            self.assertEqual(result["data"]["answers"]["written"]["choice"], "yes")
-            receipt = result["data"]["receipt"]
-            self.assertEqual((receipt["question"], receipt["choice"]), ("written", "yes"))
-            self.assertEqual(receipt["request_sha256"], client.hashlib.sha256(client.canonical(requests)).hexdigest())
-            self.assertEqual(receipt["response_id"], ",".join(f"r{i}" for i in range(1, len(requests) + 1)))
-            self.assertTrue(client.verify_receipt(receipt, "test-only-key"))
-
-            rc, _, result = self.run_split(assignment, ["yes"] + ["no"] + ["yes"] * (len(requests) - 2))
-            self.assertEqual(rc, 0)
-            self.assertEqual(result["data"]["receipt"]["choice"], "no")  # delivered only if every part says yes
-            self.assertEqual(result["data"]["receipt"]["probabilities"], {"yes": 0.3, "no": 0.7})
-            self.assertTrue(client.verify_receipt(result["data"]["receipt"], "test-only-key"))
+            data = result["data"]
+            self.assertEqual(set(data), {"model", "parts"})  # no combined choice, answer or receipt
+            self.assertEqual(len(data["parts"]), len(requests))
+            for i, (part, request, choice) in enumerate(zip(data["parts"], requests, choices), 1):
+                self.assertEqual(set(part), {"part", "changed_files", "response", "receipt"})
+                self.assertEqual((part["part"], part["changed_files"]), (f"{i} of {len(requests)}", ["big.py", "small.py"]))
+                self.assertEqual(part["response"]["id"], f"r{i}")
+                self.assertEqual(part["response"]["answers"]["written"]["choice"], choice)
+                receipt = part["receipt"]
+                self.assertEqual((receipt["question"], receipt["choice"], receipt["response_id"]), ("written", choice, f"r{i}"))
+                self.assertEqual(receipt["probabilities"], part["response"]["answers"]["written"]["probabilities"])
+                self.assertEqual(receipt["request_sha256"], client.hashlib.sha256(client.canonical(request)).hexdigest())
+                self.assertTrue(client.verify_receipt(receipt, "test-only-key"))
 
     def test_a_hunk_over_the_cap_is_cut_by_lines_and_a_line_by_characters(self):
         pieces = client.diff_pieces("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n" + "+" + "z" * 9000 + "\n"

@@ -197,6 +197,16 @@ children:
    LLM result for unavailable JEV (or vice versa) in that reviewer's slot: the
    slot keeps its failure envelope. One failed reviewer is not a blocker and
    not CANNOT_RUN; selection (step 4) takes the other reviewer's valid reply.
+
+   A split Jev reply carries every part's result in `data.jev`, and you own
+   reconciling them; no script decides. When every part answers the same,
+   that answer is the result. When parts disagree, triage before the merge:
+   spawn background agents with every part's result and the pinned commit to
+   judge what the disagreeing parts show, then record the result that stands
+   in the reply as `data.jev_final` = `{choice, reason, parts}`, where
+   `reason` cites every part's result and `parts` lists every part label in
+   order, and set its findings to match (`no`: the one `skipped` finding;
+   `yes`: none). Never edit a part or its receipt.
 4. Merge each LLM/JEV result array as soon as that reviewer finishes.
    `sanity-merge` accepts exactly one result per deliverable at the pinned
    SHA, checks that the worktree is still at that SHA and clean, folds in the
@@ -212,8 +222,11 @@ children:
    ```
 
    The `sanity-jev` merge screens every reply: a success without a valid Jev
-   client receipt in `data.jev`, whose choice contradicts its findings (`no`:
-   exactly one; `yes`: none), or that reuses another deliverable's receipt,
+   client receipt in `data.jev` (for a split reply, every part in order with
+   its own valid receipt), whose result contradicts its findings (`no`:
+   exactly one; `yes`: none; the result is the parts' common choice, else
+   your `data.jev_final`, required when parts disagree), or that reuses
+   another deliverable's receipt,
    and a `SANITY.JEV_*` failure whose message is not the client's own text,
    becomes a coordinator-origin `SANITY.RESULT_INVALID` failure for that
    deliverable (the replaced reply and reason are kept in `rejected_results`).
@@ -282,8 +295,9 @@ children:
    is safe. CANNOT_RUN is logged with null findings and its error, never as
    PASS or FAIL; each row's `errors` lists every failed slot's `code`,
    `message`, `recoverable` and `deliverable` verbatim from its envelope, and
-   `jev_receipts` holds the receipt of every `sanity-jev` success reply
-   (required on a `sanity-jev` PASS/FAIL row, empty on `sanity-llm`):
+   `jev_receipts` holds the receipt of every `sanity-jev` success reply, each
+   part's for a split reply (required on a `sanity-jev` PASS/FAIL row, empty
+   on `sanity-llm`):
 
    ```bash
    log=$(.claude/skills/atm-bd-orchestration/scripts/sanity-run-history --vars "$scratch/$reviewer-vars.json" --task "$task" \

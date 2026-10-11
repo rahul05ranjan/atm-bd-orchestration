@@ -212,8 +212,7 @@ def written_request(text, evidence, context=None, part=None):
     if part:
         state["part"], state["changed_files"] = part
         instructions = ("The evidence is one part of the committed diff of `changed_files`, split to fit the request "
-                        "budget; the deliverable is delivered only if every part says yes. Does this part deliver its "
-                        "share of the deliverable without contradicting it?")
+                        "budget. Does this part deliver its share of the deliverable?")
     return {"model": MODEL, "state": state, "questions": {"written": {
         "type": "choice", "instructions": instructions, "criteria": {"yes": "delivered", "no": "not delivered"}}}}
 
@@ -268,7 +267,7 @@ def assignment_requests(assignment):
     """The sanity requests, built from the assignment so no agent writes them: the deliverable text verbatim, the
     committed diff of the changed files and the context files at the pinned commit. One request when it fits under
     MAX_REQUEST_BYTES; with `context` empty and the diff over the cap, `changed_files` split into groups (a file whose
-    diff alone is over the cap split by hunks) whose requests each fit."""
+    diff alone is over the cap split by hunks) whose requests each fit, one Jev call per part."""
     try:
         text, worktree = assignment["deliverable"]["text"], assignment["worktree_path"]
         commit, base, changed, context = (assignment[k] for k in ("commit", "base_sha", "changed_files", "context"))
@@ -311,19 +310,13 @@ def assignment_requests(assignment):
     return [written_request(text, part, part=(f"{i} of {len(groups)}", changed)) for i, part in enumerate(groups, 1)]
 
 
-def combined(requests, responses, key):
-    """One `written` answer and receipt across the parts: yes only if every part says yes; the deciding part's
-    probabilities (the surest no, else the least sure yes); the receipt bound to every part's request."""
-    answers = [r["answers"]["written"] for r in responses]
-    noes = [a for a in answers if a["choice"] == "no"]
-    deciding = max(noes, key=lambda a: a["probabilities"]["no"]) if noes else min(answers, key=lambda a: a["probabilities"]["yes"])
-    ids = [r.get("id") for r in responses]
-    body = {"model": MODEL, "question": "written", "choice": deciding["choice"],
-            "probabilities": deciding["probabilities"],
-            "response_id": ",".join(ids) if all(isinstance(i, str) for i in ids) else None,
-            "request_sha256": hashlib.sha256(canonical(requests)).hexdigest()}
-    return {"model": MODEL, "answers": {"written": deciding}, "parts": responses,
-            "receipt": {**body, "mac": receipt_mac({**body, "mac": None}, key)}}
+def parts(requests, responses, key):
+    """Every part's full result, in order, with its own receipt: no part is reduced into another. Reconciling parts
+    that disagree is the sanity teammate's triage, never this client's."""
+    return {"model": MODEL, "parts": [
+        {"part": request["state"]["part"], "changed_files": request["state"]["changed_files"],
+         "response": response, "receipt": receipt(request, response, key)}
+        for request, response in zip(requests, responses)]}
 
 
 def escalation_recipients():
@@ -384,10 +377,10 @@ def main(argv=None):
         else:
             request = json.loads(args.request.read_text())
         if args.assignment and len(requests) > 1:
-            data = combined(requests, [evaluate(r) for r in requests], api_key())
+            data = parts(requests, [evaluate(r) for r in requests], api_key())
         else:
             data = evaluate(request)
-        if not args.startup and len(request["questions"]) == 1 and "receipt" not in data:
+        if not args.startup and len(request["questions"]) == 1 and "parts" not in data:
             data = {**data, "receipt": receipt(request, data, api_key())}
         if args.startup:
             if data["answers"]["startup"]["choice"] != "ready":
