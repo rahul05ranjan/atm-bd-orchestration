@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from jev_receipts import CLIENT, env as receipt_env, receipted, split
+from rendering import render
 
 ROOT = Path(__file__).parents[2]
 SCRIPTS = ROOT / "scripts"
@@ -83,11 +84,7 @@ class SanityHistory(unittest.TestCase):
 
     def test_assignment_selection_renders_without_legacy_reviewers(self):
         variables = json.loads((SCRIPTS.parent / "examples/dev-sanity-template-vars.json").read_text())
-        var_file = self.root / "vars.json"
-        var_file.write_text(json.dumps(variables))
-        rendered = subprocess.run(["sc-compose", "render", "--strict", "--file",
-                                   str(SCRIPTS.parent / "templates/dev-sanity-template.xml.j2"),
-                                   "--var-file", str(var_file)], capture_output=True, text=True)
+        rendered = render(SCRIPTS.parent / "templates/dev-sanity-template.xml.j2", variables)
         self.assertEqual(rendered.returncode, 0, rendered.stderr)
         self.assertNotIn("<reviewers>", rendered.stdout)
         self.assertIn("canonical coordinator", rendered.stdout)
@@ -198,10 +195,7 @@ class SanityHistory(unittest.TestCase):
     def test_table_skips_pre_0_8_2_rows(self):
         legacy = {key: value for key, value in record().items() if key not in ("completed_local", "final_verdict")}
         runs = [dict(legacy, reviewer="sanity-selected"), legacy]
-        table = subprocess.run(["sc-compose", "render", "--strict", "--root", str(SCRIPTS.parent),
-                                "--file", str(SCRIPTS.parent / "templates/sanity-run-table.md.j2"),
-                                "--var-file", "/dev/stdin"],
-                               input=json.dumps({"runs": runs}), capture_output=True, text=True)
+        table = render(SCRIPTS.parent / "templates/sanity-run-table.md.j2", {"runs": runs})
         self.assertEqual(table.returncode, 0, table.stderr)
         self.assertEqual(table.stdout.splitlines()[2:],
                          ["| d-4 | #42 | LLM | 0 | ✅ | — | 2026-09-30T16:01:05Z · 1m05s | 1 |"])

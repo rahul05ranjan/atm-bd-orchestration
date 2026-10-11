@@ -19,7 +19,7 @@ role members, which are read from `roles:`:
     dev_sanity_member  -> roles.dev-sanity
     qa_member          -> roles.quality-mgr
 
-The template is rendered with `sc-compose render --strict` into
+The template is rendered strictly with the sc-compose wheel into
 `<repo>/.claude/project/atm-bd-orchestration.yaml`; a missing variable is an
 install error that names it. There are no defaults. The resolved role members are
 written back into `roles:` so `resolve-role` agrees with the config file.
@@ -38,7 +38,8 @@ file then takes its place. A repository installed by
 the bytes this version ships or bytes some 0.x version shipped
 (`config/legacy-owned.json`); any other existing file fails the install.
 
-Checks before anything is written: sc-compose, pydantic and PyYAML present;
+Checks before anything is written: the sc-compose CLI and the python3 wheel at
+the manifest's `sc-compose ==` pin, pydantic and PyYAML present;
 `.beads/metadata.json` shows `dolt_mode: server`; every agent named in
 `qa_member` and `reviewers_round1` has `.claude/agents/<name>.md` (in the
 repository or shipped by this install). `dev_sanity_member` is not checked: it
@@ -147,6 +148,23 @@ def load_manifest_artifacts(pkg_dir: Path = PKG_DIR) -> Dict[str, List[str]]:
 
 def package_version(pkg_dir: Path = PKG_DIR) -> str:
     return str(load_manifest(pkg_dir)["version"])
+
+
+SC_COMPOSE_PIN_RE = re.compile(r"sc-compose == ([0-9]+\.[0-9]+\.[0-9]+)")
+
+
+def sc_compose_pin(pkg_dir: Path = PKG_DIR) -> str:
+    """The one sc-compose version, CLI and Python wheel alike: the manifest's `sc-compose ==` requirement."""
+    for entry in load_manifest(pkg_dir).get("requires") or []:
+        m = SC_COMPOSE_PIN_RE.fullmatch(str(entry))
+        if m:
+            return m.group(1)
+    raise InstallError(f"{pkg_dir / MANIFEST_FILE}: requires has no `sc-compose == X.Y.Z` pin")
+
+
+def sc_compose_upgrade(pin: str) -> str:
+    return (f"python3 -m pip install 'sc-compose=={pin}' and "
+            f"brew upgrade randlee/tap/sc-compose (or cargo install sc-compose --version {pin} --locked)")
 
 
 def config_variables(pkg_dir: Path = PKG_DIR) -> List[str]:
@@ -278,15 +296,23 @@ def derived_values(repo_root: Path, config: Dict[str, Any]) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _sc_compose(template_text: str, variables: Dict[str, Any], *, suffix: str) -> subprocess.CompletedProcess:
+def _sc_compose(template_text: str, variables: Dict[str, Any], *, suffix: str) -> Tuple[Optional[str], str]:
+    """(rendered text, "") or (None, the sc-compose error), rendered strictly by the sc-compose wheel."""
+    sys.path.insert(0, str(PKG_DIR / "skills/atm-beads/scripts"))
+    try:
+        import sc_render
+    except ImportError as exc:
+        raise InstallError(f"this python cannot import the sc-compose wheel ({exc}); "
+                           f"install {sc_compose_upgrade(sc_compose_pin())} and rerun") from exc
+    finally:
+        sys.path.pop(0)
     with tempfile.TemporaryDirectory(prefix="atm-bd-install-") as tmp:
-        tmp_dir = Path(tmp)
-        (tmp_dir / f"body{suffix}").write_text(template_text, encoding="utf-8")
-        (tmp_dir / "vars.json").write_text(json.dumps(variables), encoding="utf-8")
-        return subprocess.run(
-            ["sc-compose", "render", "--file", f"body{suffix}", "--var-file", "vars.json", "--strict"],
-            cwd=tmp_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
+        body = Path(tmp) / f"body{suffix}"
+        body.write_text(template_text, encoding="utf-8")
+        try:
+            return sc_render.render(body, variables), ""
+        except sc_render.RenderError as exc:
+            return None, sc_render.error_text(exc)
 
 
 MISSING_RE = re.compile(r"missing required variable: ([A-Za-z0-9_]+)")
@@ -294,16 +320,15 @@ MISSING_RE = re.compile(r"missing required variable: ([A-Za-z0-9_]+)")
 
 def render_config(values: Dict[str, Any], pkg_dir: Path = PKG_DIR) -> bytes:
     """Render the config template strictly. A missing variable fails, naming it."""
-    proc = _sc_compose((pkg_dir / CONFIG_TEMPLATE).read_text(encoding="utf-8"), values, suffix=".yaml.j2")
-    if proc.returncode != 0:
-        missing = list(dict.fromkeys(MISSING_RE.findall(proc.stderr)))
+    out, error = _sc_compose((pkg_dir / CONFIG_TEMPLATE).read_text(encoding="utf-8"), values, suffix=".yaml.j2")
+    if out is None:
+        missing = list(dict.fromkeys(MISSING_RE.findall(error)))
         if missing:
             raise InstallError(
                 "sc-compose --strict: missing required variable(s): " + ", ".join(missing) + "; set "
                 + "; ".join(f"{n} in {_registry_location(n)} (or --set {n}=...)" for n in missing))
-        first = (proc.stderr or proc.stdout).strip().splitlines()[:1]
+        first = error.strip().splitlines()[:1]
         raise InstallError(f"sc-compose render of {CONFIG_TEMPLATE} failed: {first[0] if first else 'no output'}")
-    out = proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n"
     return out.encode("utf-8")
 
 
@@ -320,11 +345,10 @@ def render_text(text: str, variables: Dict[str, str]) -> str:
     front, body = _split_frontmatter(text)
     declared = "".join(f"  - {name}\n" for name in RENDER_VARIABLES)
     template = f"---\nname: atm-bd-install\nversion: 1.0.0\nformat: markdown\nrequired_variables:\n{declared}---\n{body}"
-    proc = _sc_compose(template, {n: variables[n] for n in RENDER_VARIABLES}, suffix=".md")
-    if proc.returncode != 0:
-        first = (proc.stderr or proc.stdout).strip().splitlines()[:1]
+    rendered, error = _sc_compose(template, {n: variables[n] for n in RENDER_VARIABLES}, suffix=".md")
+    if rendered is None:
+        first = error.strip().splitlines()[:1]
         raise InstallError(f"sc-compose render failed: {first[0] if first else 'no output'}")
-    rendered = proc.stdout
     if body.endswith("\n") and not rendered.endswith("\n"):
         rendered += "\n"
     leftover = PLACEHOLDER_RE.search(rendered)
@@ -339,13 +363,24 @@ def render_text(text: str, variables: Dict[str, str]) -> str:
 
 
 def check_tools() -> None:
+    pin = sc_compose_pin()
     if shutil.which("sc-compose") is None:
-        raise InstallError("sc-compose is not on PATH; install it (brew install randlee/tap/sc-compose) and rerun")
-    # validate-plan runs scripts/bead_schema.py (pydantic) with the python3 on PATH.
-    probe = subprocess.run(["python3", "-c", "import pydantic, yaml"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        raise InstallError(f"sc-compose is not on PATH; install {sc_compose_upgrade(pin)} and rerun")
+    cli = subprocess.run(["sc-compose", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if cli.stdout.split()[-1:] != [pin]:
+        raise InstallError(f"sc-compose CLI is {cli.stdout.strip() or cli.stderr.strip()}, the package pins {pin}; "
+                           f"install {sc_compose_upgrade(pin)} and rerun")
+    # validate-plan runs scripts/bead_schema.py (pydantic) and the scripts render with the
+    # sc-compose wheel, all with the python3 on PATH.
+    probe = subprocess.run(["python3", "-c", "import pydantic, yaml, sc_compose, importlib.metadata as m; "
+                            "print(m.version('sc-compose'))"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if probe.returncode != 0:
-        raise InstallError("python3 on PATH cannot import pydantic and PyYAML, which validate-plan needs; "
-                           "install them (python3 -m pip install pydantic pyyaml) and rerun")
+        raise InstallError("python3 on PATH cannot import pydantic, PyYAML and the sc-compose wheel, which the "
+                           f"scripts need; install them (python3 -m pip install pydantic pyyaml 'sc-compose=={pin}') "
+                           "and rerun")
+    if probe.stdout.strip() != pin:
+        raise InstallError(f"python3 on PATH has the sc-compose wheel {probe.stdout.strip()}, the package pins "
+                           f"{pin}; install {sc_compose_upgrade(pin)} and rerun")
 
 
 def check_beads_server_mode(repo_root: Path) -> None:

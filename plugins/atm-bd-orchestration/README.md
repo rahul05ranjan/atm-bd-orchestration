@@ -56,7 +56,7 @@ below and writes nothing; `complete()` places, renders and records the files.
 
 The variables are declared once, as the `required_variables` of
 `config/atm-bd-orchestration.yaml.j2`. There are no defaults: install renders the
-template with `sc-compose render --strict` into
+template strictly with the sc-compose Python wheel into
 `<repo>/.claude/project/atm-bd-orchestration.yaml` and fails, naming every
 missing variable and the registry key that sets it. Skills read that file at run
 time (`skills/atm-beads/scripts/repo_config.py`).
@@ -130,6 +130,9 @@ repository (bead prefix `myp`) and runs the skills' own suites there, because
 they resolve paths from the repository layout. One upstream test that reads the
 source repository's own phase-d plan is deselected. The install tests need
 `sc-compose` and are skipped, with a message, when it is not on PATH;
+`tests/test_sc_compose_version.py` (local only, skipped when `CI` is set) fails
+unless the manifest pin, the CLI and the `python3` wheel are all the newest
+sc-compose release;
 `test_real_upgrade_from_a_0_2_3_install` needs the package history (a full
 clone). CI (`.github/workflows/tests.yml`) runs all of them on ubuntu and macos.
 

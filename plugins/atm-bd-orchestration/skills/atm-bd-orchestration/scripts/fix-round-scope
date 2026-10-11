@@ -27,6 +27,7 @@ import sys
 PLAN_LINE = re.compile(r"^\s*(?:[-*]\s+)?(?P<bead>\S+)\s+(?P<severity>blocking|important|minor)\s+"
                        r"(?P<reviewer>\S+)\s+(?P<field>[^:\s][^:]*):")
 PLAN_SCRIPT = "validate-plan"
+FENCED = re.compile(r"\s*```(?:json)?[ \t]*\n(.*?)\n```\s*", re.S)  # a reviewer result as returned: fenced JSON
 
 
 class ScopeError(ValueError):
@@ -113,7 +114,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.reviewer not in filing or not args.result:
         print(f"filter needs --reviewer in {tuple(filing)} and --result", file=sys.stderr)
         return 2
-    print(json.dumps(filter_result(args.reviewer, carried, json.load(open(args.result)))))
+    text = open(args.result).read()
+    fenced = FENCED.fullmatch(text)
+    try:
+        result = json.loads(fenced.group(1) if fenced else text)
+    except ValueError as exc:
+        print(f"fix-round-scope: --result is not the reviewer's fenced or raw JSON result: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(filter_result(args.reviewer, carried, result)))
     return 0
 
 

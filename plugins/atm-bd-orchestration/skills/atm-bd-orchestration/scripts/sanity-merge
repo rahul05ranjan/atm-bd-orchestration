@@ -302,15 +302,17 @@ def screen_jev_results(results, client):
 
 
 def context_path_exists(manifest, path):
-    """Require re-run context to be a file in the pinned manifest tree."""
+    """Require re-run context to be a file in the pinned manifest tree; a `path:start-end` entry's lines must lie in it."""
     worktree = manifest.get("worktree_path")
     if not isinstance(worktree, str) or not worktree:
         return False
-    return subprocess.run(
-        ["git", "-C", worktree, "cat-file", "-t", f"{manifest['sha']}:{path}"],
-        capture_output=True,
-        text=True,
-    ).stdout.strip() == "blob"
+    lines = re.fullmatch(r"(?P<path>.+):(?P<start>[0-9]+)-(?P<end>[0-9]+)", path)
+    target = f"{manifest['sha']}:{lines['path'] if lines else path}"
+    def git(*args):
+        return subprocess.run(["git", "-C", worktree, *args], capture_output=True, text=True).stdout
+    if git("cat-file", "-t", target).strip() != "blob":
+        return False
+    return not lines or 1 <= int(lines["start"]) <= int(lines["end"]) <= len(git("show", target).splitlines())
 
 
 def selected_results(args, manifest, sanity_bead, dev_bead):

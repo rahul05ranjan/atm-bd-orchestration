@@ -28,6 +28,12 @@ class JevError(Exception):
 
 REPORT = "Report this error unchanged; the coordinator records the slot unavailable."
 RETRY = "Transient: wait 60 seconds and run the same command once more. If it fails again, " + REPORT[0].lower() + REPORT[1:]
+REBUILD = ("Rebuild `context` and rerun `--assignment <file>`: narrow each entry to the line ranges the deliverable "
+           "needs (`path:start-end`, e.g. `docs/x.md:120-180`), drop entries the deliverable does not need, and never "
+           "remove `deliverable.text` or `changed_files`. Leave `context` empty only when nothing in it is needed: "
+           "with `context` empty the client splits `changed_files` into requests that each fit.")
+CONTEXT_RANGE = re.compile(r"(?P<path>.+):(?P<start>[0-9]+)-(?P<end>[0-9]+)")  # a `context` entry naming lines
+FENCED = re.compile(r"\s*```(?:json)?[ \t]*\n(.*?)\n```\s*", re.S)  # an assignment as received: fenced JSON
 FIXES = (  # message prefix -> what the calling agent does next
     ("TYPESAFE_API_KEY is missing", "No Jev call is possible without TYPESAFE_API_KEY. " + REPORT),
     ("TYPESAFE_API_KEY has invalid formatting", "TYPESAFE_API_KEY holds whitespace, quotes or control characters. " + REPORT),
@@ -35,6 +41,8 @@ FIXES = (  # message prefix -> what the calling agent does next
      "`commit`, `base_sha`, `changed_files` and `context`. If the received assignment lacks one, " + REPORT[0].lower() + REPORT[1:]),
     ("Committed evidence unreadable", "Run `git -C <worktree_path> fetch origin` so `commit` and `base_sha` exist, then run "
      "the same command again. If it still fails, a `changed_files` or `context` path is missing at `commit`: " + REPORT[0].lower() + REPORT[1:]),
+    ("Context entry", "Fix that `context` entry: `path:start-end` names lines 1 <= start <= end <= the file's line "
+     "count at `commit`; a plain `path` sends the whole file. Then run the same command again."),
     ("Request file unavailable", "Write the file as the JSON object you were given, outside the worktree, and run the command again."),
     ("Jev connection failed", RETRY),
     ("Jev retry budget exhausted", RETRY),
@@ -44,8 +52,8 @@ FIXES = (  # message prefix -> what the calling agent does next
 def suggested_action(exc):
     if exc.message.startswith("Request exceeds"):
         return getattr(exc, "fix", None) or (
-            f"The request is {exc.size} bytes. Send the same question as several requests whose `state` each fits, "
-            "or run `--assignment <file>`: the client splits a sanity request itself.")
+            f"The request is {exc.size} bytes. Rebuild it under 96000 bytes: send only the state the question needs, "
+            "or run `--assignment <file>`, whose `context` entries may name line ranges (`path:start-end`).")
     if exc.message.startswith("Jev HTTP"):
         return RETRY if exc.recoverable else "Jev rejected the request or the key. " + REPORT
     return next((fix for prefix, fix in FIXES if exc.message.startswith(prefix)), REPORT)
@@ -163,6 +171,7 @@ CLIENT_MESSAGES = re.compile("|".join([
     r"Startup probe returned the wrong literal choice", r"Request file unavailable or invalid JSON",
     r"Assignment lacks deliverable text, worktree, commits or file lists",
     r"Committed evidence unreadable at the pinned commits",
+    r"Context entry .+ names lines outside its file at the pinned commit",
 ]))
 RECEIPT_KEYS = ("model", "question", "choice", "probabilities", "response_id", "request_sha256", "mac")
 
@@ -222,7 +231,7 @@ def size(request):
 
 
 def oversize(request, fix=None):
-    exc = JevError("SANITY.JEV_INCONCLUSIVE", "Request exceeds 96000 bytes, the Jev state budget; no Jev evaluation ran", True)
+    exc = JevError("SANITY.JEV_REQUEST_TOO_LARGE", "Request exceeds 96000 bytes, the Jev state budget; no Jev evaluation ran", True)
     exc.size = size(request)
     exc.fix = fix and fix.format(size=exc.size)
     return exc
@@ -265,7 +274,8 @@ def diff_pieces(diff, budget):
 
 def assignment_requests(assignment):
     """The sanity requests, built from the assignment so no agent writes them: the deliverable text verbatim, the
-    committed diff of the changed files and the context files at the pinned commit. One request when it fits under
+    committed diff of the changed files and the context entries at the pinned commit (a `path:start-end` entry only
+    those lines, labelled with the entry). One request when it fits under
     MAX_REQUEST_BYTES; with `context` empty and the diff over the cap, `changed_files` split into groups (a file whose
     diff alone is over the cap split by hunks) whose requests each fit, one Jev call per part."""
     try:
@@ -286,14 +296,22 @@ def assignment_requests(assignment):
     def diff(*paths):
         return git("diff", "--no-color", f"{base}...{commit}", "--", *paths) if paths else ""
 
-    request = written_request(text, diff(*changed), {path: git("show", f"{commit}:{path}") for path in context})
+    def excerpt(entry):
+        """A plain path's whole file at `commit`, or only lines start..end (1-based, inclusive) of `path:start-end`."""
+        lines = CONTEXT_RANGE.fullmatch(entry)
+        if not lines:
+            return git("show", f"{commit}:{entry}")
+        text, start, end = git("show", f"{commit}:{lines['path']}"), int(lines["start"]), int(lines["end"])
+        kept = text.splitlines(keepends=True)
+        if not 1 <= start <= end <= len(kept):
+            raise JevError("VALIDATION.INPUT", f"Context entry {entry} names lines outside its file at the pinned commit")
+        return "".join(kept[start - 1:end])
+
+    request = written_request(text, diff(*changed), {entry: excerpt(entry) for entry in context})
     if size(request) <= MAX_REQUEST_BYTES:
         return [request]
     if context:
-        raise oversize(request, "The request is {size} bytes. Reduce context and retry: remove entries from the assignment's `context` list, "
-                       "largest file first, and rerun `--assignment <file>` until it fits. Never remove the deliverable "
-                       "text or `changed_files`: with `context` empty the client splits `changed_files` into requests "
-                       "that each fit and asks Jev once per part.")
+        raise oversize(request, "The request is {size} bytes, over the 96000-byte Jev budget. " + REBUILD)
     label = (f"{len(changed) * 1000} of {len(changed) * 1000}", changed)  # the widest part label, so every part fits
     budget = MAX_REQUEST_BYTES - size(written_request(text, "", part=label))
     if budget <= 0:
@@ -372,7 +390,9 @@ def main(argv=None):
         if args.startup:
             request = startup_request()
         elif args.assignment:
-            requests = assignment_requests(json.loads(args.assignment.read_text()))
+            text = args.assignment.read_text()
+            fenced = FENCED.fullmatch(text)
+            requests = assignment_requests(json.loads(fenced.group(1) if fenced else text))
             request = requests[0]
         else:
             request = json.loads(args.request.read_text())

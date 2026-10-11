@@ -91,6 +91,22 @@ def fmt(template: str, scope: dict) -> str:
         raise TargetError("BEAD_GROUPS_UNRESOLVED", f"{template}: no value for {exc}") from exc
 
 
+# sc-compose bead render 1.6.1 renders an unbound `{{{ x }}}` empty and succeeds (sc-compose#783), and a
+# formula cannot declare its inputs in front matter yet (sc-compose#785), so the request is checked here.
+# Delete once bead render is strict (1.7.0) and the formulas carry front matter.
+COMMENT = re.compile(r"\{#.*?#\}", re.S)
+COMPOSE_VAR = re.compile(r"\{\{\{-?\s*([A-Za-z_]\w*)")
+LOCAL_VARS = re.compile(r"\{%-?\s*(?:for\s+([\w\s,]+?)\s+in\b|set\s+(\w+))")
+
+
+def unbound_compose_variables(template: Path, supplied) -> list[str]:
+    """Root names of the `{{{ ... }}}` compose variables the formula references that are not supplied (comments,
+    loop and set variables excluded; bd's double-brace variables are not compose variables)."""
+    text = COMMENT.sub("", template.read_text())
+    local = {"loop"} | {n.strip() for m in LOCAL_VARS.finditer(text) for n in (m[1] or m[2]).split(",")}
+    return sorted(set(COMPOSE_VAR.findall(text)) - local - set(supplied))
+
+
 def split_ids(values: list[str]) -> list[str]:
     return [v for value in values for v in value.split(",") if v]
 
@@ -219,6 +235,9 @@ class Run:
             if any(self.bd.show(attach_id(parent, ref, step)) is None for step in self.steps(target)):
                 raise TargetError("BEAD_GROUPS_QA_CLOSED", f"{target['compose']['filed_by']} is closed; quality-mgr pours the fix groups of its blocking findings before closing it")
         template = bead_formulas.template(formula, self.repo).resolve()
+        unbound = unbound_compose_variables(template, target["compose"])
+        if unbound:
+            raise TargetError("BEAD_GROUPS_COMPOSE_UNBOUND", f"{template} references compose variable(s) bead-groups does not supply: {', '.join(unbound)}; nothing was rendered or poured")
         try:
             template = template.relative_to(self.repo.resolve())
         except ValueError as exc:
