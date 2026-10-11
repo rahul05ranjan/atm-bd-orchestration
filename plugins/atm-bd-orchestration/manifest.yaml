@@ -103,6 +103,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_bead_queues.py
     - skills/atm-bd-orchestration/scripts/tests/test_bv_analyze.py
     - skills/atm-bd-orchestration/scripts/tests/test_fix_round_scope.py
+    - skills/atm-bd-orchestration/scripts/tests/test_handoff_contracts.py
     - skills/atm-bd-orchestration/scripts/tests/test_jev_client.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_jev.py

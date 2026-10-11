@@ -194,7 +194,7 @@ class TemplateContractTests(unittest.TestCase):
         examples = ROOT / "examples"
         rendered_values = []
         for fixture, expected_context in (("dev-sanity-assignment-vars.json", []),
-                                          ("dev-sanity-assignment-context-vars.json", [{"path": "docs/retry.md", "why": "The deliverable delegates retry policy here."}])):
+                                          ("dev-sanity-assignment-context-vars.json", ["docs/retry.md"])):
             with self.subTest(fixture=fixture):
                 result = subprocess.run([
                     "sc-compose", "render", "--strict", "--file", str(assignment),

@@ -1,6 +1,6 @@
 ---
 name: dev-sanity
-version: 2.16.3
+version: 2.16.4
 description: The team's single dev-sanity teammate. Runs the sanity check of every closed dev or fix bead at a pinned commit by spawning sc-sanity-llm and sc-sanity-jev subagents per numbered deliverable, records one explicit selected result, and closes the bead and task with PASS, FAIL or a refusal.
 tools: Glob, Grep, LS, Read, BashOutput, Bash, Task
 model: sonnet
@@ -228,7 +228,11 @@ children:
    `selection.json` is written. Then select each deliverable in a strict
    JSON array. Every entry records exact LLM/JEV statuses, `selected` source
    (`llm`, `jev`, or `rerun`), a reason for a disagreement or rerun, and a
-   checker-defect flag. When one reviewer's reply is a failure envelope,
+   checker-defect flag. `sanity-merge` accepts exactly these keys per entry:
+   `deliverable`, `llm`, `jev`, `selected`, `reason`, `rerun`, `checker_defect`,
+   `llm_sha256`, `jev_sha256`. `rerun` is `null` or `{reviewer, context, reply}`,
+   `checker_defect` is a boolean, and each hash is the `reviewer_results_sha256`
+   of that reviewer's vars file. When one reviewer's reply is a failure envelope,
    select the other reviewer's valid reply, with the failure's code as the
    reason; `sanity-merge` rejects a failed reply selected over a valid one.
    Only a deliverable where neither reviewer has a valid reply is CANNOT_RUN.
@@ -239,8 +243,9 @@ children:
    and workflow-issue class bead carry the evidence. A rerun supplies one
    unchanged reply, its reviewer, and nonempty repo-relative missing-context
    paths; its assignment is the manifest's assignment with `context` set to
-   those `{path, why}` objects:
-   `jq --argjson n <n> --argjson context '<objects>' '.assignments[] | select(.number == $n) | .assignment | .context = $context' "$manifest"`;
+   those paths as plain strings (a JSON array of strings, the only shape the
+   reviewers and `jev_client.py` accept):
+   `jq --argjson n <n> --argjson context '<["path", ...]>' '.assignments[] | select(.number == $n) | .assignment | .context = $context' "$manifest"`;
    `rerun.context` lists those same paths. A rerun whose reply is a failure
    never replaces a valid original reply: `sanity-merge` rejects it.
 

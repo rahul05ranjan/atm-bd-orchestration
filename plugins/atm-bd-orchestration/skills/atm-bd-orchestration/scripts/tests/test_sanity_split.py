@@ -241,7 +241,7 @@ class SanitySplit(unittest.TestCase):
         manifest_file = self.root / "manifest.json"
         manifest_file.write_text(out.stdout)
         assignment = json.loads(out.stdout)["assignments"][1]["assignment"]
-        context = [{"path": "crates/types/src/lib.rs", "why": "declares the module"}]
+        context = ["crates/types/src/lib.rs"]
         # agents/dev-sanity.md step 4, rerun
         rerun = subprocess.run(["jq", "--argjson", "n", "2", "--argjson", "context", json.dumps(context),
                                 ".assignments[] | select(.number == $n) | .assignment | .context = $context",
