@@ -1,5 +1,5 @@
 name: atm-bd-orchestration
-version: 0.15.0
+version: 0.16.0
 description: >
   Bead-driven phase orchestration for ATM agent teams: the phase plan as a
   beads graph (atm-beads), dispatch, dev-sanity, QA and stack landing driven
@@ -143,7 +143,6 @@ artifacts:
     - skills/atm-bd-orchestration/templates/task-refused.md.j2
     - skills/atm-bd-orchestration/templates/workflow-issue-bead.json.j2
     - skills/atm-beads/SKILL.md
-    - skills/atm-beads/examples/dev-sanity-bead-vars-d-4.json
     - skills/atm-beads/examples/plan-root-vars.json
     - skills/atm-beads/examples/sprint-bead-vars-d-4.json
     - skills/atm-beads/examples/sprint-bead-vars-d-5.json
@@ -165,7 +164,6 @@ artifacts:
     - skills/atm-beads/scripts/sc_render.py
     - skills/atm-beads/scripts/sprint_index_common.py
     - skills/atm-beads/scripts/validate-plan
-    - skills/atm-beads/templates/dev-sanity-bead.json.j2
     - skills/atm-beads/templates/plan-root.json.j2
     - skills/atm-beads/templates/sprint-bead.json.j2
     - skills/atm-beads/tests/test_importing_docs.py

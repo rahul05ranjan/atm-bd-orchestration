@@ -104,7 +104,8 @@ Hierarchy:
   `bd gate` beads and sprints closed "folded into ...";
 - under the sprint container: its poured `dev ← sanity ← qa` group and one
   poured `fix ← sanity ← qa` group per blocking finding. Important and minor
-  findings are plain finding beads under the phase or feature bead.
+  findings are plain finding beads under the phase or feature bead until
+  assigned, when each is poured as a fix group the same way.
 
 `phase-<x>-dag.html` is written locally; it is never committed or pushed.
 `--view` only controls optional background viewing in Wyvern.

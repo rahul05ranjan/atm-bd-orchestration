@@ -99,7 +99,7 @@ class Workspace:
         name = f"{phase}-{n}"
         bead = f"t-{name}"
         meta = {"phase": phase, "sprint": name, "stack": f"phase-{phase}", "layer": n, "difficulty": "normal",
-                "requirements": ["REQ-1"], "adrs": ["NONE"]}
+                "branch": f"sprint/{name}", "requirements": ["REQ-1"], "adrs": ["NONE"]}
         self.bd("create", f"{name}: sprint", "--id", bead, "--type", "feature",
                 "-l", f"phase-{phase},stage:sprint,stack:phase-{phase}",   # sprint-bead.json.j2's labels
                 "--metadata", json.dumps(meta), "--silent")
@@ -275,7 +275,7 @@ class BeadPourMockTests(unittest.TestCase):
         assert ws.deps(dev) == {sprint: "parent-child"}
         assert ws.deps(sanity) == {sprint: "parent-child", dev: "blocks"}
         assert ws.deps(qa) == {sprint: "parent-child", sanity: "blocks", dev: "validates"}
-        assert set(ws.show(sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_graph"}   # N9: minimal sanity bead
+        assert set(ws.show(sanity)["metadata"]) == {"dev_bead", "difficulty", "branch", "sc_compose_graph"}   # N9: minimal sanity bead, plus its branch
         assert ws.show(sanity)["metadata"]["dev_bead"] == dev
         assert ws.show(qa)["metadata"]["checked_bead"] == dev
         assert ws.show(dev)["metadata"]["layer"] == 1
@@ -538,7 +538,10 @@ class BeadPourMockTests(unittest.TestCase):
             "remedy": "return the typed error", "filed_by": qa, "round": 1, "sprint_bead": sprint,
             "found_at_commit": "abc1234", "requirements": ["REQ-1"], "adrs": ["NONE"], "difficulty": "normal"}
         assert "Remedy: return the typed error" in ws.show(fix)["description"]
-        assert set(ws.show(fix_sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_graph"}
+        assert set(ws.show(fix_sanity)["metadata"]) == {"dev_bead", "difficulty", "branch", "sc_compose_graph"}
+        # Every poured step names the branch its PR is on: the sprint's, and the fix's default fix/<sprint>-<ref>.
+        assert [ws.show(b)["metadata"]["branch"] for b in group(sprint)] == ["sprint/g-1"] * 3
+        assert [ws.show(b)["metadata"]["branch"] for b in (fix, fix_sanity, fix_qa)] == ["fix/g-1-qa1-f1"] * 3
         assert ws.show(fix_sanity)["metadata"]["dev_bead"] == fix
         assert ws.show(fix_qa)["metadata"]["checked_bead"] == fix
         assert [ws.show(b).get("assignee") for b in (fix, fix_sanity, fix_qa)] == [None] * 3
@@ -644,42 +647,77 @@ class BeadPourMockTests(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout)
 
-    def test_an_assigned_important_finding_gets_its_sanity_and_qa_beads(self):
-        """F1: assigning an important finding creates its sanity and QA beads in one import, finding <- sanity <- qa."""
+    def test_an_assigned_important_finding_is_poured_as_a_fix_group(self):
+        """An important finding bead is poured with finding-group when the lead assigns it, and is superseded."""
         ws = self.ws
         sprint = ws.sprint("m", 1)
+        other = ws.sprint("m", 2)
         _, _, sprint_qa = group(sprint)
-        ws.groups("--sprint", sprint)
+        ws.groups("--sprint", f"{sprint},{other}")
         ws.bd("create", "phase m", "--id", "t-phase-m", "--type", "epic", "--silent")
         templates = ws.root / ".claude/skills/atm-bd-orchestration/templates"
         example = json.loads((templates.parent / "examples/finding-bead-vars.json").read_text())
-        finding = "t-m-1-qa1-f1"
         rows = [self.render(templates / "finding-bead.json.j2", {
-            **example, "id": finding, "qa_bead": sprint_qa, "phase": "m", "sprint": "m-1", "stack": "phase-m",
-            "parent": "t-phase-m", "sprint_bead": sprint})]
+            **example, "id": bead, "qa_bead": sprint_qa, "phase": "m", "sprint": "m-1", "stack": "phase-m",
+            "parent": "t-phase-m", "sprint_bead": sprint, "finding_ref": ref})
+            for bead, ref in (("t-m-1-qa1-f1", "RQA-001"), ("t-m-1-qa1-f2", "RQA-002"), ("t-m-1-qa1-f3", "RQA-003"))]
         found = ws.root / "finding.jsonl"
         found.write_text("".join(json.dumps(r) + "\n" for r in rows))
         ws.bd("import", "-i", found)
-        # The assignment: one import of both beads.
-        sanity, qa = f"{finding}-sanity", f"{finding}-qa"
-        rows = [self.render(ws.root / ".claude/skills/atm-beads/templates/dev-sanity-bead.json.j2", {
-                    "id": sanity, "parent": "t-phase-m", "dev_bead": finding, "phase": "m", "sprint": "m-1", "stack": "phase-m"}),
-                self.render(templates / "qa-bead.json.j2", {
-                    "id": qa, "checked_bead": finding, "parent": "t-phase-m", "blocked_by": sanity, "phase": "m", "sprint": "m-1",
-                    "stack": "phase-m", "round": 1, "qa_member": "quality-mgr"})]
-        assigned = ws.root / "assigned.jsonl"
-        assigned.write_text("".join(json.dumps(r) + "\n" for r in rows))
-        ws.bd("import", "-i", assigned)
-        # Its parent is the finding's parent: bd keeps one edge type per pair, so a child of the finding would lose `blocks`.
-        assert ws.deps(sanity) == {"t-phase-m": "parent-child", finding: "blocks"}, ws.deps(sanity)
-        assert ws.deps(qa) == {"t-phase-m": "parent-child", sanity: "blocks"}, ws.deps(qa)
-        assert ws.show(qa)["metadata"]["checked_bead"] == finding
-        ws.bd("update", finding, "--status", "in_progress", "--assignee", "pour-test")
-        assert not {sanity, qa} & ws.ready()
-        ws.close(finding, "fixed at abc1234")
+
+        # Two findings batched on one branch, chosen by the lead.
+        result = ws.groups("--finding-bead", "t-m-1-qa1-f1,t-m-1-qa1-f2", "--branch", "fix/m-1-batch")
+        fix, sanity, qa = fix_group(sprint, "rqa-001")
+        assert target(result, "t-m-1-qa1-f1")["ids"] == {"fix": fix, "sanity": sanity, "qa": qa}
+        assert ws.deps(fix) == {sprint: "parent-child", sprint_qa: "discovered-from", "t-m-1-qa1-f1": "discovered-from"}
+        assert ws.deps(sanity) == {sprint: "parent-child", fix: "blocks"}
+        assert ws.deps(qa) == {sprint: "parent-child", sanity: "blocks", fix: "validates"}
+        assert [ws.show(b)["metadata"]["branch"] for b in (fix, sanity, qa, fix_group(sprint, "rqa-002")[0])] == ["fix/m-1-batch"] * 4
+        meta = ws.show(fix)["metadata"]
+        assert {k: meta[k] for k in ("severity", "reviewer", "finding_ref", "difficulty", "adrs")} == {
+            "severity": "important", "reviewer": "rust-qa-agent", "finding_ref": "rqa-001", "difficulty": "hard",
+            "adrs": ["ADR-011", "ADR-012", "ADR-017"]}
+        assert ws.show(fix)["metadata"]["remedy"] == example["remedy"]
+        finding = ws.show("t-m-1-qa1-f1")
+        assert finding["status"] == "closed" and finding["close_reason"] == f"superseded: poured as {fix}"
+
+        # Rerun: nothing poured, nothing closed again.
+        before = ws.snapshot(fix, sanity, qa, "t-m-1-qa1-f1")
+        again = ws.groups("--finding-bead", "t-m-1-qa1-f1", "--branch", "fix/m-1-batch")
+        assert {n["action"] for n in target(again, "t-m-1-qa1-f1")["nodes"]} == {"existing"}
+        ws.unchanged(before)
+
+        # Readiness: fix -> sanity -> qa, each on the close of its predecessor.
+        assert fix in ws.ready() and not {sanity, qa} & ws.ready()
+        ws.close(fix, "fixed at abc1234")
         assert sanity in ws.ready() and qa not in ws.ready()
         ws.close(sanity, "PASS at abc1234")
         assert qa in ws.ready()
+
+        # A ruling hands a finding to another sprint's layer: --into pours it there, default branch from that sprint.
+        ws.groups("--finding-bead", "t-m-1-qa1-f3", "--into", other)
+        moved = fix_group(other, "rqa-003")[0]
+        assert ws.show(moved)["metadata"]["branch"] == "fix/m-2-rqa-003" and ws.show(moved)["metadata"]["sprint_bead"] == other
+
+        # A finding bead closed some other way is never poured.
+        rows = [self.render(templates / "finding-bead.json.j2", {
+            **example, "id": "t-m-1-qa1-f4", "qa_bead": sprint_qa, "phase": "m", "sprint": "m-1", "stack": "phase-m",
+            "parent": "t-phase-m", "sprint_bead": sprint, "finding_ref": "RQA-004"})]
+        found.write_text(json.dumps(rows[0]) + "\n")
+        ws.bd("import", "-i", found)
+        ws.close("t-m-1-qa1-f4", "not_reproducible")
+        refused = ws.groups("--finding-bead", "t-m-1-qa1-f4", expect=2)
+        assert target(refused, "t-m-1-qa1-f4")["error"]["code"] == "BEAD_GROUPS_FINDING_CLOSED"
+        assert ws.show(fix_group(sprint, "rqa-004")[0]) is None
+
+    def test_a_sprint_container_without_a_branch_is_refused(self):
+        ws = self.ws
+        sprint = ws.sprint("nb", 1)
+        ws.bd("update", sprint, "--unset-metadata", "branch")
+        assert "branch" not in ws.show(sprint)["metadata"]
+        entry = target(ws.groups("--sprint", sprint, expect=2), sprint)
+        assert entry["error"]["code"] == "BEAD_GROUPS_TARGET_INVALID" and "branch" in entry["error"]["message"]
+        assert ws.show(group(sprint)[0]) is None
 
 
 if __name__ == "__main__":

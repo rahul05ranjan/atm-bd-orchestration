@@ -94,8 +94,8 @@ sanity checks alone, so dev keeps moving while a layer is reviewed.
    findings only when one fix needs the other first.
 6. Each fix lands on the stack the finding was found on, one fix per layer.
    Fix layers can land between dev layers of the same stack.
-7. A fix is assigned to a dev like a dev task: the poured fix bead (or an
-   important or minor finding bead) is the task; a fix bead is followed by its
+7. A fix is assigned to a dev like a dev task: the poured fix bead is the task
+   (an important or minor finding is poured when it is assigned); a fix bead is followed by its
    group's sanity check and QA, as for a dev bead. Each QA round after the
    first reviews one small fix layer, so it is quick. A failed fix QA pours the
    next round's group; nothing is reopened.

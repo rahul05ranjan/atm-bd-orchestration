@@ -1,6 +1,6 @@
 ---
 name: fix-complete
-version: 2.3.0
+version: 2.3.1
 description: Developer completion report for one finding bead (fix-task); the body of `atm task close <task-id> completed`. The task assigner reads `commit`, `rebased_onto` and the PR (required when `outcome` is `fixed`) for the fix's sanity check and link.
 format: markdown
 required_variables:
@@ -51,7 +51,7 @@ The `/sc-gh-stack-view` output below is not COHERENT with LANDING ✅.
 
 {% endif %}## Next (task assigner)
 1. Verify PR #{{ pr_number }} exists and link it on top of the phase stack (`/sc-gh-stack`), run `/sc-gh-stack-view`, and fix any stack problem yourself. The dev has already started its next queued task; do not message or re-dispatch the dev for stacking.
-2. `atm task assign` the bead's sanity check (for an important or minor finding bead, create it first: `SKILL.md` close table).
+2. `atm task assign` the bead's sanity check.
 
 {% endif %}
 ## Machine Status (JSON)

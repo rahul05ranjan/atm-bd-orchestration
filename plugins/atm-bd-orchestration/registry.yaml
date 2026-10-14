@@ -47,7 +47,6 @@ render:
   - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py
   - skills/atm-bd-orchestration/scripts/tests/test_sanity_split.py
   - skills/atm-beads/SKILL.md
-  - skills/atm-beads/examples/dev-sanity-bead-vars-d-4.json
   - skills/atm-beads/examples/plan-root-vars.json
   - skills/atm-beads/examples/sprint-bead-vars-d-4.json
   - skills/atm-beads/examples/sprint-bead-vars-d-5.json

@@ -1,9 +1,10 @@
 ---
 name: finding-group
-version: 6.1.0
+version: 6.2.0
 description: Beads formula for the fix, sanity and QA tasks of one blocking finding, attached under its sprint container. bead-groups supplies every variable.
 format: toml
 required_variables:
+  - branch
   - parent
   - ref
   - finding_ref
@@ -31,8 +32,9 @@ dev <- sanity <- qa. The fix bead is the dev's assigned task and carries the
 finding (finding_ref, severity, filing reviewer, remedy); there is no
 separate finding bead for a blocking finding. Poured ids are
 <sprint>.<finding_ref>-r<round>-<step>. The sprint cannot close while any
-poured group bead is open. Important and minor findings are not poured: QA
-files them as plain finding beads against the phase or feature.
+poured group bead is open. Important and minor findings are filed by QA as
+plain finding beads and poured with this formula when the lead assigns one
+(bead-groups --finding-bead), which closes the finding bead as superseded.
 
 No step sets an assignee: every poured bead carries `difficulty` and the lead
 picks the agent at dispatch.
@@ -58,6 +60,8 @@ container and the repository configuration):
   finding_ref, round, severity, reviewer, remedy, finding_title, filed_by
   found_at_commit, requirements, adrs
   phase, sprint, stack, difficulty, priority
+  branch         the branch the fix lands on, chosen by the lead (default
+                 fix/<sprint>-<ref>), written on every step
   edge_option    E1 option "C" (default), "B" or "A", as in sprint-group
 #}
 formula = "finding-group"
@@ -74,6 +78,7 @@ priority = {{{ priority }}}
 labels = ["phase-{{{ phase }}}", "stack:{{{ stack }}}", "stage:fix"]
 
 [steps.metadata]
+branch = "{{{ branch }}}"
 role = "fix"
 phase = "{{{ phase }}}"
 sprint = "{{{ sprint }}}"
@@ -101,6 +106,7 @@ labels = ["phase-{{{ phase }}}", "stack:{{{ stack }}}", "stage:dev-sanity"]
 {% if edge_option == "C" %}needs = ["fix"]
 {% endif %}
 [steps.metadata]
+branch = "{{{ branch }}}"
 dev_bead = "{{{ parent }}}.{{{ ref }}}-fix"
 difficulty = "{{{ difficulty }}}"
 
@@ -114,6 +120,7 @@ labels = ["phase-{{{ phase }}}", "stack:{{{ stack }}}", "stage:qa"]
 needs = ["sanity"]
 
 [steps.metadata]
+branch = "{{{ branch }}}"
 role = "qa"
 phase = "{{{ phase }}}"
 sprint = "{{{ sprint }}}"
