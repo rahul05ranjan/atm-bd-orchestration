@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Long-running dispatcher: assigns every ready sanity check and QA bead of one phase, so the lead does not.
 
-  bead-dispatch (--phase P | --root ID) [--as ME] [--team T] [--interval SEC] [--recheck SEC]
+  bead-dispatch (--phase P | --root ID) --as LEAD [--team T] [--interval SEC] [--recheck SEC]
                 [--once] [--dry-run]
 
 Each tick reads local state only: `bd ready` and the open `bd list`, both
@@ -22,14 +22,16 @@ Dispatch is the lead's documented step, done by the script:
 `bd update <bead> --assignee <member>`, then `atm task assign <member>
 --task-id <bead> --template <dev-sanity-template.xml.j2 | qa-template.xml.j2>
 --vars <file>`, the vars built from the bead, its sprint container, the PR and
-`.claude/project/atm-bd-orchestration.yaml` (`dev_sanity_member`, `qa_member`,
-`worktree_base`, `lint_command`, `policy_path`, `reviewers_round1`). The task
+`.claude/project/atm-bd-orchestration.yaml` (`worktree_base`, `lint_command`,
+`policy_path`, `reviewers_round1`). The member is the one roster member
+(`atm members --json`) whose `agent_type` is `sanity` or `qa`, read at start;
+none or several is a usage error naming the `atm teams update-member` fix. The task
 list is re-read right before each assignment, so a lead acting by hand at the
 same moment cannot cause a double send.
 
 A candidate that cannot be dispatched (no branch on the bead, no open PR, no
 worktree, PR not the stack top, a failed check) is held: the reason is sent
-once to ATM's escalation recipients (else the lead) and the candidate is not
+once to ATM's escalation recipients (else the phase lead) and the candidate is not
 read from GitHub again for --recheck seconds (default 600). Every dispatch,
 hold and error is one JSON line on stdout.
 
@@ -61,6 +63,7 @@ import sprint_index_common  # noqa: E402
 
 FAILED, USAGE, RUNNING = 2, 3, 4
 SANITY, QA = "stage:dev-sanity", "stage:qa"
+ROSTER_TYPES = ("sanity", "qa")
 CLOSED_TASK = {"closed", "completed", "refused", "cancelled"}
 RED = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 LAYER_PR = re.compile(r"layer PR #(\d+)")
@@ -129,10 +132,9 @@ class Dispatcher:
         else:
             self.root, self.trunk = args.root, None
         self.label = "phase-" + self.root.rsplit("-phase-", 1)[-1]
-        self.actor = args.as_actor or os.environ.get("ATM_IDENTITY") or self.config.get("lead")
-        if not self.actor:
-            raise repo_config.ConfigError("no ATM identity: pass --as, set ATM_IDENTITY, or set lead in the repository configuration")
+        self.actor = args.as_actor
         self.team = args.team or os.environ.get("ATM_TEAM") or self.default_team()
+        self.members = self.roster_members()
         self.dir = repo / ".atm-bd" / "bead-dispatch"
         self.dir.mkdir(parents=True, exist_ok=True)
         if not (self.dir / ".gitignore").exists():
@@ -149,6 +151,21 @@ class Dispatcher:
             return tomllib.loads((self.repo / ".atm.toml").read_text()).get("atm", {}).get("default_team")
         except (OSError, tomllib.TOMLDecodeError):
             return None
+
+    def roster_members(self) -> dict[str, str]:
+        """The single roster member of each dispatched agent_type: {"sanity": name, "qa": name}."""
+        roster = run_json(["atm", "members", "--json"] + (["--team", self.team] if self.team else []))["members"]
+        found = {}
+        for kind in ROSTER_TYPES:
+            names = sorted(m["name"] for m in roster if m.get("agent_type") == kind)
+            if len(names) != 1:
+                team = self.team or "<team>"
+                raise repo_config.ConfigError(
+                    f"roster of {team} has {len(names)} members with agent_type {kind} ({', '.join(names) or 'none'}); "
+                    f"exactly one is needed: atm teams update-member {team} <member> --agent-type {kind}"
+                    + (" (and set the others to another type)" if names else ""))
+            found[kind] = names[0]
+        return found
 
     def atm(self, *args: str) -> list[str]:
         return ["atm", *args, "--as", self.actor] + (["--team", self.team] if self.team else [])
@@ -204,7 +221,7 @@ class Dispatcher:
         except Fail:
             pass
         if not recipients:
-            recipients, message = [self.config["lead"]], message + " No escalation recipient is set."
+            recipients, message = [self.actor], message + " No escalation recipient is set."
         for recipient in recipients:
             try:
                 run(self.atm("send", recipient, "--stdin"), stdin=message)
@@ -255,7 +272,7 @@ class Dispatcher:
             values = {"task_id": bead["id"], "checked_bead": checked, "sprint": sprint, **pr,
                       "primary_checkout": str(self.repo), "lint_command": self.config["lint_command"],
                       "layer_prs": self.layer_prs(checked, pr["pr_number"])}
-            return self.config["dev_sanity_member"], str(templates / "dev-sanity-template.xml.j2"), values
+            return self.members["sanity"], str(templates / "dev-sanity-template.xml.j2"), values
         checked = meta(bead).get("checked_bead") or ""
         m, cm, pr = self.common(bead, beads, checked)
         layer = self.qa_gate(pr, cm)
@@ -269,7 +286,7 @@ class Dispatcher:
         missing = [k for k in ("phase", "sprint", "stack") if not values[k]]
         if missing:
             raise Hold(f"no {', '.join(missing)} on the QA bead or its sprint container")
-        return self.config["qa_member"], str(templates / "qa-template.xml.j2"), values
+        return self.members["qa"], str(templates / "qa-template.xml.j2"), values
 
     def qa_gate(self, pr: dict, container: dict) -> int:
         """The PR's layer when it is the top open layer of its stack (or unstacked on the trunk) and not red."""
@@ -311,17 +328,23 @@ def main(argv: list[str]) -> int:
     where = p.add_mutually_exclusive_group(required=True)
     where.add_argument("--phase", help="phase; the root comes from .atm-bd/phase-<phase>.toml")
     where.add_argument("--root", help="the phase root bead id")
-    p.add_argument("--as", dest="as_actor", help="ATM identity that assigns (default $ATM_IDENTITY, else the repository's lead)")
+    p.add_argument("--as", dest="as_actor", help="required: the phase lead, who assigns and is told about holds when no escalation recipient is set")
     p.add_argument("--team", help="ATM team (default $ATM_TEAM, else [atm].default_team in .atm.toml)")
     p.add_argument("--interval", type=int, default=60, help="seconds between ticks (default 60)")
     p.add_argument("--recheck", type=int, default=600, help="seconds before a held candidate is read from GitHub again (default 600)")
     p.add_argument("--once", action="store_true", help="run one tick and exit")
     p.add_argument("--dry-run", action="store_true", help="log what would be dispatched; write nothing to bd or ATM")
     args = p.parse_args(argv)
+    if not args.as_actor:
+        print("bead-dispatch: --as <phase lead> is required: the ATM identity that leads this phase.\n"
+              "  Tasks are assigned as that identity, and hold notices go to it when no escalation recipient is set.\n"
+              "  The phase lead varies by phase, so it is never inferred from $ATM_IDENTITY or the repository's lead.\n"
+              f"  Example: bead-dispatch --phase {args.phase or '<x>'} --as fenix", file=sys.stderr)
+        return USAGE
     try:
         repo = repo_config.repo_root()
         dispatcher = Dispatcher(args, repo)
-    except (repo_config.ConfigError, RuntimeError) as exc:
+    except (repo_config.ConfigError, RuntimeError, Fail) as exc:
         print(f"bead-dispatch: {exc}", file=sys.stderr)
         return USAGE
     lock = open(dispatcher.dir / f"{dispatcher.root}.lock", "w")

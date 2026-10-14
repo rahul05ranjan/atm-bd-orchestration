@@ -2,7 +2,7 @@
 
 Sprint and finding groups are poured by bead-groups, so every sanity and QA
 bead carries the `branch` its pour wrote. Only `atm` and `gh` are fake
-executables on PATH: `atm` prints the task list from a file and logs every
+executables on PATH: `atm` prints the roster and the task list from files and logs every
 assign, send and escalation call; `gh` prints the open PR of a branch, the
 stacks and the check runs from files the test writes, and logs every call.
 """
@@ -24,7 +24,9 @@ FAKE_ATM = """#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
 log = os.environ["FAKE_DIR"]
-if argv[:2] == ["task", "list"]:
+if argv[:1] == ["members"]:
+    sys.stdout.write(open(os.path.join(log, "members.json")).read())
+elif argv[:2] == ["task", "list"]:
     sys.stdout.write(open(os.path.join(log, "tasks.json")).read())
 elif argv[:2] == ["task", "assign"]:
     vars_file = argv[argv.index("--vars") + 1]
@@ -54,6 +56,8 @@ elif "/check-runs" in endpoint:
 else:
     sys.exit("fake gh: unexpected " + endpoint)
 """
+ROSTER = [{"name": "lead1", "agent_type": "lead"}, {"name": "sanity1", "agent_type": "sanity"},
+          {"name": "qa1", "agent_type": "qa"}, {"name": "dev1", "agent_type": "dev"}]
 CONFIG = ('lead: lead1\nworktree_base: wt\nlint_command: "make lint"\npolicy_path: policy.md\n'
           'reviewers_round1: ["req-qa", "arch-qa"]\n')
 
@@ -94,7 +98,7 @@ class BeadDispatchTests(unittest.TestCase):
         (ws.root / "wt" / f"sprint/{name}-1").mkdir(parents=True)
         fake = ws.root / f"fake-{name}"
         fake.mkdir()
-        self.write(fake, tasks=[], pulls={}, stacks=[], runs=[])
+        self.write(fake, tasks=[], pulls={}, stacks=[], runs=[], members={"members": ROSTER})
         return sprint, fake
 
     @staticmethod
@@ -102,11 +106,13 @@ class BeadDispatchTests(unittest.TestCase):
         for name, value in files.items():
             (fake / f"{name}.json").write_text(json.dumps(value))
 
+    def env(self, fake: Path) -> dict:
+        return {**self.ws.env, "PATH": f"{self.ws.root / 'fake-bin'}{os.pathsep}{self.ws.env['PATH']}",
+                "FAKE_DIR": str(fake), "ATM_IDENTITY": "lead1", "ATM_TEAM": "t1"}
+
     def dispatch(self, phase: str, fake: Path, *args: str, expect: int = 0) -> list[dict]:
-        env = {**self.ws.env, "PATH": f"{self.ws.root / 'fake-bin'}{os.pathsep}{self.ws.env['PATH']}",
-               "FAKE_DIR": str(fake), "ATM_IDENTITY": "lead1", "ATM_TEAM": "t1"}
-        proc = subprocess.run([sys.executable, str(self.ws.scripts / "bead-dispatch"), "--phase", phase, "--once", *args],
-                              cwd=self.ws.root, env=env, text=True, capture_output=True)
+        proc = subprocess.run([sys.executable, str(self.ws.scripts / "bead-dispatch"), "--phase", phase, "--once", "--as", "lead1", *args],
+                              cwd=self.ws.root, env=self.env(fake), text=True, capture_output=True)
         assert proc.returncode == expect, (proc.returncode, proc.stdout, proc.stderr)
         return [json.loads(line) for line in proc.stdout.splitlines()]
 
@@ -127,18 +133,18 @@ class BeadDispatchTests(unittest.TestCase):
         events = self.dispatch("sq", fake)
         assert [(e["event"], e["bead"]) for e in events] == [("dispatched", sanity)]
         sent = self.lines(fake, "assigns.jsonl")
-        assert sent[0]["argv"][:5] == ["task", "assign", "dev-sanity", "--task-id", sanity]
+        assert sent[0]["argv"][:5] == ["task", "assign", "sanity1", "--task-id", sanity]
         assert sent[0]["argv"][sent[0]["argv"].index("--template") + 1].endswith("templates/dev-sanity-template.xml.j2")
         assert sent[0]["vars"] == {
             "task_id": sanity, "checked_bead": dev, "sprint": "sq-1", "branch": "sprint/sq-1", "commit": "a" * 40,
             "base": "integrate/phase-sq", "pr_number": 7, "pr_url": "https://x/pull/7",
             "worktree_path": str(ws.root / "wt/sprint/sq-1"), "primary_checkout": str(ws.root),
             "lint_command": "make lint", "layer_prs": []}
-        assert ws.show(sanity)["assignee"] == "dev-sanity"
+        assert ws.show(sanity)["assignee"] == "sanity1"
         assert (fake / "gh.log").read_text().splitlines() == ["repos/{owner}/{repo}/pulls?head={owner}:sprint/sq-1&state=open"]
 
         # The open task suppresses a second send; QA waits on the sanity PASS.
-        self.write(fake, tasks=[{"task_id": sanity, "state": "active", "assignee": "dev-sanity"}])
+        self.write(fake, tasks=[{"task_id": sanity, "state": "active", "assignee": "sanity1"}])
         assert self.dispatch("sq", fake) == [] and len(self.lines(fake, "assigns.jsonl")) == 1
 
         ws.close(sanity, "PASS at aaaaaaa")
@@ -146,7 +152,7 @@ class BeadDispatchTests(unittest.TestCase):
         events = self.dispatch("sq", fake)
         assert [(e["event"], e["bead"]) for e in events] == [("dispatched", qa)]
         sent = self.lines(fake, "assigns.jsonl")[-1]
-        assert sent["argv"][:5] == ["task", "assign", "quality-mgr", "--task-id", qa]
+        assert sent["argv"][:5] == ["task", "assign", "qa1", "--task-id", qa]
         assert sent["vars"] == {
             "task_id": qa, "checked_bead": dev, "phase": "sq", "phase_feature": "t-phase-sq", "sprint": "sq-1",
             "stack": "phase-sq", "layer": 1, "round": 1, "branch": "sprint/sq-1", "commit": "a" * 40,
@@ -213,6 +219,22 @@ class BeadDispatchTests(unittest.TestCase):
         assert {k: values[k] for k in ("task_id", "checked_bead", "carry_forward", "round", "layer", "branch", "base")} == {
             "task_id": fix_qa, "checked_bead": fix, "carry_forward": fix, "round": 2, "layer": 2,
             "branch": "fix/fx-1-qa1-f1", "base": "sprint/fx-1"}
+
+    def test_the_sanity_and_qa_members_must_each_be_one_roster_agent_type(self):
+        _, fake = self.phase("ro")
+        self.write(fake, members={"members": [m for m in ROSTER if m["agent_type"] != "sanity"]})
+        proc = subprocess.run([sys.executable, str(self.ws.scripts / "bead-dispatch"), "--phase", "ro", "--once", "--as", "lead1"],
+                              cwd=self.ws.root, env=self.env(fake), text=True, capture_output=True)
+        assert proc.returncode == 3 and "0 members with agent_type sanity (none)" in proc.stderr
+        assert "atm teams update-member t1 <member> --agent-type sanity" in proc.stderr
+        self.write(fake, members={"members": ROSTER + [{"name": "qa2", "agent_type": "qa"}]})
+        proc = subprocess.run([sys.executable, str(self.ws.scripts / "bead-dispatch"), "--phase", "ro", "--once", "--as", "lead1"],
+                              cwd=self.ws.root, env=self.env(fake), text=True, capture_output=True)
+        assert proc.returncode == 3 and "2 members with agent_type qa (qa1, qa2)" in proc.stderr
+        proc = subprocess.run([sys.executable, str(self.ws.scripts / "bead-dispatch"), "--phase", "ro", "--once"],
+                              cwd=self.ws.root, env=self.env(fake), text=True, capture_output=True)
+        assert proc.returncode == 3 and "--as <phase lead> is required" in proc.stderr   # $ATM_IDENTITY is set, yet no fallback
+        assert "Example: bead-dispatch --phase ro --as fenix" in proc.stderr
 
     def test_anchor_and_quick_fix_beads_are_never_dispatched_and_a_second_process_exits(self):
         ws = self.ws

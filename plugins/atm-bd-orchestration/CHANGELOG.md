@@ -7,6 +7,8 @@
   - **Each tick:** reads local state only, `bd ready` and the open `bd list` (both `--exclude-label anchor`, never `--all`) plus `atm task list`.
   - **Before a dispatch:** reads the open PR of the bead's poured `branch`. For QA it also reads the stacks and the head's check runs, and dispatches only to the top open layer of the stack with no failed check.
   - **Dispatch:** `bd update --assignee` plus `atm task assign --template dev-sanity-template.xml.j2 | qa-template.xml.j2 --vars`, with the vars built from the bead, its sprint container, the PR and the repository configuration. The task list is re-read just before each assignment.
+  - **Members:** the one roster member with `agent_type` `sanity` and the one with `qa` (`atm members --json`), read at start; none or several refuses to start with the `atm teams update-member` fix.
+  - **Assigner:** `--as <phase lead>` is required; with no fallback to `$ATM_IDENTITY` or the repository's `lead`, because the phase lead varies.
   - **Holds:** a bead it cannot dispatch is announced once to the escalation recipients and not read from GitHub again for `--recheck` seconds.
   - **Other modes:** `--once` runs one tick; `--dry-run` writes nothing.
   - **Stays with the lead:** dev, fix, quick-fix QA, plan-review and review dispatch, and stack links.
