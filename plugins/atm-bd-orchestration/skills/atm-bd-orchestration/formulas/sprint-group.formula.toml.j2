@@ -1,9 +1,10 @@
 ---
 name: sprint-group
-version: 4.1.0
+version: 4.2.0
 description: Beads formula for the dev, sanity and QA tasks of one sprint, attached under its sprint container. bead-groups supplies every variable.
 format: toml
 required_variables:
+  - branch
   - parent
   - ref
   - phase
@@ -31,6 +32,8 @@ repository configuration and sprint-group.relations.json):
   parent         the sprint container id
   ref            attach reference, "group"
   phase, sprint, stack, layer, difficulty, priority
+  branch         the sprint's branch (metadata.branch of the container), written on
+                 every step so dispatch finds the PR without a closed-bead read
   edge_option    E1: "C" sanity needs dev (poured `blocks`; the default),
                  "B" no sanity -> dev edge in the pour (bead-groups adds
                  `validates`), "A" only dev is poured
@@ -61,6 +64,7 @@ priority = {{{ priority }}}
 labels = ["phase-{{{ phase }}}", "stack:{{{ stack }}}", "stage:dev"]
 
 [steps.metadata]
+branch = "{{{ branch }}}"
 role = "dev"
 phase = "{{{ phase }}}"
 sprint = "{{{ sprint }}}"
@@ -80,6 +84,7 @@ labels = ["phase-{{{ phase }}}", "stack:{{{ stack }}}", "stage:dev-sanity"]
 {% if edge_option == "C" %}needs = ["dev"]
 {% endif %}
 [steps.metadata]
+branch = "{{{ branch }}}"
 dev_bead = "{{{ parent }}}.{{{ ref }}}-dev"
 difficulty = "{{{ difficulty }}}"
 
@@ -93,6 +98,7 @@ labels = ["phase-{{{ phase }}}", "stack:{{{ stack }}}", "stage:qa"]
 needs = ["sanity"]
 
 [steps.metadata]
+branch = "{{{ branch }}}"
 role = "qa"
 phase = "{{{ phase }}}"
 sprint = "{{{ sprint }}}"

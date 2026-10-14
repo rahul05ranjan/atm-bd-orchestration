@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.0] - 2026-10-14
+
+### Changed
+- Every poured step carries `branch` in its metadata (randlee/atm-bd-orchestration#126). `sprint-group` 4.2.0 writes the sprint container's `branch` onto dev, sanity and QA, and `finding-group` 6.2.0 writes the fix branch onto fix, sanity and QA. A ready sanity or QA bead then names the branch its PR is on, so dispatch needs no closed-bead read. A sprint container without `branch` is refused (`BEAD_GROUPS_TARGET_INVALID`). A findings file may set `branch` at the top level or per finding; the default is `fix/<sprint>-<ref>`. Groups poured before this version carry no `branch` and are not re-attached by a newer pour, so pour new sprints with `--sprint`.
+- Important and minor findings are poured with `finding-group`, like blocking ones (Rand, 2026-10-14). The lead runs `bead-groups --finding-bead <bead> [--branch B] [--into SPRINT]` when it assigns one:
+  - it pours `fix ← sanity ← qa` under the finding's sprint container, or under `--into` when a ruling hands the finding to another sprint's layer;
+  - it adds `discovered-from` edges to the finding bead and its QA bead;
+  - it closes the finding bead `superseded: poured as <fix bead>`.
+  Several findings may share one `--branch`. A finding bead closed some other way is refused (`BEAD_GROUPS_FINDING_CLOSED`). A findings file still holds blocking findings only.
+
+### Removed
+- The hand-built sanity and QA beads for an assigned important or minor finding: `atm-beads/templates/dev-sanity-bead.json.j2` and its example. `qa-bead.json.j2` 1.4.0 is now for a parallel quick fix only. The SKILL.md assignment row and the dev-complete, fix-complete and fix-assignment templates no longer describe the old path.
+
 ## [0.15.0] - 2026-10-14
 
 ### Changed

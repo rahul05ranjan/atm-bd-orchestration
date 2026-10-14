@@ -445,13 +445,11 @@ class DocumentedShapeTests(unittest.TestCase):
                         if ok:
                             self.assertIn(values["integration_row"], proc.stdout)
 
-    def test_the_sanity_bead_template_renders_a_bead_the_plan_schema_accepts(self):
+    def test_the_plan_schema_requires_a_sanity_bead_to_block_on_its_dev_bead(self):
         sys.path.insert(0, str(ROOT.parent / "atm-beads/scripts"))
         import bead_schema
-        beads = ROOT.parent / "atm-beads"
-        proc = rendering.render(beads / "templates/dev-sanity-bead.json.j2", beads / "examples/dev-sanity-bead-vars-d-4.json")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        bead = json.loads(proc.stdout)
+        bead = {"id": "t-d-4.group-sanity", "metadata": {"dev_bead": "t-d-4.group-dev"},
+                "dependencies": [{"type": "blocks", "depends_on_id": "t-d-4.group-dev"}, {"type": "parent-child", "depends_on_id": "t-d-4"}]}
         self.assertEqual(bead_schema.problems(bead, bead_schema.SanityBead), [])
         unblocked = {**bead, "dependencies": [d for d in bead["dependencies"] if d["type"] != "blocks"]}
         self.assertTrue(bead_schema.problems(unblocked, bead_schema.SanityBead))  # planted negative

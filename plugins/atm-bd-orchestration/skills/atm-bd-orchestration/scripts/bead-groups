@@ -12,21 +12,34 @@
                               "findings": [{"ref": "qa1-f1", "severity": "blocking", "reviewer": "...",
                                             "title": "...", "remedy": "...", "priority": 1}]}
                            a finding may also carry requirements, adrs and difficulty; they default to the
-                           sprint container's metadata
+                           sprint container's metadata. `branch` (top level or per finding) is the branch the
+                           fix lands on; default fix/<sprint>-<ref>
+    --finding-bead ID[,ID...]  important or minor finding beads (quality-mgr's plain finding beads), poured when
+                           the lead assigns them, under their `sprint_bead` (or --into); the finding bead is
+                           then closed `superseded: poured as <fix bead>`
+      [--branch B]         the branch for every --finding-bead (several fixes may share one branch);
+                           default fix/<sprint>-<ref>
+      [--into ID]          the sprint container to pour them under, when a ruling hands the finding to
+                           another sprint's layer
 
 A sprint pours dev <- sanity <- qa under its container. Each blocking finding
 pours fix <- sanity <- qa as siblings under the same container, at
-<sprint>.<ref>-r<round>-<step>; the fix bead carries the finding. Important
-and minor findings are not poured (refused): QA files them as plain finding
-beads. A finding group is not poured once its `filed_by` QA bead is closed:
-quality-mgr pours the groups first, then closes its QA bead.
+<sprint>.<ref>-r<round>-<step>; the fix bead carries the finding. A findings
+file holds blocking findings only (others are refused): QA files important
+and minor findings as plain finding beads, and the lead pours each one with
+--finding-bead when it assigns it. A blocking finding group is not poured
+once its `filed_by` QA bead is closed: quality-mgr pours the groups first,
+then closes its QA bead. Every poured step carries `branch` in its metadata:
+the sprint container's `branch` for a sprint group, the chosen fix branch for
+a finding group.
 
 For every target it attaches the group's formula under the target's sprint
 container with `sc-compose bead attach`, together with the relations from
 `<formula>.relations.json`: `validates` (E1 option); for a sprint, its dev
 bead `blocks` on the initial sanity bead of each predecessor in the phase's
 plan file depends_on (under option A, which pours no sanity bead, on its dev
-bead); for a fix, `discovered-from` its `filed_by` QA bead.
+bead); for a fix, `discovered-from` its `filed_by` QA bead and, for a
+--finding-bead, `discovered-from` that finding bead.
 A relation's bead must exist when its target is attached, so sprints are
 attached in dependency order (a predecessor in the same run first), then
 findings.
@@ -71,9 +84,10 @@ from bead_formulas import Bd, BdError, attach_id  # noqa: E402
 
 SCHEMA = "atm-bd-orchestration/bead-groups/v1"
 SUCCESS, FAILED, USAGE, PROBLEMS = 0, 2, 3, 5
-SPRINT_KEYS = ("phase", "sprint", "stack", "layer", "difficulty")
+SPRINT_KEYS = ("phase", "sprint", "stack", "layer", "difficulty", "branch")
 FINDING_FIELDS = ("ref", "severity", "reviewer", "title", "remedy")
 REF = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
+BRANCH = re.compile(r"[A-Za-z0-9._/-]+")
 
 
 class TargetError(Exception):
@@ -176,7 +190,7 @@ class Run:
         deps = plan[meta["sprint"]][2]
         compose = {"parent": bead, "phase": meta["phase"], "sprint": meta["sprint"], "stack": meta["stack"],
                    "layer": meta["layer"], "difficulty": meta["difficulty"], "priority": container.get("priority", 2),
-                   "edge_option": option}
+                   "branch": meta["branch"], "edge_option": option}
         compose["ref"] = fmt(sidecar["ref"], {"vars": compose})
         relate_vars = {**sidecar.get("defaults", {}), "predecessor_sanity": [plan[d][1] for d in deps],
                        "predecessors": [plan[d][0] for d in deps],
@@ -214,23 +228,69 @@ class Run:
                     raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"finding {ref} lacks {', '.join(lacking)}")
                 if finding["severity"] != "blocking":
                     raise TargetError("BEAD_GROUPS_NOT_BLOCKING", f"finding {ref} is {finding['severity']}; only blocking findings are poured, file it as a finding bead")
-                ids = {k: finding[k] if k in finding else meta.get(k) for k in ("requirements", "adrs")}
-                bad = [k for k, v in ids.items() if not isinstance(v, list) or not v or not all(isinstance(i, str) and i for i in v)]
-                if bad:
-                    raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"finding {ref}: {', '.join(bad)} must be a nonempty list of ids (from the finding or {sprint}'s metadata)")
-                compose = {"parent": sprint, "finding_ref": ref, "round": round_, "severity": finding["severity"],
-                           "reviewer": finding["reviewer"], "finding_title": finding["title"], "remedy": finding["remedy"],
-                           "filed_by": filed_by, "found_at_commit": found_at, **ids,
-                           "phase": meta["phase"], "sprint": meta["sprint"], "stack": meta["stack"],
-                           "difficulty": finding.get("difficulty") or meta["difficulty"], "priority": finding.get("priority", 1),
-                           "edge_option": option}
-                compose["ref"] = fmt(sidecar["ref"], {"vars": compose})
-                out.append({"kind": "finding", "id": f"{sprint}.{compose['ref']}", "formula": "finding-group", "option": option,
-                            "compose": compose, "vars": dict(sidecar.get("defaults", {})), "qa_closed": qa_closed})
+                target = self.finding_target(sprint, meta, option, {**finding, "round": round_, "filed_by": filed_by,
+                                                                    "found_at_commit": found_at,
+                                                                    "branch": finding.get("branch") or doc.get("branch")})
+                out.append({**target, "qa_closed": qa_closed})
             except TargetError as exc:
                 exc.target_id = f"{sprint}.{ref}-r{round_}" if isinstance(ref, str) else f"{sprint}:{path}"
                 out.append(exc)
         return out
+
+    def finding_target(self, sprint: str, meta: dict, option: str, finding: dict) -> dict:
+        """The finding-group target of one finding (a findings-file row or a finding bead) under sprint container `sprint`."""
+        ref = finding["ref"]
+        ids = {k: finding[k] if finding.get(k) is not None else meta.get(k) for k in ("requirements", "adrs")}
+        bad = [k for k, v in ids.items() if not isinstance(v, list) or not v or not all(isinstance(i, str) and i for i in v)]
+        if bad:
+            raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"finding {ref}: {', '.join(bad)} must be a nonempty list of ids (from the finding or {sprint}'s metadata)")
+        branch = finding.get("branch") or f"fix/{meta['sprint']}-{ref}"
+        if not isinstance(branch, str) or not BRANCH.fullmatch(branch):
+            raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"finding {ref}: branch {branch!r} is not a branch name")
+        sidecar = self.sidecar("finding-group")
+        compose = {"parent": sprint, "finding_ref": ref, "round": finding["round"], "severity": finding["severity"],
+                   "reviewer": finding["reviewer"], "finding_title": finding["title"], "remedy": finding["remedy"],
+                   "filed_by": finding["filed_by"], "found_at_commit": finding["found_at_commit"], **ids,
+                   "phase": meta["phase"], "sprint": meta["sprint"], "stack": meta["stack"],
+                   "difficulty": finding.get("difficulty") or meta["difficulty"], "priority": finding.get("priority", 1),
+                   "branch": branch, "edge_option": option}
+        compose["ref"] = fmt(sidecar["ref"], {"vars": compose})
+        return {"kind": "finding", "id": f"{sprint}.{compose['ref']}", "formula": "finding-group", "option": option,
+                "compose": compose, "vars": dict(sidecar.get("defaults", {}))}
+
+    def finding_bead_target(self, bead: str, branch: str | None, into: str | None) -> dict:
+        """The finding-group target of an important or minor finding bead (finding-bead.json.j2), poured at assignment."""
+        row = self.show(bead)
+        meta = row.get("metadata") or {}
+        if "stage:finding" not in (row.get("labels") or []) or meta.get("sanity_finding"):
+            raise TargetError("BEAD_GROUPS_TARGET_INVALID", f"{bead} is not a QA finding bead (stage:finding, no sanity_finding)")
+        missing = [k for k in ("finding_ref", "severity", "reviewer", "found_at_commit", "sprint_bead") if meta.get(k) in (None, "")]
+        if missing or not (row.get("design") or meta.get("remedy")):
+            raise TargetError("BEAD_GROUPS_TARGET_INVALID", f"{bead} lacks {', '.join(missing or ['design (the remedy)'])}")
+        if row.get("status") == "closed" and not str(row.get("close_reason") or "").startswith("superseded: poured as "):
+            raise TargetError("BEAD_GROUPS_FINDING_CLOSED", f"{bead} is closed ({row.get('close_reason')}); only an open finding bead is poured")
+        filed_by = [d.get("depends_on_id") or d.get("id") for d in row.get("dependencies") or []
+                    if (d.get("type") or d.get("dependency_type")) == "discovered-from"]
+        if len(filed_by) != 1:
+            raise TargetError("BEAD_GROUPS_TARGET_INVALID", f"{bead} needs exactly one discovered-from QA bead, has {filed_by}")
+        sprint = into or meta["sprint_bead"]
+        container = self.show(sprint)
+        cmeta = container.get("metadata") or {}
+        lacking = [k for k in ("phase", "sprint", "stack", "difficulty") if cmeta.get(k) in (None, "")]
+        if lacking:
+            raise TargetError("BEAD_GROUPS_TARGET_INVALID", f"{sprint} lacks {', '.join(lacking)}")
+        ref = re.sub(r"[^a-z0-9]+", "-", str(meta["finding_ref"]).lower()).strip("-")
+        target = self.finding_target(sprint, cmeta, self.option_for(self.sidecar("finding-group")), {
+            "ref": ref, "round": meta.get("round") or 1, "severity": meta["severity"], "reviewer": meta["reviewer"],
+            "title": row.get("title", ref), "remedy": row.get("design") or meta["remedy"], "filed_by": filed_by[0],
+            "found_at_commit": meta["found_at_commit"], "requirements": meta.get("requirements"), "adrs": meta.get("adrs"),
+            "difficulty": meta.get("difficulty"), "priority": row.get("priority", 2), "branch": branch})
+        return {**target, "finding_bead": bead, "finding_closed": row.get("status") == "closed"}
+
+    def supersede(self, target: dict, fix: str) -> None:
+        """Close the finding bead a --finding-bead pour replaced; its fix group carries the finding from here on."""
+        if target.get("finding_bead") and not target.get("finding_closed") and not self.validate:
+            self.bd.run("close", target["finding_bead"], "--reason", f"superseded: poured as {fix}")
 
     def steps(self, target: dict) -> list[str]:
         names = ("dev", "sanity", "qa") if target["kind"] == "sprint" else ("fix", "sanity", "qa")
@@ -297,6 +357,8 @@ class Run:
         sidecar = self.sidecar(target["formula"])
         scope = {"vars": Strict({**target["compose"], **{k: v for k, v in target["vars"].items() if not isinstance(v, list)}})}
         rules = [*sidecar["options"][target["option"]].get("relations", []), *sidecar.get("relations", [])]
+        if target.get("finding_bead"):
+            rules.append({"from": "step:fix", "to": "bead:" + target["finding_bead"], "type": "discovered-from"})
         rules = [(r, target["vars"].get(r["each"], []) if "each" in r else [None]) for r in rules]
         relations, missing = [], []
         for rule, values in rules:
@@ -329,12 +391,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--sprint", action="append", default=[])
     parser.add_argument("--phase", action="append", default=[])
     parser.add_argument("--findings", action="append", default=[], type=Path)
+    parser.add_argument("--finding-bead", action="append", default=[])
+    parser.add_argument("--branch")
+    parser.add_argument("--into")
     parser.add_argument("--option")
     parser.add_argument("--validate", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    if not (args.sprint or args.phase or args.findings):
-        parser.error("name at least one --sprint, --phase or --findings")
+    if not (args.sprint or args.phase or args.findings or args.finding_bead):
+        parser.error("name at least one --sprint, --phase, --findings or --finding-bead")
+    if (args.branch or args.into) and not args.finding_bead:
+        parser.error("--branch and --into apply to --finding-bead only")
     result = {"schema": SCHEMA, "mode": "validate" if args.validate else "apply", "targets": []}
     try:
         run = Run(repo_config.repo_root(), args.option, args.validate)
@@ -347,14 +414,17 @@ def main(argv: list[str]) -> int:
         return report(result, args.json, USAGE)
 
     entries, targets = [], []
-    for kind, item in [("sprint", b) for b in dict.fromkeys(sprint_ids)] + [("finding", t) for t in finding_targets]:
-        bead = item if kind == "sprint" else getattr(item, "target_id", None) or item["id"]
+    items = ([("sprint", b) for b in dict.fromkeys(sprint_ids)] + [("finding", t) for t in finding_targets]
+             + [("finding_bead", b) for b in dict.fromkeys(split_ids(args.finding_bead))])
+    for kind, item in items:
+        bead = item if kind in ("sprint", "finding_bead") else getattr(item, "target_id", None) or item["id"]
         entry = {"id": bead, "kind": kind, "problems": []}
         entries.append(entry)
         try:
             if isinstance(item, TargetError):
                 raise item
-            target = run.sprint_target(bead) if kind == "sprint" else item
+            target = (run.sprint_target(bead) if kind == "sprint" else
+                      run.finding_bead_target(bead, args.branch, args.into) if kind == "finding_bead" else item)
             entry.update({"formula": target["formula"], "option": target["option"]})
             targets.append((entry, target))
         except (TargetError, BdError) as exc:
@@ -363,6 +433,7 @@ def main(argv: list[str]) -> int:
         try:
             attachment = run.pour(target)
             entry.update({"ids": attachment["ids"], "nodes": attachment["nodes"], "edges": attachment["edges"]})
+            run.supersede(target, attachment["ids"]["fix"] if "fix" in attachment["ids"] else "")
             created = {n["id"] for n in attachment["nodes"] if n["action"] == "create"}
             entry["problems"] += [f"missing bead {i}" for i in created] + attachment["missing"]
             edges = [e for e in attachment["edges"] if e["action"] == "add" and e["from"] not in created]
