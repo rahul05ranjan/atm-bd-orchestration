@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.17.0] - 2026-10-14
+
+### Added
+- `bead-dispatch --phase <x>` (randlee/atm-bd-orchestration#126): a long-running dispatcher, one per phase, holding a lock. It assigns every ready sanity check and QA bead.
+  - **Each tick:** reads local state only, `bd ready` and the open `bd list` (both `--exclude-label anchor`, never `--all`) plus `atm task list`.
+  - **Before a dispatch:** reads the open PR of the bead's poured `branch`. For QA it also reads the stacks and the head's check runs, and dispatches only to the top open layer of the stack with no failed check.
+  - **Dispatch:** `bd update --assignee` plus `atm task assign --template dev-sanity-template.xml.j2 | qa-template.xml.j2 --vars`, with the vars built from the bead, its sprint container, the PR and the repository configuration. The task list is re-read just before each assignment.
+  - **Holds:** a bead it cannot dispatch is announced once to the escalation recipients and not read from GitHub again for `--recheck` seconds.
+  - **Other modes:** `--once` runs one tick; `--dry-run` writes nothing.
+  - **Stays with the lead:** dev, fix, quick-fix QA, plan-review and review dispatch, and stack links.
+
 ## [0.16.0] - 2026-10-14
 
 ### Changed

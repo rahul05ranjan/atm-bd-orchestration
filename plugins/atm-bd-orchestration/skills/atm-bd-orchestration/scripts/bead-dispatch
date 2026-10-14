@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""Long-running dispatcher: assigns every ready sanity check and QA bead of one phase, so the lead does not.
+
+  bead-dispatch (--phase P | --root ID) [--as ME] [--team T] [--interval SEC] [--recheck SEC]
+                [--once] [--dry-run]
+
+Each tick reads local state only: `bd ready` and the open `bd list`, both
+`-l phase-P --exclude-label anchor -n 0 --json` (never `--all`), and `atm task
+list`. A candidate is a ready `stage:dev-sanity` or `stage:qa` bead of the phase
+with no open ATM task. A sanity bead closes only on PASS, so a ready QA bead
+means its sanity passed; no close reason is read. Quick-fix QA beads
+(`metadata.quick_fix`) and every other stage stay with the lead.
+
+GitHub is read only for a candidate about to be dispatched, from the
+`metadata.branch` its pour wrote: one `gh api repos/{owner}/{repo}/pulls?head=`
+for the open PR (number, URL, head commit, base); for QA also one `gh api
+.../stacks` and one check-runs read of the head commit. QA is dispatched only
+when the PR is the top open layer of its stack (or, unstacked, based on the
+phase trunk) and no check on its head has failed.
+
+Dispatch is the lead's documented step, done by the script:
+`bd update <bead> --assignee <member>`, then `atm task assign <member>
+--task-id <bead> --template <dev-sanity-template.xml.j2 | qa-template.xml.j2>
+--vars <file>`, the vars built from the bead, its sprint container, the PR and
+`.claude/project/atm-bd-orchestration.yaml` (`dev_sanity_member`, `qa_member`,
+`worktree_base`, `lint_command`, `policy_path`, `reviewers_round1`). The task
+list is re-read right before each assignment, so a lead acting by hand at the
+same moment cannot cause a double send.
+
+A candidate that cannot be dispatched (no branch on the bead, no open PR, no
+worktree, PR not the stack top, a failed check) is held: the reason is sent
+once to ATM's escalation recipients (else the lead) and the candidate is not
+read from GitHub again for --recheck seconds (default 600). Every dispatch,
+hold and error is one JSON line on stdout.
+
+One process per phase: a lock on `.atm-bd/bead-dispatch/<root>.lock`; a second
+one exits 4. State (holds, announced reasons) is `.atm-bd/bead-dispatch/<root>.json`,
+git-ignored. --once runs one tick and exits; --dry-run builds the vars and logs
+what it would send, writing nothing to bd or ATM.
+
+Exit: 0 (--once, or interrupted), 2 a bd/atm call failed (--once), 3 usage, 4 already running.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import tomllib
+from datetime import datetime, timezone
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS.parents[1] / "atm-beads" / "scripts"))
+import repo_config  # noqa: E402
+import sprint_index_common  # noqa: E402
+
+FAILED, USAGE, RUNNING = 2, 3, 4
+SANITY, QA = "stage:dev-sanity", "stage:qa"
+CLOSED_TASK = {"closed", "completed", "refused", "cancelled"}
+RED = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
+LAYER_PR = re.compile(r"layer PR #(\d+)")
+
+
+class Fail(Exception):
+    pass
+
+
+class Hold(Exception):
+    """The candidate cannot be dispatched yet; the message says why and what fixes it."""
+
+
+def run(cmd: list[str], cwd: Path | None = None, stdin: str | None = None) -> str:
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, input=stdin)
+    except OSError as exc:
+        raise Fail(f"{cmd[0]}: {exc}") from exc
+    if out.returncode != 0:
+        raise Fail(f"{' '.join(cmd)} exited {out.returncode}: {(out.stderr or out.stdout).strip()}")
+    return out.stdout
+
+
+def run_json(cmd: list[str], cwd: Path | None = None):
+    text = run(cmd, cwd)
+    try:
+        return json.loads(text or "[]")
+    except ValueError as exc:
+        raise Fail(f"{' '.join(cmd)}: not JSON ({exc})") from exc
+
+
+def bd_json(*args: str):
+    """bd --readonly, or plain bd (a read command) on a backend that has no strict readonly (proxied server)."""
+    try:
+        return run_json(["bd", "--readonly", *args])
+    except Fail as exc:
+        if "proxy.readonly.unsupported" not in str(exc):
+            raise
+    return run_json(["bd", *args])
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(event: str, **fields) -> None:
+    print(json.dumps({"at": now(), "event": event, **fields}), flush=True)
+
+
+def stage(b: dict) -> str:
+    return next((l for l in b.get("labels") or [] if l.startswith("stage:")), "-")
+
+
+def meta(b: dict) -> dict:
+    m = b.get("metadata")
+    return m if isinstance(m, dict) else {}
+
+
+class Dispatcher:
+    def __init__(self, args, repo: Path):
+        self.args, self.repo = args, repo
+        self.config = repo_config.load(repo)
+        if args.phase:
+            phase = sprint_index_common.load_phase_config(repo, args.phase)
+            self.root, self.trunk = phase["root"], phase["integration_branch"]
+        else:
+            self.root, self.trunk = args.root, None
+        self.label = "phase-" + self.root.rsplit("-phase-", 1)[-1]
+        self.actor = args.as_actor or os.environ.get("ATM_IDENTITY") or self.config.get("lead")
+        if not self.actor:
+            raise repo_config.ConfigError("no ATM identity: pass --as, set ATM_IDENTITY, or set lead in the repository configuration")
+        self.team = args.team or os.environ.get("ATM_TEAM") or self.default_team()
+        self.dir = repo / ".atm-bd" / "bead-dispatch"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        if not (self.dir / ".gitignore").exists():
+            (self.dir / ".gitignore").write_text("*\n")
+        self.state_file = self.dir / f"{self.root}.json"
+        try:
+            self.state = json.loads(self.state_file.read_text())
+        except (OSError, ValueError):
+            self.state = {}
+        self.state.setdefault("holds", {})
+
+    def default_team(self) -> str | None:
+        try:
+            return tomllib.loads((self.repo / ".atm.toml").read_text()).get("atm", {}).get("default_team")
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+
+    def atm(self, *args: str) -> list[str]:
+        return ["atm", *args, "--as", self.actor] + (["--team", self.team] if self.team else [])
+
+    def open_tasks(self) -> set[str]:
+        return {t["task_id"] for t in run_json(self.atm("task", "list", "--all", "--json"))
+                if str(t.get("state", "")).lower() not in CLOSED_TASK}
+
+    def save(self) -> None:
+        self.state_file.write_text(json.dumps(self.state, indent=1, sort_keys=True) + "\n")
+
+    def tick(self) -> int:
+        scoped = ["-l", self.label, "--exclude-label", "anchor", "-n", "0", "--json"]
+        beads = {b["id"]: b for b in bd_json("list", *scoped)}
+        if self.root not in beads:
+            raise Fail(f"root bead {self.root} is closed, does not exist or lacks the label {self.label}")
+        self.trunk = self.trunk or meta(beads[self.root]).get("integration_branch")
+        ready = [b for b in bd_json("ready", *scoped) if b["id"] != self.root and stage(b) in (SANITY, QA)
+                 and not meta(b).get("quick_fix")]
+        tasks = self.open_tasks()
+        candidates = [b for b in ready if b["id"] not in tasks]
+        live = {b["id"] for b in candidates}
+        self.state["holds"] = {k: v for k, v in self.state["holds"].items() if k in live}
+        sent = 0
+        for bead in sorted(candidates, key=lambda b: (b.get("priority", 9), b["id"])):
+            hold = self.state["holds"].get(bead["id"])
+            if hold and time.time() - hold["at"] < self.args.recheck:
+                continue
+            try:
+                member, template, values = self.plan(bead, beads)
+                if bead["id"] in self.open_tasks():  # a lead acting by hand since this tick began
+                    continue
+                self.assign(bead, member, template, values)
+                self.state["holds"].pop(bead["id"], None)
+                sent += 1
+            except Hold as exc:
+                self.hold(bead, str(exc))
+        self.save()
+        return sent
+
+    def hold(self, bead: dict, reason: str) -> None:
+        old = self.state["holds"].get(bead["id"], {})
+        self.state["holds"][bead["id"]] = {"reason": reason, "at": time.time()}
+        log("hold", bead=bead["id"], reason=reason)
+        if old.get("reason") != reason and not self.args.dry_run:
+            self.announce(f"bead-dispatch {self.root}: {bead['id']} not dispatched: {reason}")
+
+    def announce(self, message: str) -> None:
+        recipients = []
+        try:
+            listed = run_json(["atm", "escalation", "list", "--json"] + (["--team", self.team] if self.team else []))
+            recipients = [r for r in (listed.get("recipients") or []) if isinstance(r, str) and r] if isinstance(listed, dict) else []
+        except Fail:
+            pass
+        if not recipients:
+            recipients, message = [self.config["lead"]], message + " No escalation recipient is set."
+        for recipient in recipients:
+            try:
+                run(self.atm("send", recipient, "--stdin"), stdin=message)
+            except Fail as exc:
+                log("announce_failed", recipient=recipient, error=str(exc))
+
+    def pull(self, branch: str) -> dict:
+        prs = run_json(["gh", "api", f"repos/{{owner}}/{{repo}}/pulls?head={{owner}}:{branch}&state=open"], cwd=self.repo)
+        if not prs:
+            raise Hold(f"no open PR on {branch}: the dev pushes the branch and opens its PR")
+        if len(prs) > 1:
+            raise Hold(f"{len(prs)} open PRs on {branch}: close the extra one")
+        return prs[0]
+
+    def worktree(self, branch: str) -> str:
+        path = (self.repo / str(self.config["worktree_base"]) / branch).resolve()
+        if not path.is_dir():
+            raise Hold(f"no worktree at {path}: create it with sc-worktree-create for {branch}")
+        return str(path)
+
+    def common(self, bead: dict, beads: dict, checked: str) -> tuple[dict, dict, dict]:
+        m = meta(bead)
+        if checked in beads:
+            raise Hold(f"checked bead {checked} is {beads[checked]['status']}: ready only through a `validates` edge")
+        branch = m.get("branch")
+        if not branch:
+            raise Hold("no metadata.branch: poured before atm-bd-orchestration 0.16.0; the lead dispatches it by hand")
+        container = beads.get(bead.get("parent") or "") or {}
+        pr = self.pull(branch)
+        return m, meta(container), {"branch": branch, "commit": pr["head"]["sha"], "base": pr["base"]["ref"],
+                                    "pr_number": pr["number"], "pr_url": pr["html_url"], "worktree_path": self.worktree(branch)}
+
+    def layer_prs(self, checked: str, pr: int) -> list[int]:
+        """The checked bead's recorded layer PRs (`layer PR #<n>` notes), the checked PR last; [] for one layer."""
+        rows = bd_json("show", checked, "--json")
+        found = list(dict.fromkeys(int(n) for n in LAYER_PR.findall(str((rows[0] if rows else {}).get("notes") or ""))))
+        found = [n for n in found if n != pr] + [pr]
+        return found if len(found) > 1 else []
+
+    def plan(self, bead: dict, beads: dict) -> tuple[str, str, dict]:
+        templates = SCRIPTS.parent / "templates"
+        if stage(bead) == SANITY:
+            checked = meta(bead).get("dev_bead") or ""
+            m, cm, pr = self.common(bead, beads, checked)
+            sprint = cm.get("sprint") or meta(beads.get(checked, {})).get("sprint")
+            if not sprint:
+                raise Hold(f"no sprint: {bead.get('parent')} is not an open sprint container")
+            values = {"task_id": bead["id"], "checked_bead": checked, "sprint": sprint, **pr,
+                      "primary_checkout": str(self.repo), "lint_command": self.config["lint_command"],
+                      "layer_prs": self.layer_prs(checked, pr["pr_number"])}
+            return self.config["dev_sanity_member"], str(templates / "dev-sanity-template.xml.j2"), values
+        checked = meta(bead).get("checked_bead") or ""
+        m, cm, pr = self.common(bead, beads, checked)
+        layer = self.qa_gate(pr, cm)
+        fix = m.get("role") == "qa" and m.get("finding_ref")
+        values = {"task_id": bead["id"], "checked_bead": checked, "phase": m.get("phase") or cm.get("phase"),
+                  "phase_feature": self.root, "sprint": m.get("sprint") or cm.get("sprint"), "stack": m.get("stack") or cm.get("stack"),
+                  "layer": layer, "round": int(m.get("round") or 1) + (1 if fix else 0), **pr,
+                  "policy_path": self.config["policy_path"], "reviewers_round1": self.config["reviewers_round1"],
+                  "sprint_bead": m.get("sprint_bead") or "", "carry_forward": checked if fix else "",
+                  "layer_prs": [] if fix else self.layer_prs(checked, pr["pr_number"])}
+        missing = [k for k in ("phase", "sprint", "stack") if not values[k]]
+        if missing:
+            raise Hold(f"no {', '.join(missing)} on the QA bead or its sprint container")
+        return self.config["qa_member"], str(templates / "qa-template.xml.j2"), values
+
+    def qa_gate(self, pr: dict, container: dict) -> int:
+        """The PR's layer when it is the top open layer of its stack (or unstacked on the trunk) and not red."""
+        number = pr["pr_number"]
+        pages = run_json(["gh", "api", "--paginate", "--slurp", "repos/{owner}/{repo}/stacks?per_page=100"], cwd=self.repo)
+        stacks = [s for page in pages for s in page if s.get("open")
+                  and number in {p.get("number") for p in s.get("pull_requests") or []}]
+        if stacks:
+            layers = [p for p in stacks[0].get("pull_requests") or [] if p.get("state") == "open"]
+            if not layers or layers[-1].get("number") != number:
+                raise Hold(f"PR #{number} is not the top of stack #{stacks[0].get('number')}: QA gates the top only")
+            layer = len(stacks[0].get("pull_requests") or [])
+        elif self.trunk and pr["base"] != self.trunk:
+            raise Hold(f"PR #{number} is on no open stack and its base {pr['base']} is not {self.trunk}: link it on the phase stack")
+        else:
+            layer = container.get("layer") or 1
+        runs = run_json(["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{pr['commit']}/check-runs?per_page=100",
+                         "--jq", "[.check_runs[] | {name, conclusion}]"], cwd=self.repo)
+        red = sorted({r["name"] for r in runs if r.get("conclusion") in RED})
+        if red:
+            raise Hold(f"PR #{number} head {pr['commit'][:9]} is red ({', '.join(red)}): the next layer is its fix")
+        return int(layer)
+
+    def assign(self, bead: dict, member: str, template: str, values: dict) -> None:
+        vars_file = self.dir / "vars" / f"{bead['id']}.json"
+        vars_file.parent.mkdir(exist_ok=True)
+        vars_file.write_text(json.dumps(values, indent=1) + "\n")
+        if self.args.dry_run:
+            log("would_dispatch", bead=bead["id"], to=member, template=Path(template).name, vars=str(vars_file))
+            return
+        run(["bd", "update", bead["id"], "--assignee", member])
+        run(self.atm("task", "assign", member, "--task-id", bead["id"], "--template", template, "--vars", str(vars_file)))
+        log("dispatched", bead=bead["id"], to=member, template=Path(template).name, pr=values.get("pr_number"),
+            commit=values.get("commit"))
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="bead-dispatch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    where = p.add_mutually_exclusive_group(required=True)
+    where.add_argument("--phase", help="phase; the root comes from .atm-bd/phase-<phase>.toml")
+    where.add_argument("--root", help="the phase root bead id")
+    p.add_argument("--as", dest="as_actor", help="ATM identity that assigns (default $ATM_IDENTITY, else the repository's lead)")
+    p.add_argument("--team", help="ATM team (default $ATM_TEAM, else [atm].default_team in .atm.toml)")
+    p.add_argument("--interval", type=int, default=60, help="seconds between ticks (default 60)")
+    p.add_argument("--recheck", type=int, default=600, help="seconds before a held candidate is read from GitHub again (default 600)")
+    p.add_argument("--once", action="store_true", help="run one tick and exit")
+    p.add_argument("--dry-run", action="store_true", help="log what would be dispatched; write nothing to bd or ATM")
+    args = p.parse_args(argv)
+    try:
+        repo = repo_config.repo_root()
+        dispatcher = Dispatcher(args, repo)
+    except (repo_config.ConfigError, RuntimeError) as exc:
+        print(f"bead-dispatch: {exc}", file=sys.stderr)
+        return USAGE
+    lock = open(dispatcher.dir / f"{dispatcher.root}.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print(f"bead-dispatch: already running for {dispatcher.root} (lock {lock.name})", file=sys.stderr)
+        return RUNNING
+    lock.write(f"{os.getpid()}\n")
+    lock.flush()
+    while True:
+        try:
+            dispatcher.tick()
+        except (Fail, repo_config.ConfigError) as exc:
+            log("error", error=str(exc))
+            if args.once:
+                print(f"bead-dispatch: {exc}", file=sys.stderr)
+                return FAILED
+        if args.once:
+            return 0
+        try:
+            time.sleep(args.interval)
+        except KeyboardInterrupt:
+            return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

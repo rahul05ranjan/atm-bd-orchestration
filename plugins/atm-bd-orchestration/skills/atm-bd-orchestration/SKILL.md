@@ -1,6 +1,6 @@
 ---
 name: atm-bd-orchestration
-version: 0.16.0
+version: 0.17.0
 description: Bead-driven phase orchestration for the lead. Use when running a phase whose plan is in beads, dispatching from `bd ready` with ATM tasks, and landing it as one gh stack.
 requires:
   cli:
@@ -311,8 +311,8 @@ For each ready bead:
 | --- | --- | --- |
 | plan review (`stage:plan-review`) | [`plan-review-template.xml.j2`](templates/plan-review-template.xml.j2) | quality-mgr |
 | dev (`stage:dev`) | [`dev-template.xml.j2`](templates/dev-template.xml.j2) | the member the lead picks for its `difficulty` |
-| sanity check (`stage:dev-sanity`) | [`dev-sanity-template.xml.j2`](templates/dev-sanity-template.xml.j2) | `.claude/skills/atm-beads/scripts/resolve-role dev-sanity` |
-| QA (`stage:qa`) | [`qa-template.xml.j2`](templates/qa-template.xml.j2) | quality-mgr |
+| sanity check (`stage:dev-sanity`) | [`dev-sanity-template.xml.j2`](templates/dev-sanity-template.xml.j2), sent by `bead-dispatch` | `.claude/skills/atm-beads/scripts/resolve-role dev-sanity` |
+| QA (`stage:qa`) | [`qa-template.xml.j2`](templates/qa-template.xml.j2), sent by `bead-dispatch` (a quick-fix QA by the lead) | quality-mgr |
 | fix (`stage:fix`) | [`fix-assignment.xml.j2`](templates/fix-assignment.xml.j2) | the member the lead picks for its `difficulty` |
 | finding from a quick-fix QA (its `discovered-from` QA bead has `metadata.quick_fix` true) | [`fix-assignment.xml.j2`](templates/fix-assignment.xml.j2), no sanity bead; once every finding from that failed QA has closed, one more quick-fix QA bead (Parallel Quick Fix step 4) | an idle dev picked for its `difficulty`, by priority |
 | important or minor finding (`stage:finding`, no `metadata.sanity_finding`, not from a quick-fix QA) | first `scripts/bead-groups --finding-bead <bead> [--branch <branch>] [--into <sprint>]`: it pours the finding's `fix ← sanity ← qa` group under its sprint container (or `--into`, when a ruling hands it to another sprint's layer), every step on the branch you choose (default `fix/<sprint>-<ref>`; several findings may share one), and closes the finding bead `superseded: poured as <fix bead>`; then [`fix-assignment.xml.j2`](templates/fix-assignment.xml.j2) for the poured fix bead; a minor finding left in the backlog is not poured until it is assigned | an idle dev, by priority |
@@ -344,6 +344,8 @@ Then, on each task close:
 Re-run `bd ready` after every close. Never cache the ready list. The open
 phase root also appears in it; it is never dispatched.
 While phase work is under way, a cron must run `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` every 15 minutes, the only report of what the loop missed; the lead acts on every row it reports. Disable it when phase work is paused or the phase is complete.
+
+While phase work is under way, `.claude/skills/atm-bd-orchestration/scripts/bead-dispatch --phase <x>` runs for the phase's duration (one process per phase, under launchd or in a herdr pane). It assigns every ready sanity check and QA bead with the templates above, from local `bd ready` each minute, and reads GitHub only for a bead it is about to dispatch. A bead it cannot dispatch (no open PR, no worktree, QA not on the stack top, a red check) is announced once to the escalation recipients; the lead fixes the named cause. Dev, fix, plan-review and review dispatch stay with the lead.
 
 Close a sprint container when every child is closed (`bd children <sprint>
 --json | jq -e 'all(.[]; .status == "closed")'`): `bd close <sprint> --reason
