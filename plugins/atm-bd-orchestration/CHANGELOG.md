@@ -4,6 +4,7 @@
 
 ### Fixed
 - `jev_client.py --assignment` can carry evidence that lives outside the repository files (randlee/atm-bd-orchestration#124). A sanity assignment may list `external_evidence` references: `{"kind": "bead_notes", "bead": <id>}`, `{"kind": "pr_body", "repo": "owner/name", "pr": <n>}` or `{"kind": "pr_comment", "repo": "owner/name", "comment_id": <n>}`. The client fetches each one itself (`bd show --json` or `gh api`, from `worktree_path`) and sends it in `state.external_evidence` together with its source (`kind`, `ref`, `url`, `updated_at`, `author`), so the receipt's `request_sha256` also covers it. Before this, the request carried only the deliverable text, the changed-file diff and `context` files, so an evidence-only deliverable was judged without its evidence. A malformed reference or a fetch that fails is a named `VALIDATION.INPUT` error with its fix, before any Jev call. An oversized request that carries external evidence is asked to be rebuilt, not split.
+- `bead-queues` leaves `anchor`-labelled reference beads out of the ready queues (`bd ready --exclude-label anchor`). They stay open for provenance and still block the work that depends on them (#123).
 - `sanity-split` adds the checked bead's notes (when it has any) and, with `--layer-pr`, the checked PR's body to every assignment's `external_evidence`. `dev-sanity-assignment.json.j2` 1.2.0 renders the field (default `[]`).
 
 ## [0.14.0] - 2026-10-11
