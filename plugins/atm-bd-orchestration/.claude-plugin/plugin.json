@@ -1,7 +1,7 @@
 {
   "name": "atm-bd-orchestration",
   "description": "Bead-driven phase orchestration for ATM agent teams: atm-beads (the plan as a beads graph), atm-bd-orchestration (dispatch, dev-sanity, QA and stack landing from bd ready) and sprint-report (status tables and DAGs from live beads), plus the dev-sanity agents they name.",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "author": {
     "name": "randlee"
   },

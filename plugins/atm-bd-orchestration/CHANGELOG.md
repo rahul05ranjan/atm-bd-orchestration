@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.15.0] - 2026-10-14
+
+### Changed
+- `bead-queues` no longer lists closed beads (randlee/atm-bd-orchestration#126). It reads the phase's open beads with one `bd list -l phase-<x> --exclude-label anchor` and one `bd ready` with the same filters, in place of `bd list --all`, which re-read every closed bead of the phase on every run (510 KB for one phase). A closed predecessor is one that is not in the open list, and readiness comes from bd: a sanity check bead closes only on PASS, so a ready QA bead means its sanity passed. The only closed read is one `bd list --status closed --id ...` naming the beads of open ATM tasks that are not in the open list (`task_bead_closed`). The scope is the phase label rather than a parent-child walk, so an open bead under a closed parent is still read. `container_closable` now reports an open `stage:sprint` bead with no open children.
+- `bead-queues` reads the stack from GitHub only with `--stack` (`gh api .../stacks` and `gh stack view --json`). Without it no `gh` command runs and the report says `stack: not checked (--stack reads it)`. The `pr_unlinked` and `stack_incoherent` queues are filled only with `--stack`.
+
+### Removed
+- `bead-queues` queues that need closed beads: `dev_no_pr`, `no_qa_record` and `finding_no_sanity`, and the `--days` look-back they used. The sanity and QA beads poured with each group make these states unreachable through the formulas.
+
 ## [0.14.1] - 2026-10-14
 
 ### Fixed
