@@ -188,3 +188,33 @@ def test_public_operations_accept_an_injected_timeout(fake_bin) -> None:
 
     assert all(isinstance(result, Err) and isinstance(result.error, Timeout) for result in results)
     assert all(result.error.seconds == 1 for result in results if isinstance(result, Err))
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda team: atm_source.members(team),
+        lambda team: atm_source.tasks(team),
+        lambda team: atm_source.send("fenix", "hello", "trinity", team),
+        lambda team: atm_source.assign("aria", "atm-bh-3.group-dev", DispatchSpec("dev.md.j2", {"sprint": "bh-3"}), "trinity", team),
+    ],
+    ids=["members", "tasks", "send", "assign"],
+)
+def test_every_atm_entry_point_passes_the_explicit_team(fake_bin, call) -> None:
+    fake_bin.make("atm", "printf '[]'\n")
+
+    call("atm-dev")
+
+    argv = fake_bin.argv()
+    assert argv
+    assert all(command[command.index("--team") + 1] == "atm-dev" for command in argv)
+
+
+def test_bare_list_members_payload_is_rejected_with_the_members_list_message(fake_bin, monkeypatch) -> None:
+    monkeypatch.setenv("ATM_BODY", '[{"name": "aria", "state": "active"}]')
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+
+    result = atm_source.members("atm-dev")
+
+    assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
+    assert result.error.message == "atm members must contain a members list"
