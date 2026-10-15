@@ -112,3 +112,14 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), None))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
+
+
+def test_headless_lock_failure_is_a_json_error(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run")))
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert '"kind": "error"' in capsys.readouterr().out
