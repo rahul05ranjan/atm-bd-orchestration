@@ -52,6 +52,61 @@ Through `sc-install` (synaptic-canvas): `sc-install install atm-bd-orchestration
 hook, with `--set` values in `options["args"]`. `prepare()` makes every check
 below and writes nothing; `complete()` places, renders and records the files.
 
+## Phase cron
+
+The console's `--headless` option runs one tick and exits. It shares the
+`runner.step` path with the app. The documented invocation is:
+
+```sh
+atm-bd-console --headless --phase bh --as fenix
+```
+
+Create the log directory with `mkdir -p /Users/randlee/Library/Logs`, then
+install this crontab entry to run every 15 minutes on the ATM development host.
+It uses absolute repository, executable, PATH, and log paths; a launch or CLI
+failure is written to the same log and keeps a nonzero exit status.
+
+```cron
+*/15 * * * * /bin/bash -lc 'cd /Users/randlee/github/atm-bd-orchestration || { echo "cannot enter orchestration repo" >&2; exit 72; }; export PATH="/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /Users/randlee/.local/bin/atm-bd-console --headless --phase bh --as fenix; rc=$?; if [ "$rc" -ne 0 ]; then echo "atm-bd-console phase bh failed with exit $rc" >&2; fi; exit "$rc"' >> /Users/randlee/Library/Logs/atm-bd-console-phase-bh.log 2>&1
+```
+
+For Hermes cron, create this script under `~/.hermes/scripts/`. It changes to
+the orchestration repo, sets a cron-safe PATH, checks the executable, and
+propagates any launch or CLI failure. With `--deliver local`, Hermes stores
+stdout and stderr under `~/.hermes/cron/output/<job-id>/<timestamp>.md` and
+records a nonzero run as a failure.
+
+```sh
+mkdir -p ~/.hermes/scripts
+cat > ~/.hermes/scripts/atm-bd-console-bh.sh <<'EOF'
+#!/usr/bin/env bash
+set -u
+repo=/Users/randlee/github/atm-bd-orchestration
+console=/Users/randlee/.local/bin/atm-bd-console
+export PATH=/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+if ! cd "$repo"; then
+  printf 'atm-bd-console cron: cannot enter %s\n' "$repo" >&2
+  exit 72
+fi
+if [ ! -x "$console" ]; then
+  printf 'atm-bd-console cron: executable missing: %s\n' "$console" >&2
+  exit 127
+fi
+"$console" --headless --phase bh --as fenix
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  printf 'atm-bd-console cron: command failed with exit %s\n' "$rc" >&2
+fi
+exit "$rc"
+EOF
+chmod 700 ~/.hermes/scripts/atm-bd-console-bh.sh
+hermes cron create "*/15 * * * *" --no-agent --script atm-bd-console-bh.sh --deliver local --name "atm-bd-console phase-bh"
+```
+
+The examples use `/Users/randlee` and phase lead `fenix`; adjust those paths
+and the lead for the host and phase where the cron runs. Disable either cron
+while that phase is paused or complete.
+
 ## Configuration
 
 The variables are declared once, as the `required_variables` of

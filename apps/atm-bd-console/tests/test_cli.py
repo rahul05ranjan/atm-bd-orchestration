@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from contract_samples import CONFIG, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
@@ -12,6 +15,8 @@ from atm_bd_console import __version__, app, cli
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import INITIAL_STATE
+
+PKG = Path(__file__).resolve().parents[1]
 
 
 def test_missing_as_uses_documented_message(capsys) -> None:
@@ -39,6 +44,41 @@ def test_headless_and_show_do_not_load_textual(tmp_path) -> None:
         capture_output=True, text=True, check=False, cwd=tmp_path,
     )
     assert check.returncode == 0, check.stderr
+
+
+def test_installed_cron_command_runs_one_headless_tick(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    fixtures = PKG / "tests/fixtures/beads/repo"
+    shutil.copytree(fixtures / ".atm-bd", repo / ".atm-bd")
+    shutil.copytree(fixtures / "docs/plans", repo / "docs/plans")
+    (repo / ".claude/project").mkdir(parents=True)
+    shutil.copy2(fixtures / ".claude/project/atm-bd-orchestration.yaml", repo / ".claude/project/atm-bd-orchestration.yaml")
+    (repo / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n', encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name in ("bd", "atm"):
+        executable = fake_bin / name
+        executable.write_text("#!/bin/sh\nprintf '[]\\n'\n", encoding="utf-8")
+        executable.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = os.pathsep.join((str(fake_bin), environment.get("PATH", "")))
+    uv = shutil.which("uv", path=environment["PATH"])
+    assert uv is not None, "uv is required to run the installed console entry point"
+
+    help_result = subprocess.run(
+        [uv, "run", "--project", str(PKG), "atm-bd-console", "--help"],
+        capture_output=True, text=True, check=False, cwd=repo, env=environment,
+    )
+    assert help_result.returncode == 0, help_result.stderr
+    assert "run one tick and exit" in help_result.stdout
+
+    check = subprocess.run(
+        [uv, "run", "--project", str(PKG), "atm-bd-console", "--headless", "--phase", "bh", "--as", "fenix", "--dry-run"],
+        capture_output=True, text=True, check=False, cwd=repo, env=environment,
+    )
+    assert check.returncode == 0, check.stderr + check.stdout
 
 
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:

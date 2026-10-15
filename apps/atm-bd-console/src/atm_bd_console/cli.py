@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--phase"); parser.add_argument("--as", dest="lead")
     parser.add_argument("--github", choices=("graphql", "rest", "off")); parser.add_argument("--interval", type=int)
     parser.add_argument("--dry-run", action="store_true"); parser.add_argument("--no-fetch", action="store_true")
-    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--headless", action="store_true", help="run one tick and exit without starting the app (cron mode)")
     args = parser.parse_args(argv)
     if not args.phase:
         print(f"{CONSOLE_NAME}: --phase <phase> is required; name the phase to run")
