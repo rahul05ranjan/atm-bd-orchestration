@@ -223,6 +223,26 @@ def test_pr_rows_are_layer_ordered_and_only_top_ci_is_a_problem() -> None:
     assert [problem.key for problem in snapshot.problems] == ["top_ci:sha3"]
 
 
+def test_sprint_layer_above_holding_no_step_takes_its_sprint_layer_and_top() -> None:
+    # sprint/bh-3 is a stack layer no step's branch names: its row comes from the sprint, not a step owner.
+    steps = tuple(step(f"dev-{number}", f"atm-bh-{number}", branch=f"branch-{number}", layer=number)
+                  for number in (1, 2))
+    prs = (
+        PullRequest(1, "url1", "sprint/bh-3", "branch-2", "sha3", "success", ()),
+        PullRequest(3, "url3", "branch-2", "branch-1", "sha2", "success", ()),
+        PullRequest(2, "url2", "branch-1", "base", "sha1", "success", ()),
+    )
+    snapshot, _, _ = tick(inputs(
+        phase(*steps, sprints=(sprint(1), sprint(2), sprint(3))), prs=Ok(prs),
+        remotes=Ok(tuple(RemoteRef(item.head, item.head_sha) for item in prs)),
+        gh=GhStatus("graphql", True, None, NOW, False),
+    ), STATE, NOW, render)
+    assert [(row.pr.number, row.layer, row.bead_id, row.top) for row in snapshot.prs] == [
+        (2, 1, "dev-1", False), (3, 2, "dev-2", False), (1, 3, "atm-bh-3", True),
+    ]
+    assert snapshot.top_pr == 1
+
+
 def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     value = phase(step("dev", "atm-bh-1", branch="pushed"))
     base = inputs(value, remotes=Ok((RemoteRef("pushed", "sha"),)))
