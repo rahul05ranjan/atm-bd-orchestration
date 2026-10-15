@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from atm_bd_console.config import load_config
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, Ok
 
@@ -50,3 +52,35 @@ def test_undecodable_console_toml_is_a_typed_io_error(tmp_path) -> None:
     result = load_config(tmp_path, "atm-bh", "fenix")
     assert isinstance(result, Err) and isinstance(result.error, IoFailed)
     assert result.error.path == str(tmp_path / ".atm-bd" / "console.toml")
+
+
+def test_missing_atm_toml_is_a_typed_io_error_naming_the_file(tmp_path) -> None:
+    result = load_config(tmp_path, "atm-bh", "fenix")
+    assert isinstance(result, Err) and isinstance(result.error, IoFailed)
+    assert result.error.path == str(tmp_path / ".atm.toml")
+    assert "restore the repository .atm.toml" in result.error.fix
+
+
+def test_malformed_atm_toml_is_config_invalid_naming_the_file(tmp_path) -> None:
+    (tmp_path / ".atm.toml").write_text("[atm\ndefault_team = ")
+    result = load_config(tmp_path, "atm-bh", "fenix")
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert result.error.key == str(tmp_path / ".atm.toml") and result.error.value
+    assert "correct the repository .atm.toml syntax" in result.error.fix
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("[other]\nx = 1\n", "None"),
+        ('[atm]\ndefault_team = ""\n', "''"),
+        ("[atm]\ndefault_team = 7\n", "7"),
+    ],
+    ids=["absent", "empty", "non-string"],
+)
+def test_absent_empty_or_non_string_default_team_is_config_invalid(tmp_path, text, value) -> None:
+    (tmp_path / ".atm.toml").write_text(text)
+    result = load_config(tmp_path, "atm-bh", "fenix")
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert result.error.key == "atm.default_team" and result.error.value == value
+    assert "set atm.default_team in .atm.toml to a nonempty team name" in result.error.fix
