@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from atm_bd_console import github_source
-from atm_bd_console.result import Err, Rejected, Timeout, Unreachable
+from atm_bd_console.result import Err, Ok, Rejected, Timeout, Unreachable
 
 
 def fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_code: int = 0, stderr: str = "", sleep: int = 0) -> Path:
@@ -45,6 +45,13 @@ def test_graphql_is_one_call_and_maps_rollups(tmp_path, monkeypatch, state, expe
     assert result.value[0].failed_checks == (() if state is None else ("bad",))
     assert status.ok is True and len(calls.read_text().splitlines()) == 4
 
+
+
+@pytest.mark.parametrize(("total", "truncated"), [(101, True), (100, False)])
+def test_graphql_total_count_over_100_sets_truncated(tmp_path, monkeypatch, total, truncated) -> None:
+    fake_gh(tmp_path, monkeypatch, graphql(total=total))
+    result, status = github_source.open_prs("graphql")
+    assert isinstance(result, Ok) and status.ok is True and status.truncated is truncated
 
 def test_rest_truncation_and_off_make_only_the_allowed_calls(tmp_path, monkeypatch) -> None:
     rows = [{"number": i, "html_url": f"https://x/{i}", "head": {"ref": "h", "sha": "s"}, "base": {"ref": "b"}} for i in range(100)]
