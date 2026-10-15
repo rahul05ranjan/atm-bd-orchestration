@@ -25,11 +25,13 @@ class BlockingStep(FakeStep):
         super().__init__(RUNNING)
         self.started = threading.Event()
         self.release = threading.Event()
+        self.completed = threading.Event()
 
     def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
         self.calls.append(force_github)
         self.started.set()
         assert self.release.wait(2), "test must release the blocked step"
+        self.completed.set()
         return self.snapshot, state
 
 
@@ -109,7 +111,9 @@ def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
             await settle(pilot)
             assert step.calls == [False]
             step.release.set()
+            await asyncio.wait_for(asyncio.to_thread(step.completed.wait), timeout=1)
             await settle(pilot)
+            assert step.calls == [False]
 
     run_scenario(scenario())
 
