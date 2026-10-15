@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .ids import short_id
 from .result import Err, Error, NotFound
 from .types import (
     Action,
@@ -33,7 +34,7 @@ def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:
     by_id = {sprint.id: sprint for sprint in phase.sprints}
     if step.sprint_bead in by_id:
         return by_id[step.sprint_bead]
-    by_tag = {sprint.id.removeprefix(f"{bead_prefix}-"): sprint for sprint in phase.sprints}
+    by_tag = {short_id(sprint.id, bead_prefix): sprint for sprint in phase.sprints}
     return by_id.get(step.sprint or "") or by_tag.get(step.sprint or "")
 
 

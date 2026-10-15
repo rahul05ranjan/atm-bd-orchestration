@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from .ids import short_id
 from .result import ConfigInvalid, Err, Error, IoFailed, NotFound, Ok, ParseFailed, Result
 from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoConfig, Sprint, Step, StepKind
 
@@ -245,12 +246,12 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
             return _missing(f"{checked_bead.id}.metadata.{ROUND_KEY}")
         qa_round = checked_bead.metadata[ROUND_KEY] + 1
     top = _top_epic(bead, parents)
-    prefix = (top or bead.id).split("-", 1)[0] + "-"
+    prefix = (top or bead.id).split("-", 1)[0]
     return Ok(Step(
         bead.id, metadata.get(SPRINT_KEY), kind, bool(metadata.get(QUICK_FIX_KEY)), ANCHOR_LABEL in bead.labels,
         bead.status, False, bead.assignee, metadata.get(BRANCH_KEY), metadata.get(PR_TARGET_KEY),
         metadata.get(WORKTREE_KEY), metadata.get(LAYER_KEY), metadata.get(DIFFICULTY_KEY),
-        (top or bead.id).removeprefix(prefix), top, bead.claimed_at, bead.closed_at, bead.title,
+        short_id(top or bead.id, prefix), top, bead.claimed_at, bead.closed_at, bead.title,
         checked, sprint_bead, qa_round, carry,
     ))
 

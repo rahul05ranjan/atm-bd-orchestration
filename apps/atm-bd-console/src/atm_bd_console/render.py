@@ -3,6 +3,7 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 
+from .ids import short_id
 from .result import (
     CommandFailed,
     ConfigInvalid,
@@ -69,10 +70,6 @@ def _icon(row: Row) -> str:
     return "📥"
 
 
-def _bead_id(value: str, prefix: str) -> str:
-    return value.removeprefix(f"{prefix}-")
-
-
 def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     glyph, color = _STATUSES[agent.status]
     heading = Text()
@@ -89,7 +86,7 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     lines = [heading]
     rows = sorted(agent.rows, key=lambda row: row.state != "running")
     for row in rows[:3]:
-        bead_id = _bead_id(row.task_id, prefix)
+        bead_id = short_id(row.task_id, prefix)
         line = Text(f" {_icon(row)} {bead_id}")
         line.append(" " * max(1, 22 - cell_len(bead_id)))
         line.append(f"{_age(row.age_s):>4} ")
@@ -133,7 +130,7 @@ def _pr_link(line: Text, number: int, snapshot: Snapshot) -> None:
 
 
 def _sent_line(action: Action, snapshot: Snapshot) -> Text:
-    beads = ", ".join(_bead_id(bead_id, snapshot.bead_prefix) for bead_id in action.bead_ids)
+    beads = ", ".join(short_id(bead_id, snapshot.bead_prefix) for bead_id in action.bead_ids)
     line = Text(f" {_clock(action.at)} {beads} → {action.to}")
     matching = next((row for row in snapshot.prs if row.bead_id in action.bead_ids), None)
     if matching:
@@ -159,7 +156,7 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
             continue
         lines.extend((Text(), Text(f"== {section.label} ({len(section.rows)})")))
         for row in section.rows:
-            line = Text(f"  {_bead_id(row.bead_id, snapshot.bead_prefix):<22} {_age(row.age_s):>4}  {row.reason}")
+            line = Text(f"  {short_id(row.bead_id, snapshot.bead_prefix):<22} {_age(row.age_s):>4}  {row.reason}")
             if row.pr is not None:
                 _pr_link(line, row.pr, snapshot)
             lines.append(line)

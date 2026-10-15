@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rich.text import Text
 
+from .ids import short_id
 from .types import PrRow, Snapshot
 
 
@@ -11,7 +12,7 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
     line.append(f"  {value.pr.head} → {value.pr.base}")
     line.append(f"  L{value.layer}" if value.layer is not None else "  L—")
     if value.bead_id:
-        line.append(f"  {value.bead_id.removeprefix(f'{snapshot.bead_prefix}-')}")
+        line.append(f"  {short_id(value.bead_id, snapshot.bead_prefix)}")
     if value.merge is None:
         line.append("  merge —")
     elif value.merge.state == "clean":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 
+from .ids import short_id
 from .result import CommandFailed, Error, NotFound, Timeout
 from .types import Snapshot, SprintView
 
@@ -21,7 +22,7 @@ def _fallback(snapshot: Snapshot) -> str:
     ordered = sorted(enumerate(snapshot.sprints), key=lambda item: (depth(item[1]), item[0]))
     lines: list[str] = []
     for _, sprint in ordered:
-        sprint_id = sprint.id.removeprefix(f"{snapshot.bead_prefix}-")
+        sprint_id = short_id(sprint.id, snapshot.bead_prefix)
         current = next((step for step in sprint.steps if step.status == "in_progress"), None)
         if current is None and sprint.state == "ready":
             current = next((step for step in sprint.steps if step.status == "open"), None)
@@ -29,7 +30,7 @@ def _fallback(snapshot: Snapshot) -> str:
         if current is not None:
             line += f"  {current.kind}: {current.assignee or 'unassigned'}"
         elif sprint.depends_on:
-            dependencies = " ".join(value.removeprefix(f"{snapshot.bead_prefix}-") for value in sprint.depends_on)
+            dependencies = " ".join(short_id(value, snapshot.bead_prefix) for value in sprint.depends_on)
             line += f"  ← {dependencies}"
         lines.append(line)
     return "\n".join(lines)
