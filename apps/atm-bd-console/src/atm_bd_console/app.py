@@ -63,13 +63,12 @@ class ConsoleApp(App[int]):
         Binding("ctrl+q", "noop", show=False, priority=True),
     ]
 
-    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None, store=None) -> None:
+    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> None:
         super().__init__()
         self.config = config
         self.step = step
         self.state = state
         self.startup_error = startup_error
-        self.store = store
         self.snapshot: Snapshot | None = None
         self.status_text = ""
         self.status_error: Error | None = None
@@ -113,7 +112,7 @@ class ConsoleApp(App[int]):
     def tick(self, force_github: bool) -> None:
         try:
             with self._step_lock:
-                snapshot, state = self.step(self.config, self.state, force_github, self.store)
+                snapshot, state = self.step(self.config, self.state, force_github)
                 self.state = state
                 text, error = status.status_text(snapshot)
         except Exception as error:  # noqa: BLE001
@@ -186,5 +185,5 @@ def run(config: Config, step: StepFn, state: State, startup_error: Error | None 
         print(_lock_message(lock.error), file=sys.stderr)
         return 1
     with lock.value:
-        result = ConsoleApp(config, step, state, startup_error, lock.value).run()
+        result = ConsoleApp(config, step, state, startup_error).run()
     return result or 0

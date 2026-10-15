@@ -21,7 +21,7 @@ class FakeStep:
         self.snapshot = snapshot
         self.calls: list[bool] = []
 
-    def __call__(self, config: Config, state: State, force_github: bool, _store=None) -> tuple[Snapshot, State]:
+    def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
         self.calls.append(force_github)
         return self.snapshot, state
 
