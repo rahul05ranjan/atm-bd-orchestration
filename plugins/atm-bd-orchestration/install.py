@@ -105,6 +105,14 @@ PLACEHOLDER_RE = re.compile(r"\{\{ (" + "|".join(RENDER_VARIABLES) + r") \}\}")
 # the atm-bd-orchestration skill.
 RETIRED_REPO_FILES = {"scripts/jev_client.py": "assets/scripts/jev_client.py"}
 
+REQUIRED_CONSOLE_VERSION = "0.1.0"
+REQUIRED_MMDFLUX_VERSION = "2.6.1"
+CONSOLE_INSTALL = (
+    "uv tool install "
+    "git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console"
+)
+MMDFLUX_INSTALL = "brew install kevinswiber/mmdflux/mmdflux or cargo install mmdflux"
+
 
 class InstallError(RuntimeError):
     """An install refusal; the message names what to fix."""
@@ -177,6 +185,26 @@ def sc_compose_upgrade(pkg_dir: Path = PKG_DIR) -> str:
     return (f"python3 -m pip install 'sc-compose>={floor},<{ceiling}' and "
             f"brew upgrade randlee/tap/sc-compose (or cargo install sc-compose --version '>={floor}, <{ceiling}' --locked), "
             "the CLI and wheel at the same version")
+
+
+def _version_parts(text: str) -> Optional[Tuple[int, int, int]]:
+    match = re.search(r"\b([0-9]+)\.([0-9]+)\.([0-9]+)\b", text)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def _check_required_tool(name: str, required: str, install_command: str) -> None:
+    if shutil.which(name) is None:
+        raise InstallError(f"{name} is not on PATH; install it with: {install_command}")
+    probe = subprocess.run([name, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    reported = (probe.stdout or probe.stderr).strip()
+    if probe.returncode != 0:
+        raise InstallError(f"{name} --version failed: {reported or 'no output'}; install it with: {install_command}")
+    actual, floor = _version_parts(reported), _version_parts(required)
+    if actual is None:
+        raise InstallError(f"{name} --version did not report a semantic version: {reported or 'no output'}; install it with: {install_command}")
+    assert floor is not None
+    if actual < floor:
+        raise InstallError(f"{name} is {'.'.join(map(str, actual))}, older than required {required}; install it with: {install_command}")
 
 
 def config_variables(pkg_dir: Path = PKG_DIR) -> List[str]:
@@ -399,6 +427,8 @@ def check_tools() -> None:
     if wheel_version != cli_version:
         raise InstallError(f"the sc-compose CLI is {cli_version} and the python3 wheel is {wheel_version}; they must "
                            f"be the same version; install {sc_compose_upgrade()} and rerun")
+    _check_required_tool("atm-bd-console", REQUIRED_CONSOLE_VERSION, CONSOLE_INSTALL)
+    _check_required_tool("mmdflux", REQUIRED_MMDFLUX_VERSION, MMDFLUX_INSTALL)
 
 
 def check_beads_server_mode(repo_root: Path) -> None:

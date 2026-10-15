@@ -83,7 +83,7 @@ def test_config_template_declares_exactly_the_spec_variables_without_defaults():
 
 def test_versions_agree():
     version = install.package_version(PKG)
-    assert version == "0.15.0"
+    assert version == "0.16.0"
     assert json.loads((PKG / ".claude-plugin/plugin.json").read_text())["version"] == version
     assert f"## [{version}]" in (PKG / "CHANGELOG.md").read_text()
 
@@ -92,7 +92,9 @@ def test_versions_agree():
 def shim_sc_compose(bin_dir: Path, cli: str, wheel: str) -> None:
     """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
     bin_dir.mkdir(exist_ok=True)
-    for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel)):
+    for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel),
+                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}"),
+                      ("mmdflux", f"mmdflux {install.REQUIRED_MMDFLUX_VERSION}")):
         (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
         (bin_dir / name).chmod(0o755)
 
@@ -116,6 +118,27 @@ def test_check_tools_accepts_one_sc_compose_version_in_the_range(tmp_path, monke
         install.check_tools()
     assert refusal in str(caught.value)
     assert "python3 -m pip install 'sc-compose>=1.7.0,<2'" in str(caught.value)
+
+
+@pytest.mark.parametrize(("tool", "reported", "expected"), [
+    ("atm-bd-console", None, "uv tool install"),
+    ("atm-bd-console", "atm-bd-console 0.0.9", "older than required 0.1.0"),
+    ("mmdflux", None, "brew install kevinswiber/mmdflux/mmdflux"),
+    ("mmdflux", "mmdflux 2.6.0", "older than required 2.6.1"),
+])
+def test_check_tools_requires_current_console_and_mmdflux(tmp_path, monkeypatch, tool, reported, expected):
+    bin_dir = tmp_path / "bin"
+    shim_sc_compose(bin_dir, "1.7.0", "1.7.0")
+    path = bin_dir / tool
+    if reported is None:
+        path.unlink()
+    else:
+        path.write_text(f"#!/bin/sh\necho '{reported}'\n")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    with pytest.raises(install.InstallError, match=expected):
+        install.check_tools()
 
 
 def test_the_manifest_requires_sc_compose_from_1_7_0_below_2():
@@ -296,7 +319,7 @@ def test_fresh_install(tmp_path, capsys):
     assert config["reviewers_round1"] == ["req-qa", "arch-qa"]
     # the install record: version and the sha256 of every file written
     record = lock(repo)
-    assert record["package"] == "atm-bd-orchestration" and record["version"] == "0.15.0"
+    assert record["package"] == "atm-bd-orchestration" and record["version"] == "0.16.0"
     expected = {f".claude/{rel}" for rel in artifacts["skills"] + artifacts["agents"]} | {install.CONFIG_OUT}
     assert set(record["files"]) == expected
     assert all(sha((repo / k).read_bytes()) == v for k, v in record["files"].items())
@@ -589,7 +612,7 @@ def test_migration_owns_shipped_and_legacy_bytes_and_fails_on_others(tmp_path, p
     assert rc == 0, err
     assert (repo / ".claude" / script).read_bytes() == (PKG / script).read_bytes()
     assert not (repo / ".claude" / dropped).exists()
-    assert lock(repo)["version"] == "0.15.0"
+    assert lock(repo)["version"] == "0.16.0"
 
 
 def _git_has(rev: str) -> bool:
