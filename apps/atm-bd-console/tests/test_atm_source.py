@@ -50,8 +50,10 @@ def test_tasks_preserve_position_and_use_updated_at_for_state_since(fake_bin, mo
     assert fake_bin.argv() == [("atm", "task", "list", "--all", "--json", "--team", "atm-dev")]
 
 
-def test_tasks_rejects_recorded_closed_state(fake_bin, monkeypatch) -> None:
-    monkeypatch.setenv("ATM_BODY", _fixture("tasks-closed.json"))
+def test_tasks_rejects_a_complete_state_as_unknown(fake_bin, monkeypatch) -> None:
+    # Closed rows never appear in `atm task list` output (its help: the caller's open tasks), so a complete state is an unknown state here.
+    body = '[{"task_id": "t", "assignee": "aria", "state": "complete", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]'
+    monkeypatch.setenv("ATM_BODY", body)
     fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
 
     result = atm_source.tasks("atm-dev")
