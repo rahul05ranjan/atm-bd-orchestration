@@ -34,6 +34,14 @@ class Store:
     def write_snapshot(self, _value): return Ok(None)
 
 
+@pytest.fixture(autouse=True)
+def isolate_console_logger(monkeypatch: pytest.MonkeyPatch):
+    class Logger:
+        def event(self, _action, **_fields): return Ok(None)
+
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
+
+
 @pytest.fixture
 def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """A runner fixture with no live sources and observable writes/logging."""
