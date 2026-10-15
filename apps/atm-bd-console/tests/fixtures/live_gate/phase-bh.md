@@ -33,6 +33,10 @@ tmux send-keys -t bh10r3clean q                                      # quit
 
 No tab switch occurred after PRs activation.
 
+The verbatim pane captures from this one `08:09` session are retained in
+`raw/bh10-0810-dispatch.txt`, `raw/bh10-0810-status.txt`, and
+`raw/bh10-0810-prs.txt` for direct comparison.
+
 ## Dispatch tab
 
 ```text
