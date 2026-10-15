@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -17,6 +19,14 @@ def test_missing_as_uses_documented_message(capsys) -> None:
 def test_missing_phase_is_a_launch_check(capsys) -> None:
     assert cli.main([]) == 3
     assert "--phase <phase> is required" in capsys.readouterr().out
+
+
+def test_cli_import_does_not_load_textual() -> None:
+    check = subprocess.run(
+        [sys.executable, "-c", "import sys; import atm_bd_console.cli; assert 'textual' not in sys.modules"],
+        capture_output=True, text=True, check=False,
+    )
+    assert check.returncode == 0, check.stderr
 
 
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
