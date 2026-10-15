@@ -23,11 +23,11 @@ def _run(argv: list[str], stdin: str | None = None, timeout_s: int | None = None
     try:
         done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False, timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        return Err(Timeout("timeout", tuple(argv), timeout_s, "retry the ATM command"))
+        return Err(Timeout("timeout", tuple(argv), timeout_s, f"rerun `{' '.join(argv)}`, or pass a larger timeout"))
     except (OSError, UnicodeDecodeError) as error:
-        return Err(Unreachable("unreachable", tuple(argv), str(error), "install atm and check PATH"))
+        return Err(Unreachable("unreachable", tuple(argv), str(error), f"install the atm CLI and put it on PATH, then rerun `{' '.join(argv)}`"))
     if done.returncode:
-        return Err(CommandFailed("command_failed", tuple(argv), done.returncode, done.stderr, "inspect ATM output"))
+        return Err(CommandFailed("command_failed", tuple(argv), done.returncode, done.stderr, f"run `{' '.join(argv)}` by hand and read its stderr"))
     return Ok(done.stdout)
 
 
@@ -42,35 +42,37 @@ def _time(value: object) -> datetime | None:
 def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, ...]]:
     result = _run(["atm", "members", "--team", team, "--json"], timeout_s=timeout_s)
     if isinstance(result, Err): return result
+    fix = f"rerun `atm members --team {team} --json` and check it prints a JSON list of member objects"
     try:
         items = json.loads(result.value)
         if not isinstance(items, list):
-            return Err(ParseFailed("parse_failed", "atm members", "atm members must be a list", "repair ATM JSON"))
+            return Err(ParseFailed("parse_failed", "atm members", "atm members must be a list", fix))
         times = tuple(_time(item["state_changed_at"]) for item in items)
         if None in times:
-            return Err(ParseFailed("parse_failed", "atm members", "atm member timestamps must be ISO-8601 with a UTC offset", "repair ATM JSON"))
+            return Err(ParseFailed("parse_failed", "atm members", "atm member timestamps must be ISO-8601 with a UTC offset", fix))
         return Ok(tuple(Member(item["name"], item.get("state") if item.get("state") in {"active", "idle", "offline", "blocked"} else "unknown", time) for item, time in zip(items, times)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        return Err(ParseFailed("parse_failed", "atm members", str(error), "repair ATM JSON"))
+        return Err(ParseFailed("parse_failed", "atm members", str(error), fix))
 
 
 def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]]:
     result = _run(["atm", "task", "list", "--all", "--json", "--team", team], timeout_s=timeout_s)
     if isinstance(result, Err): return result
+    fix = f"rerun `atm task list --all --json --team {team}` and check it prints a JSON list of task objects"
     try:
         items = json.loads(result.value)
         if not isinstance(items, list):
-            return Err(ParseFailed("parse_failed", "atm tasks", "atm tasks must be a list", "repair ATM JSON"))
+            return Err(ParseFailed("parse_failed", "atm task list", "atm task list must be a list", fix))
         if any(not isinstance(item, dict) or not TASK_KEYS <= item.keys() for item in items):
-            return Err(ParseFailed("parse_failed", "atm tasks", f"atm tasks must include {sorted(TASK_KEYS)}", "repair ATM JSON"))
+            return Err(ParseFailed("parse_failed", "atm task list", f"atm task list must include {sorted(TASK_KEYS)}", fix))
         if any(item["state"] not in TASK_STATES for item in items):
-            return Err(ParseFailed("parse_failed", "atm tasks", f"atm task states must be one of {sorted(TASK_STATES)}", "repair ATM JSON"))
+            return Err(ParseFailed("parse_failed", "atm task list", f"atm task states must be one of {sorted(TASK_STATES)}", fix))
         times = tuple((_time(item["assigned_at"]), _time(item["updated_at"])) for item in items)
         if any(None in pair for pair in times):
-            return Err(ParseFailed("parse_failed", "atm tasks", "atm task timestamps must be ISO-8601 with a UTC offset", "repair ATM JSON"))
+            return Err(ParseFailed("parse_failed", "atm task list", "atm task timestamps must be ISO-8601 with a UTC offset", fix))
         return Ok(tuple(Task(item["id"], item["agent"], item["state"], index, assigned, updated, item["description"]) for index, (item, (assigned, updated)) in enumerate(zip(items, times))))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        return Err(ParseFailed("parse_failed", "atm tasks", str(error), "repair ATM JSON"))
+        return Err(ParseFailed("parse_failed", "atm task list", str(error), fix))
 
 
 def send(to: str, text: str, as_: str, *, timeout_s: int | None = None) -> Result[None]:

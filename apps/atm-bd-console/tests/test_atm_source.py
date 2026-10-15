@@ -57,7 +57,7 @@ def test_tasks_rejects_recorded_closed_state(fake_bin, monkeypatch) -> None:
     result = atm_source.tasks("atm-dev")
 
     assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
-    assert result.error.source == "atm tasks"
+    assert result.error.source == "atm task list"
 
 
 @pytest.mark.parametrize(
@@ -66,8 +66,8 @@ def test_tasks_rejects_recorded_closed_state(fake_bin, monkeypatch) -> None:
         ("members", '[{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00"}]', "atm members"),
         ("members", '[{"name": "aria", "state": "active", "state_changed_at": null}]', "atm members"),
         ("members", '{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"}', "atm members"),
-        ("tasks", '[{"id": "t", "agent": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]', "atm tasks"),
-        ("tasks", '[{"id": "t", "agent": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": null, "description": ""}]', "atm tasks"),
+        ("tasks", '[{"id": "t", "agent": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]', "atm task list"),
+        ("tasks", '[{"id": "t", "agent": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": null, "description": ""}]', "atm task list"),
     ],
 )
 def test_naive_null_and_non_list_timestamps_are_rejected_not_read_as_local(fake_bin, monkeypatch, command, body, source) -> None:
@@ -78,6 +78,17 @@ def test_naive_null_and_non_list_timestamps_are_rejected_not_read_as_local(fake_
 
     assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
     assert result.error.source == source
+
+
+def test_err_fixes_name_the_command_to_run(fake_bin, monkeypatch) -> None:
+    fake_bin.make("atm", "exit 3\n")
+    failed = atm_source.members("atm-dev")
+    monkeypatch.setenv("ATM_BODY", "{}")
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+    parse_failed = atm_source.tasks("atm-dev")
+
+    assert isinstance(failed, Err) and "atm members --team atm-dev --json" in failed.error.fix
+    assert isinstance(parse_failed, Err) and "atm task list --all --json --team atm-dev" in parse_failed.error.fix
 
 
 def test_send_and_assign_use_exact_argv_stdin_and_temporary_vars_file(fake_bin, monkeypatch, tmp_path) -> None:
@@ -132,7 +143,7 @@ def test_missing_atm_binary_is_a_typed_error(tmp_path, monkeypatch) -> None:
 
     assert isinstance(result, Err) and isinstance(result.error, Unreachable)
     assert result.error.argv == ("atm", "members", "--team", "atm-dev", "--json")
-    assert result.error.fix == "install atm and check PATH"
+    assert result.error.fix == "install the atm CLI and put it on PATH, then rerun `atm members --team atm-dev --json`"
 
 
 def test_decode_error_is_a_typed_error(monkeypatch) -> None:
