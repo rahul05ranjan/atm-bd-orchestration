@@ -105,7 +105,7 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
         if tag.plain:
             line.append_text(tag)
             line.append(": ")
-        line.append(row.description)
+        line.append(" ".join(row.description.split()))
         lines.append(line)
     if len(rows) > 3:
         lines.append(Text(f" … +{len(rows) - 3} more"))

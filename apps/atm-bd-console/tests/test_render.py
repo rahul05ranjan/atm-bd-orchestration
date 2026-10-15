@@ -139,6 +139,25 @@ def test_long_titles_with_wide_chars_and_emoji_clip_at_80_and_120() -> None:
     assert any("💎" in line for line in dashboard(value, 120, 40).plain.splitlines())
 
 
+@pytest.mark.parametrize("width", (80, 120, 240))
+def test_multiline_task_description_stays_on_one_width_fitted_row(width: int) -> None:
+    description = "\n<review>\n  Inspect\t界 branch\r\n  and  report findings.\n</review>\n" + "detail " * 20
+    task_row = replace(row("atm-review", "running", "sprint_qa", None, 45), description=description)
+    value = replace(snapshot(), agents=(AgentView("reviewer", "busy", NOW, 1, (task_row,)),),
+                    errors=(), sections=(), sent=())
+
+    lines = dashboard(value, width, 40).plain.splitlines()
+
+    assert len(lines) == 4
+    assert all(cell_len(line) <= width for line in lines)
+    assert "<review> Inspect 界 branch" in lines[3]
+    assert "\t" not in lines[3]
+    if width < 240:
+        assert lines[3].endswith("…")
+    else:
+        assert lines[3].endswith("<review> Inspect 界 branch and report findings. </review> " + "detail " * 19 + "detail")
+
+
 def test_status_bar_formats_and_cell_width() -> None:
     value = replace(snapshot(), metrics=Metrics(3, 9, 33, 14 * 3600 + 20 * 60),
                     gh=GhStatus("graphql", True, None, NOW, False))
