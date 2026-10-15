@@ -34,9 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.phase:
         print(f"{CONSOLE_NAME}: --phase <phase> is required; name the phase to run")
         return 3
+    repo_root = Path.cwd()
     root_id = f"atm-phase-{args.phase}"
     if args.command == "show":
-        snapshot = load_snapshot(Path.cwd(), root_id)
+        snapshot = load_snapshot(repo_root, root_id)
         if isinstance(snapshot, Ok) and (snapshot.value.stopped is not None or not snapshot_stale(snapshot.value, datetime.now(UTC))):
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
@@ -47,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not args.lead:
         print(MISSING_AS); return 3
-    loaded = config_source.load_config(Path.cwd(), args.phase, args.lead, github=args.github, interval_s=args.interval, dry_run=args.dry_run or args.command == "snapshot", no_fetch=args.no_fetch)
+    loaded = config_source.load_config(repo_root, args.phase, args.lead, github=args.github, interval_s=args.interval, dry_run=args.dry_run or args.command == "snapshot", no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{CONSOLE_NAME}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     for check in (atm_bd.phase_file(loaded.value.repo_root, args.phase), atm_bd.repo_config(loaded.value.repo_root)):
         if isinstance(check, Err): print(f"{CONSOLE_NAME}: {check.error.kind}: {check.error.fix}"); return 3
