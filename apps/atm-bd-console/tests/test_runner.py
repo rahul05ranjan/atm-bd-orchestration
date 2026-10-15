@@ -86,6 +86,28 @@ def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
     assert snapshot.root_closed and snapshot.stopped == "closed"
 
 
+def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
+    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
+    writes, events = [], []
+
+    class Store:
+        directory = tmp_path
+        def write_state(self, value): writes.append(("state", value)); return Ok(None)
+        def write_snapshot(self, value): writes.append(("snapshot", value)); return Ok(None)
+
+    class Logger:
+        def event(self, action, **fields): events.append((action, fields)); return Ok(None)
+
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
+    snapshot, next_state = runner.step(CONFIG, STATE, False, Store())
+    assert [name for name, _ in writes] == ["state", "snapshot"]
+    assert writes[0][1] == next_state and writes[1][1] == snapshot
+    assert ("tick_end", {"actions": 0}) in events
+
+
 def test_github_off_never_calls_github(monkeypatch) -> None:
     monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (_ for _ in ()).throw(AssertionError("github")))
     # A malformed phase prevents due scheduling and is sufficient to exercise
