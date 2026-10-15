@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         with lock.value:
             snapshot, _ = runner.step(loaded.value, state, False, lock.value)
         if args.headless and snapshot.stopped is None:
-            for action in snapshot.sent:
+            for action in (item for item in snapshot.sent if item.at == snapshot.generated_at):
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text}))
             for error in snapshot.errors:
                 print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
