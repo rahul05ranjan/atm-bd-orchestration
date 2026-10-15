@@ -14,8 +14,8 @@ jobs:
     env:
       SC_COMPOSE_VERSION: "1.7.0"
       SC_COMPOSE_SHA256: 5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84
-      UV_TOOL_DIR: ${{ runner.temp }}/console-tools
-      UV_TOOL_BIN_DIR: ${{ runner.temp }}/console-bin
+      UV_TOOL_DIR: ${{ github.workspace }}/../console-tools
+      UV_TOOL_BIN_DIR: ${{ github.workspace }}/../console-bin
     strategy:
       fail-fast: false
       matrix:

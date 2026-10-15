@@ -137,6 +137,15 @@ def test_ci_covers_minimum_latest_and_installed_cron_smoke() -> None:
     assert "tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick" in console
 
 
+def test_ci_job_tool_paths_use_a_supported_context() -> None:
+    workflow = (PKG.parents[1] / ".github/workflows/tests.yml").read_text()
+    console = workflow.split("  console-tests:\n", 1)[1].split("\n  package-tests:", 1)[0]
+    job_environment = console.split("    env:\n", 1)[1].split("    strategy:\n", 1)[0]
+    assert "${{ runner." not in job_environment
+    assert "UV_TOOL_DIR: ${{ github.workspace }}/../console-tools" in job_environment
+    assert "UV_TOOL_BIN_DIR: ${{ github.workspace }}/../console-bin" in job_environment
+
+
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
     clock = datetime(2026, 10, 15, tzinfo=UTC)
     monkeypatch.setattr(cli, "now", lambda: clock)
