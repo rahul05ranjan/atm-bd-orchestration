@@ -175,3 +175,19 @@ def test_stopped_lines_and_age_boundaries() -> None:
             assert dashboard(value, 80, 10).plain.splitlines()[1] == expected
 
     pacific_test(check)
+
+
+def test_running_contract_snapshot_renders_its_rows_unmodified() -> None:
+    decoded = from_json(Snapshot, (FIXTURES / "contract" / "snapshot-running.json").read_text())
+    assert isinstance(decoded, Ok)
+    rendered = dashboard(decoded.value, 120, 40).plain
+
+    assert rendered.splitlines()[0].startswith("phase-bh ·")
+    assert "● arch-ctm  2 ⚠️1" in rendered
+    assert "bh-6                    7m ⚠️bh-6: QA bh-6 round 2" in rendered
+    assert "== Errors (2)" in rendered
+    assert "command_failed: gh api graphql (exit 1): HTTP 502" in rendered
+    assert "lock_held: snapshot age 42s" in rendered
+    assert "== Blocked (1)" in rendered
+    assert "CI failing on the top layer PR #1850" in rendered
+    assert "bh-6.qa → quality-mgr" in rendered
