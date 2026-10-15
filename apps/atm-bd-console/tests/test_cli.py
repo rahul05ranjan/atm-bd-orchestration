@@ -79,14 +79,18 @@ def test_show_uses_the_configured_repository_root(monkeypatch, capsys, tmp_path)
 
 
 def test_show_stopped_idle_skips_staleness(monkeypatch, capsys) -> None:
-    stale_idle = replace(SNAPSHOT, stopped="idle", generated_at=SNAPSHOT.generated_at.replace(year=2000))
+    clock = datetime(2026, 10, 15, tzinfo=UTC)
+    monkeypatch.setattr(cli, "now", lambda: clock)
+    stale_idle = replace(SNAPSHOT, stopped="idle", generated_at=clock.replace(year=2000))
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(stale_idle))
     assert cli.main(["show", "--phase", "bh"]) == 0
     assert "stopped: idle" in capsys.readouterr().out
 
 
 def test_show_stale_and_missing_snapshot_report_not_running(monkeypatch, capsys) -> None:
-    stale = replace(SNAPSHOT, stopped=None, generated_at=SNAPSHOT.generated_at.replace(year=2000))
+    clock = datetime(2026, 10, 15, tzinfo=UTC)
+    monkeypatch.setattr(cli, "now", lambda: clock)
+    stale = replace(SNAPSHOT, stopped=None, generated_at=clock.replace(year=2000))
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(stale))
     assert cli.main(["show", "--phase", "bh"]) == 2
     assert "last tick" in capsys.readouterr().out
@@ -107,6 +111,9 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "load_state", lambda *_: Err(NotFound("not_found", "state", "run")))
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
     monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="idle"), None))
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed"), None))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert capsys.readouterr().out == ""
     monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), None))
