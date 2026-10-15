@@ -156,7 +156,7 @@ def test_each_error_kind_round_trips_inside_result() -> None:
         NotFound("not_found", "bead", "create it"),
         ConfigInvalid("config_invalid", "mode", "bad", "correct config"),
         LockHeld("lock_held", None, "wait"),
-        IoFailed("io_failed", "/tmp/state", "denied", "repair permissions"),
+        IoFailed("io_failed", "state.json", "denied", "repair permissions"),
     )
     for error in errors:
         assert from_json(Err, to_json(Err(error))) == Ok(Err(error))
