@@ -129,3 +129,21 @@ def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: Err(COMMAND_FAILED))
     errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at)
     assert errors == (COMMAND_FAILED,)
+
+
+def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
+    fake_bin.make("atm", 'printf "{}"\n')
+    config = replace(CONFIG, lead="fenix", team="atm-dev", github="off", repo_root=str(tmp_path))
+
+    runner.step(config, STATE, True)
+
+    argv = fake_bin.argv()
+    assert ("atm", "members", "--team", "atm-dev", "--json") in argv
+    assert ("atm", "task", "list", "--all", "--json", "--team", "atm-dev") in argv
+    assert all(command[command.index("--team") + 1] != "fenix" for command in argv if "--team" in command)
