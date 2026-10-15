@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from .dispatch import candidates, dispatch
+from .dispatch import candidates, dispatch, sprint_of
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -32,20 +32,20 @@ CYCLE = timedelta(minutes=10)
 IDLE_STOP = timedelta(minutes=60)
 
 
-def due(state: State, phase: Phase, github_mode: str, now: datetime) -> Due:
+def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime) -> Due:
     cycle_due = state.last_cycle is None or now - state.last_cycle >= CYCLE
     ready = tuple(step for step in candidates(phase, ()) if step.ready)
     pushed = {remote.branch for remote in state.remotes}
     fetch = cycle_due or any(step.branch not in pushed for step in ready)
     pairs: list[tuple[str, str]] = []
     for step in phase.steps:
-        target = _target(step, phase)
+        target = _target(step, phase, bead_prefix)
         if step.branch and target and step.branch in pushed and cycle_due:
             pair = (step.branch, target)
             if pair not in pairs:
                 pairs.append(pair)
     for step in ready:
-        target = _target(step, phase)
+        target = _target(step, phase, bead_prefix)
         if step.branch and target:
             pair = (step.branch, target)
             if pair not in pairs:
@@ -53,11 +53,10 @@ def due(state: State, phase: Phase, github_mode: str, now: datetime) -> Due:
     return Due(fetch, tuple(pairs), cycle_due and github_mode != "off")
 
 
-def _target(step: Step, phase: Phase) -> str | None:
+def _target(step: Step, phase: Phase, bead_prefix: str) -> str | None:
     if step.target:
         return step.target
-    sprint = next((sprint for sprint in phase.sprints if sprint.id == step.sprint_bead or sprint.id == step.sprint
-                   or (step.sprint is not None and sprint.id.endswith(f"-{step.sprint}"))), None)
+    sprint = sprint_of(step, phase, bead_prefix)
     return sprint.target if sprint else None
 
 
@@ -211,7 +210,7 @@ def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintVi
     lines = ["graph TD"]
     icons = {"closed": "✅", "in_progress": "🌀", "ready": "📥", "not_ready": "⏳"}
     for sprint in phase.sprints:
-        steps = tuple(step for step in phase.steps if step.sprint in (sprint.id, sprint.id.removeprefix(f"{bead_prefix}-")))
+        steps = tuple(step for step in phase.steps if sprint_of(step, phase, bead_prefix) == sprint)
         state = "closed" if sprint.closed else (
             "in_progress" if any(step.status == "in_progress" for step in steps) else (
                 "ready" if any(step.ready for step in steps) else "not_ready"

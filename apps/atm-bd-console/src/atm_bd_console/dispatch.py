@@ -14,6 +14,7 @@ from .types import (
     RepoConfig,
     SectionRow,
     SpecFn,
+    Sprint,
     Step,
     Task,
     Worktree,
@@ -25,6 +26,15 @@ class DispatchOutcome:
     actions: tuple[Action, ...]
     held: tuple[SectionRow, ...]
     errors: tuple[Error, ...]
+
+
+def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:
+    """The sprint a step belongs to: its sprint bead id, else its sprint tag as the id with or without the prefix."""
+    by_id = {sprint.id: sprint for sprint in phase.sprints}
+    if step.sprint_bead in by_id:
+        return by_id[step.sprint_bead]
+    by_tag = {sprint.id.removeprefix(f"{bead_prefix}-"): sprint for sprint in phase.sprints}
+    return by_id.get(step.sprint or "") or by_tag.get(step.sprint or "")
 
 
 def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
@@ -51,14 +61,12 @@ def dispatch(
     remote_by_branch = {remote.branch: remote.sha for remote in remotes}
     merge_by_pair = {(merge.branch, merge.target): merge for merge in merges}
     pr_by_branch = {pr.head: pr for pr in prs}
-    sprint_by_id = {sprint.id: sprint for sprint in phase.sprints}
-    sprint_by_id.update({sprint.id.removeprefix(f"{repo.bead_prefix}-"): sprint for sprint in phase.sprints})
     actions: list[Action] = []
     held: list[SectionRow] = []
     errors: list[Error] = []
 
     for step in candidates(phase, tasks):
-        sprint = sprint_by_id.get(step.sprint or "") or sprint_by_id.get(step.sprint_bead or "")
+        sprint = sprint_of(step, phase, repo.bead_prefix)
         target = step.target or (sprint.target if sprint else None)
         reason: str | None = None
         if not step.ready:

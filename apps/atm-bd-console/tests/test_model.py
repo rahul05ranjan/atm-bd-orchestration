@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from atm_bd_console.codec import from_json, to_json
-from atm_bd_console.model import _reconcile_problems, due, tick
+from atm_bd_console.dispatch import sprint_of
+from atm_bd_console.model import _reconcile_problems, _sprint_views, due, tick
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.types import (
     Bead,
@@ -132,20 +133,39 @@ def test_due_cycle_fetch_missing_ref_and_merge_pairs() -> None:
     value = phase(qa, pushed)
     remote = RemoteRef("present", "abc")
     state = replace(STATE, remotes=(remote,))
-    assert due(state, value, "graphql", NOW) == due(state, value, "graphql", NOW)
-    first = due(state, value, "graphql", NOW)
+    assert due(state, value, "atm", "graphql", NOW) == due(state, value, "atm", "graphql", NOW)
+    first = due(state, value, "atm", "graphql", NOW)
     assert first.fetch and first.github
     assert first.merges == (("missing", "base"), ("present", "base")) or first.merges == (("present", "base"), ("missing", "base"))
-    at_five = due(replace(state, last_cycle=NOW), value, "graphql", NOW + timedelta(minutes=5))
+    at_five = due(replace(state, last_cycle=NOW), value, "atm", "graphql", NOW + timedelta(minutes=5))
     assert at_five.fetch and not at_five.github
     assert at_five.merges == (("missing", "base"),)
-    at_ten = due(replace(state, last_cycle=NOW), value, "off", NOW + timedelta(minutes=10))
+    at_ten = due(replace(state, last_cycle=NOW), value, "atm", "off", NOW + timedelta(minutes=10))
     assert at_ten.fetch and not at_ten.github
-    no_missing = due(replace(state, last_cycle=NOW), phase(pushed), "graphql", NOW + timedelta(minutes=5))
+    no_missing = due(replace(state, last_cycle=NOW), phase(pushed), "atm", "graphql", NOW + timedelta(minutes=5))
     assert not no_missing.fetch and not no_missing.github
     inherited = due(STATE, phase(step("qa", "bh-1", kind="qa", ready=True, branch="branch", target=None)),
-                    "graphql", NOW)
+                    "atm", "graphql", NOW)
     assert inherited.merges == (("branch", "sprint/bh-1"),)
+
+
+def test_one_sprint_lookup_for_due_dispatch_and_sprint_views() -> None:
+    # A foreign sprint whose id ends with the step's tag used to win due's endswith match while dispatch and the
+    # sprint views used the prefixed id: one step, two targets.
+    foreign = replace(sprint(1), id="other-bh-1", target="sprint/other")
+    own = replace(sprint(1), target="sprint/own")
+    tagged = step("qa", "bh-1", kind="qa", ready=True, branch="branch", target=None)
+    value = phase(tagged, sprints=(foreign, own))
+    assert sprint_of(tagged, value, "atm") == own
+    assert due(STATE, value, "atm", "graphql", NOW).merges == (("branch", "sprint/own"),)
+    views, _ = _sprint_views(value, "atm")
+    assert [[step_view.bead_id for step_view in view.steps] for view in views] == [[], ["qa"]]
+    # The sprint bead id wins over the tag, the same for every caller.
+    by_bead = replace(tagged, sprint="unknown", sprint_bead="other-bh-1")
+    assert sprint_of(by_bead, phase(by_bead, sprints=(foreign, own)), "atm") == foreign
+    assert due(STATE, phase(by_bead, sprints=(foreign, own)), "atm", "graphql", NOW).merges == (
+        ("branch", "sprint/other"),
+    )
 
 
 def test_per_recipient_problem_batches_survive_state_round_trip() -> None:
