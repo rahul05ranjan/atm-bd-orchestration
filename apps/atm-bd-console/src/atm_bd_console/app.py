@@ -16,7 +16,7 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import prs, render, status
-from .result import Err, Error, NotFound, Ok
+from .result import Err, Error, IoFailed, NotFound, Ok
 from .state import acquire_lock, load_state
 from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
 
@@ -73,6 +73,7 @@ class ConsoleApp(App[int]):
         self.snapshot: Snapshot | None = None
         self.status_text = ""
         self.status_error: Error | None = None
+        self.tick_error: Error | None = None
         self._step_lock = threading.Lock()
 
     def compose(self) -> ComposeResult:
@@ -108,13 +109,24 @@ class ConsoleApp(App[int]):
         if event.pane.id == "prs":
             self.tick(True)
 
-    @work(thread=True, group="tick")
+    @work(thread=True, group="tick", exit_on_error=False)
     def tick(self, force_github: bool) -> None:
-        with self._step_lock:
-            snapshot, state = self.step(self.config, self.state, force_github, self.store)
-            self.state = state
-            text, error = status.status_text(snapshot)
+        try:
+            with self._step_lock:
+                snapshot, state = self.step(self.config, self.state, force_github, self.store)
+                self.state = state
+                text, error = status.status_text(snapshot)
+        except Exception as error:  # noqa: BLE001
+            self.call_from_thread(self._show_tick_error, IoFailed("io_failed", "console tick", str(error), "retry the console tick"))
+            return
         self.call_from_thread(self._show, snapshot, text, error)
+
+    def _show_tick_error(self, error: Error) -> None:
+        if not self.is_running:
+            return
+        self.tick_error = error
+        self.query_one("#dashboard", Static).update(Text(f"== Errors (1)\n {error.kind}: {error.message}", style="red"))
+        self.query_one("#status-header", Static).update(Text(f"{error.kind}: {error.fix}", style="red"))
 
     def _show(self, snapshot: Snapshot, text: str, error: Error | None) -> None:
         # A tick can finish after q has begun shutdown; its screen is gone, so there is nothing to draw.
@@ -122,7 +134,7 @@ class ConsoleApp(App[int]):
             return
         if self.startup_error is not None:
             snapshot = replace(snapshot, errors=(self.startup_error, *snapshot.errors))
-        self.snapshot, self.status_text, self.status_error = snapshot, text, error
+        self.snapshot, self.status_text, self.status_error, self.tick_error = snapshot, text, error, None
         sprints = self.query_one("#sprints", OptionList)
         highlighted = sprints.highlighted
         sprints.clear_options()

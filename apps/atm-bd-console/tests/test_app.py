@@ -26,6 +26,11 @@ class FakeStep:
         return self.snapshot, state
 
 
+class RaisingStep:
+    def __call__(self, *_args) -> tuple[Snapshot, State]:
+        raise RuntimeError("step exploded")
+
+
 @pytest.fixture(autouse=True)
 def no_mmdflux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(console.status, "status_text", lambda snapshot: (snapshot.mermaid, None))
@@ -49,6 +54,18 @@ def test_error_snapshot_keeps_the_app_running_and_shows_the_error() -> None:
             await pilot.press("ctrl+q")
             await settle(pilot)
             assert app.is_running
+
+    asyncio.run(scenario())
+
+
+def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
+    async def scenario() -> None:
+        app = ConsoleApp(CONFIG, RaisingStep(), STATE)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            assert app.is_running
+            shown = str(app.query_one("#dashboard").render())
+            assert "== Errors (1)" in shown and "step exploded" in shown
 
     asyncio.run(scenario())
 
