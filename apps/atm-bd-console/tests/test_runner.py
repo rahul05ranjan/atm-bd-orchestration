@@ -15,6 +15,7 @@ from contract_samples import (
     PHASE,
     PHASE_FILE,
     PRS_FILE,
+    REMOTE_REF,
     REPO_CONFIG,
     SNAPSHOT,
     STATE,
@@ -25,7 +26,7 @@ from atm_bd_console import runner
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
-from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, Task
+from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Task
 
 RUNNING_STATE = replace(STATE, idle_since=None)
 
@@ -392,6 +393,28 @@ def test_github_off_discards_populated_active_cache(github_runtime, monkeypatch,
     assert persisted.value.gh == snapshot.gh and persisted.value.prs == ()
     assert calls == []
     assert not [event for event in events if event[0] == "github_read"]
+
+
+def test_fetch_replans_cycle_merges_from_refreshed_remote_refs(github_runtime, monkeypatch) -> None:
+    store, _, _, inputs = github_runtime
+    fresh = RemoteRef("new-branch", REMOTE_REF.sha)
+    due_states, merges = [], []
+
+    def due(state, *_args):
+        due_states.append(state.remotes)
+        pairs = (("new-branch", "base"),) if fresh in state.remotes else ()
+        return Due(True, pairs, False)
+
+    monkeypatch.setattr(runner.model, "due", due)
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok((fresh,)))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_args: merges.append(_args[1:]) or Ok(None))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
+
+    assert due_states == [RUNNING_STATE.remotes, (fresh,)]
+    assert merges == [("new-branch", "base")]
+    assert inputs[0].remotes == Ok((fresh,))
 
 
 def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:

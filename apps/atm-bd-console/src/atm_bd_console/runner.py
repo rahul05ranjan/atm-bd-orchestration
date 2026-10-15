@@ -145,8 +145,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
         now,
         tasks.value if isinstance(tasks, Ok) else (),
     ) if isinstance(phase, Ok) else None
-    if due and due.fetch and not config.no_fetch: git_source.fetch(config.repo_root)
-    remotes = git_source.remote_refs(config.repo_root) if due and due.fetch else None
+    remotes = None
+    if due and due.fetch and not config.no_fetch:
+        fetched = git_source.fetch(config.repo_root)
+        if isinstance(fetched, Ok):
+            remotes = git_source.remote_refs(config.repo_root)
+            if isinstance(remotes, Ok) and isinstance(phase, Ok):
+                due = model.due(
+                    replace(state, remotes=remotes.value), phase.value,
+                    repo.value.bead_prefix, config.github, now,
+                    tasks.value if isinstance(tasks, Ok) else (),
+                )
     saved_merges, saved_prs = load_merges(config.repo_root, file.value.root_id), load_prs(config.repo_root, file.value.root_id)
     merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
     merge_results = []
