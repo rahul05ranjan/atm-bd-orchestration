@@ -5,6 +5,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from . import command
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
@@ -18,8 +19,8 @@ FAILURES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}
 REQUEST_TIMEOUT_S = 20
 
 
-def _status(mode: str, ok: bool | None, error=None, truncated: bool = False) -> GhStatus:
-    return GhStatus(mode, ok, error, datetime.now(UTC) if ok is not None else None, truncated)  # type: ignore[arg-type]
+def _status(mode: Literal["graphql", "rest", "off"], ok: bool | None, error=None, truncated: bool = False) -> GhStatus:
+    return GhStatus(mode, ok, error, datetime.now(UTC) if ok is not None else None, truncated)
 
 
 def _http_status(stderr: str) -> int | None:
@@ -27,7 +28,7 @@ def _http_status(stderr: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _error(mode: str, argv: tuple[str, ...], code: int, stderr: str):
+def _error(mode: Literal["graphql", "rest", "off"], argv: tuple[str, ...], code: int, stderr: str):
     lower = stderr.lower()
     if "timed out" in lower or "timeout" in lower:
         error = Timeout("timeout", argv, REQUEST_TIMEOUT_S, "check GitHub connectivity and retry")
@@ -53,7 +54,7 @@ def _from_graphql(node: dict) -> PullRequest:
     return PullRequest(node["number"], node["url"], node["headRefName"], node["baseRefName"], node["headRefOid"], _ci(rollup.get("state")), failed)
 
 
-def open_prs(mode: str, repo_root: str | Path | None = None):
+def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | None = None):
     """Open pull requests of the repository checked out at `repo_root` (default: the current directory)."""
     if mode == "off":
         return Ok(()), _status("off", None)

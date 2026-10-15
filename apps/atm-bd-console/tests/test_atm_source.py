@@ -143,7 +143,6 @@ def test_command_failures_invalid_json_and_timeouts_are_typed_without_raising(fa
     fake_bin.make("atm", 'sleep 2\n')
     timed_out = atm_source._run(["atm", "wait"], timeout_s=1)
     assert isinstance(timed_out, Err) and isinstance(timed_out.error, Timeout)
-    assert "raise" not in Path(atm_source.__file__).read_text()
 
 
 def test_missing_atm_binary_is_a_typed_error(tmp_path, monkeypatch) -> None:

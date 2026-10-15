@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import gc
+import os
 import re
 import select
 import subprocess
@@ -65,6 +66,7 @@ def test_written_files_store_datetimes_only_in_utc_z_form(tmp_path: Path) -> Non
     assert stamps and all(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp) for stamp in stamps)
 
 
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0), reason="chmod permissions require a non-root POSIX user")
 def test_read_only_state_directory_returns_io_failed_naming_the_path(tmp_path: Path) -> None:
     acquired = acquire_lock(tmp_path, "atm-bh")
     assert isinstance(acquired, Ok)
@@ -238,6 +240,7 @@ def test_absent_runtime_files_are_not_corruption(tmp_path, loader):
     ("merge.json", "load_merges", "write_merges", fixture("merge.json", MergeFile)),
     ("prs.json", "load_prs", "write_prs", fixture("prs.json", PrsFile)),
 ))
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0), reason="chmod permissions require a non-root POSIX user")
 def test_failed_preservation_blocks_later_writes(tmp_path, name, loader, writer, value):
     acquired = acquire_lock(tmp_path, "atm-bh")
     assert isinstance(acquired, Ok)
