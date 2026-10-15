@@ -47,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.once or args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err): return 0
-        with lock.value: runner.step(loaded.value, state, False)
+        # Probe the live-holder condition before any sources are read.  The
+        # runner then owns a fresh lock for its complete read/action/write tick.
+        lock.value.close()
+        runner.step(loaded.value, state, False)
         return 0
     return app.run(loaded.value, runner.step)
