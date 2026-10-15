@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from atm_bd_console.config import load_config
-from atm_bd_console.result import ConfigInvalid, Err, Ok
+from atm_bd_console.result import ConfigInvalid, Err, IoFailed, Ok
 
 
 def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:
@@ -21,3 +21,11 @@ def test_invalid_github_and_short_interval_name_key_value_and_fix(tmp_path) -> N
         result = load_config(tmp_path, "atm-bh", "fenix")
         assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
         assert result.error.key == key and result.error.value == value and result.error.fix
+
+
+def test_undecodable_console_toml_is_a_typed_io_error(tmp_path) -> None:
+    (tmp_path / ".atm-bd").mkdir()
+    (tmp_path / ".atm-bd" / "console.toml").write_bytes(b"\xff\xfe not utf-8")
+    result = load_config(tmp_path, "atm-bh", "fenix")
+    assert isinstance(result, Err) and isinstance(result.error, IoFailed)
+    assert result.error.path == str(tmp_path / ".atm-bd" / "console.toml")

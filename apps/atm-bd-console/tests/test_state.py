@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import errno
+import gc
 import re
 import subprocess
 import sys
+import warnings
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -117,6 +120,38 @@ def test_missing_data_and_live_process_lock_are_typed(tmp_path: Path) -> None:
     released = acquire_lock(tmp_path, "atm-bh")
     assert isinstance(released, Ok)
     released.value.close()
+
+
+def test_undecodable_snapshot_is_a_typed_error_not_an_exception(tmp_path: Path) -> None:
+    directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
+    directory.mkdir(parents=True)
+    (directory / "snapshot.json").write_bytes(b"\xff\xfe not utf-8")
+    result = load_snapshot(tmp_path, "atm-bh")
+    assert isinstance(result, Err) and isinstance(result.error, IoFailed)
+    assert result.error.path == str(directory / "snapshot.json")
+
+
+def test_lock_held_with_an_undecodable_snapshot_reports_unknown_age(tmp_path: Path) -> None:
+    first = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(first, Ok)
+    with first.value:
+        (first.value.directory / "snapshot.json").write_bytes(b"\xff\xfe not utf-8")
+        second = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(second, Err) and isinstance(second.error, LockHeld)
+    assert second.error.snapshot_age_s is None
+
+
+def test_flock_failure_closes_the_lock_handle(tmp_path: Path, monkeypatch) -> None:
+    def failing_flock(_fd: int, _operation: int) -> None:
+        raise OSError(errno.ENOLCK, "no locks available")
+
+    monkeypatch.setattr(state.fcntl, "flock", failing_flock)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = acquire_lock(tmp_path, "atm-bh")
+        gc.collect()
+    assert isinstance(result, Err) and isinstance(result.error, IoFailed)
+    assert not [warning for warning in caught if issubclass(warning.category, ResourceWarning)]
 
 
 def test_interrupted_temp_file_does_not_replace_previous_snapshot(tmp_path: Path) -> None:

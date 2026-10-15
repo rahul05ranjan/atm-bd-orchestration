@@ -32,7 +32,7 @@ def load_config(
     if config_path.exists():
         try:
             values = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError) as error:
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
             return Err(IoFailed("io_failed", str(config_path), str(error), "correct or restore console.toml"))
     if not isinstance(values, dict):
         return Err(ConfigInvalid("config_invalid", "console", repr(values), "use a [console] table"))

@@ -93,6 +93,9 @@ def acquire_lock(repo_root: str | Path, root_id: str) -> Result[StateStore]:
         except BlockingIOError:
             handle.close()
             return Err(LockHeld("lock_held", _snapshot_age(directory), "wait for the running console process"))
+        except OSError:
+            handle.close()
+            raise
         return Ok(StateStore(directory, handle))
     except OSError as error:
         return Err(IoFailed("io_failed", str(lock_path), str(error), "repair the state directory permissions"))
@@ -115,21 +118,20 @@ def load_prs(repo_root: str | Path, root_id: str) -> Result[PrsFile]:
 
 
 def _load(repo_root: str | Path, root_id: str, name: str, cls: type[Any]) -> Result[Any]:
-    path = state_directory(repo_root, root_id) / name
+    return _read(state_directory(repo_root, root_id) / name, cls)
+
+
+def _read(path: Path, cls: type[Any]) -> Result[Any]:
     if not path.is_file():
         return Err(NotFound("not_found", str(path), "run a console tick to create it"))
     try:
-        decoded = from_json(cls, path.read_text(encoding="utf-8"))
-        return decoded
-    except OSError as error:
+        return from_json(cls, path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as error:
         return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
 
 
 def _snapshot_age(directory: Path) -> int | None:
-    path = directory / "snapshot.json"
-    if not path.is_file():
-        return None
-    decoded = from_json(Snapshot, path.read_text(encoding="utf-8"))
+    decoded = _read(directory / "snapshot.json", Snapshot)
     if isinstance(decoded, Err):
         return None
     return max(0, int((datetime.now(UTC) - decoded.value.generated_at).total_seconds()))
