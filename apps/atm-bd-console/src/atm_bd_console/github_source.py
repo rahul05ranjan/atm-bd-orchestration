@@ -62,12 +62,15 @@ def open_prs(mode: str):
         return _error(mode, argv, completed.returncode, (completed.stderr or completed.stdout).strip())
     try:
         body = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        error = ParseFailed("github response", str(exc), "retry the GitHub request")
+        if mode == "graphql":
+            pulls = body["data"]["repository"]["pullRequests"]
+            rows = tuple(_from_graphql(node) for node in pulls["nodes"])
+            truncated = pulls["totalCount"] > 100
+        else:
+            rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none", ()) for row in body)
+            truncated = len(rows) >= 100
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError, IndexError) as exc:
+        # A body that is not JSON, or JSON of the wrong shape, is one typed failure; GitHub failing never stops work.
+        error = ParseFailed("parse_failed", f"github {mode} response", f"{type(exc).__name__}: {exc}", "retry the GitHub request")
         return Err(error), _status(mode, False, error)
-    if mode == "graphql":
-        pulls = body["data"]["repository"]["pullRequests"]
-        rows = tuple(_from_graphql(node) for node in pulls["nodes"])
-        return Ok(rows), _status(mode, True, truncated=pulls["totalCount"] > 100)
-    rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none", ()) for row in body)
-    return Ok(rows), _status(mode, True, truncated=len(rows) >= 100)
+    return Ok(rows), _status(mode, True, truncated=truncated)

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from atm_bd_console import github_source
-from atm_bd_console.result import CommandFailed, Err, Ok, Rejected, Timeout, Unreachable
+from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 
 
 def fake_gh(fake_bin, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_code: int = 0, stderr: str = "", sleep: int = 0):
@@ -124,6 +124,39 @@ def test_gh_errors_are_typed(fake_bin, monkeypatch, stderr, kind, http) -> None:
     assert isinstance(result, Err) and isinstance(result.error, kind) and status.ok is False and status.error == result.error
     if http is not None:
         assert result.error.status == http
+
+
+def test_rest_failure_is_typed(fake_bin, monkeypatch) -> None:
+    fake_gh(fake_bin, monkeypatch, {}, exit_code=1, stderr="gh: Resource not accessible by integration (HTTP 403)")
+    result, status = github_source.open_prs("rest")
+    assert isinstance(result, Err) and result.error == Rejected(
+        "rejected", calls_argv(fake_bin), 403, "gh: Resource not accessible by integration (HTTP 403)",
+        "check GitHub credentials or retry")
+    assert (status.mode, status.ok, status.error) == ("rest", False, result.error)
+
+
+def calls_argv(fake_bin) -> tuple[str, ...]:
+    (argv,) = fake_bin.argv()
+    return argv
+
+
+@pytest.mark.parametrize("mode", ["graphql", "rest"])
+@pytest.mark.parametrize("body", [
+    "not json",
+    {"data": None},
+    {"data": {"repository": {"pullRequests": {"totalCount": 1, "nodes": [{"number": 7}]}}}},
+    [{"number": 7, "head": "fix/x"}],
+    [None],
+    {"message": "API rate limit exceeded"},
+], ids=["bad-json", "null-data", "node-missing-keys", "head-not-object", "null-row", "error-object"])
+def test_unparseable_body_is_parse_failed_and_never_raises(fake_bin, monkeypatch, mode, body) -> None:
+    fake_gh(fake_bin, monkeypatch, body)
+    if body == "not json":
+        monkeypatch.setenv("FAKE_BODY", body)
+    result, status = github_source.open_prs(mode)
+    assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
+    assert result.error.kind == "parse_failed" and result.error.source == f"github {mode} response"
+    assert (status.ok, status.error) == (False, result.error)
 
 
 def test_gh_timeout_is_typed(fake_bin, monkeypatch) -> None:
