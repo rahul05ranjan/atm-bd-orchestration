@@ -36,6 +36,14 @@ def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
     assert "stopped: phase closed" in capsys.readouterr().out
 
 
+def test_show_uses_the_configured_repository_root(monkeypatch, capsys, tmp_path) -> None:
+    root = tmp_path / "repository"
+    monkeypatch.setattr(cli.config_source, "repo_root", lambda: root)
+    monkeypatch.setattr(cli, "load_snapshot", lambda actual_root, *_: Ok(SNAPSHOT) if actual_root == root else (_ for _ in ()).throw(AssertionError("wrong root")))
+    assert cli.main(["show", "--phase", "bh"]) == 0
+    assert "stopped: phase closed" in capsys.readouterr().out
+
+
 def test_show_stopped_idle_skips_staleness(monkeypatch, capsys) -> None:
     stale_idle = replace(SNAPSHOT, stopped="idle", generated_at=SNAPSHOT.generated_at.replace(year=2000))
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(stale_idle))

@@ -11,6 +11,11 @@ from .types import Config
 _GITHUB = frozenset(("graphql", "rest", "off"))
 
 
+def repo_root() -> Path:
+    """Resolve the repository root used by every command-line mode."""
+    return Path.cwd().resolve()
+
+
 def _team(root: Path) -> Result[str]:
     path = root / ".atm.toml"
     try:

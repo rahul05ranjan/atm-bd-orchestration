@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import pytest
 
-from atm_bd_console.config import load_config
+from atm_bd_console.config import load_config, repo_root
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, Ok
 
 
 def _team_config(root) -> None:
     (root / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
+
+
+def test_repo_root_resolves_the_current_directory(monkeypatch, tmp_path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    monkeypatch.chdir(nested)
+    assert repo_root() == nested.resolve()
 
 
 def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:

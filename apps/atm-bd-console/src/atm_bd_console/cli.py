@@ -5,7 +5,6 @@ import argparse
 import json
 import shutil
 from datetime import UTC, datetime
-from pathlib import Path
 
 from . import __version__, atm_bd, render, runner
 from . import config as config_source
@@ -34,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.phase:
         print(f"{CONSOLE_NAME}: --phase <phase> is required; name the phase to run")
         return 3
-    repo_root = Path.cwd()
+    repo_root = config_source.repo_root()
     root_id = f"atm-phase-{args.phase}"
     if args.command == "show":
         snapshot = load_snapshot(repo_root, root_id)
