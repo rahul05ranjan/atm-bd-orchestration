@@ -26,7 +26,7 @@ def _http_status(stderr: str) -> int | None:
 def _error(mode: str, argv: tuple[str, ...], code: int, stderr: str):
     lower = stderr.lower()
     if "timed out" in lower or "timeout" in lower:
-        error = Timeout("timeout", argv, 20, "check GitHub connectivity and retry")
+        error = Timeout("timeout", argv, REQUEST_TIMEOUT_S, "check GitHub connectivity and retry")
     elif (status := _http_status(stderr)) is not None and (status in (401, 403) or 500 <= status <= 599):
         error = Rejected("rejected", argv, status, stderr, "check GitHub credentials or retry")
     elif "connect" in lower or "dns" in lower or "network" in lower:

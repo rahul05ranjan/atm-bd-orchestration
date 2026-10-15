@@ -164,3 +164,11 @@ def test_gh_timeout_is_typed(fake_bin, monkeypatch) -> None:
     monkeypatch.setattr(github_source, "REQUEST_TIMEOUT_S", 1)
     result, status = github_source.open_prs("graphql")
     assert isinstance(result, Err) and isinstance(result.error, Timeout) and status.ok is False
+
+
+def test_gh_reported_timeout_carries_the_request_timeout(fake_bin, monkeypatch) -> None:
+    fake_gh(fake_bin, monkeypatch, {}, exit_code=1, stderr="gh: request timed out")
+    monkeypatch.setattr(github_source, "REQUEST_TIMEOUT_S", 7)
+    result, status = github_source.open_prs("graphql")
+    assert isinstance(result, Err) and isinstance(result.error, Timeout) and result.error.seconds == 7
+    assert (status.ok, status.error) == (False, result.error)
