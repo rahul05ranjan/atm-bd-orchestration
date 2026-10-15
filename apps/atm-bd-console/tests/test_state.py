@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import gc
 import re
+import select
 import subprocess
 import sys
 import warnings
@@ -17,6 +18,7 @@ from atm_bd_console.state import acquire_lock, load_merges, load_prs, load_snaps
 from atm_bd_console.types import ActionLine, MergeFile, PrsFile, Snapshot, State
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
+READY_DEADLINE_S = 10
 
 
 def fixture(name: str, cls):
@@ -112,7 +114,13 @@ def test_missing_data_and_live_process_lock_are_typed(tmp_path: Path) -> None:
     assert isinstance(missing, Err) and isinstance(missing.error, NotFound)
     code = "from atm_bd_console.state import acquire_lock; import sys,time; held = acquire_lock(sys.argv[1], 'atm-bh'); print(type(held).__name__, flush=True); time.sleep(60)"
     child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], text=True, stdout=subprocess.PIPE)
-    assert child.stdout is not None and child.stdout.readline().strip() == "Ok"
+    assert child.stdout is not None
+    ready, _, _ = select.select([child.stdout], [], [], READY_DEADLINE_S)
+    if not ready:
+        child.kill()
+        child.wait(timeout=5)
+        raise AssertionError(f"readiness stage: child printed no lock result within {READY_DEADLINE_S}s")
+    assert child.stdout.readline().strip() == "Ok"
     held = acquire_lock(tmp_path, "atm-bh")
     assert isinstance(held, Err) and isinstance(held.error, LockHeld) and held.error.snapshot_age_s is None
     child.kill()
