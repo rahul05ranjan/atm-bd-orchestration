@@ -1,14 +1,42 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from contract_fixtures import RUNNING
+
+from atm_bd_console import app as console
+from atm_bd_console.types import Config, Snapshot, State
 
 # Only the system directories a fake script or a source's own subprocess needs; never the caller's PATH.
 SYSTEM_PATH = ("/usr/bin", "/bin")
 _UNIT = "\x1f"  # separates argv items in the log
 _RECORD = "\x1e"  # ends one invocation
+
+
+class FakeStep:
+    def __init__(self, snapshot: Snapshot = RUNNING) -> None:
+        self.snapshot = snapshot
+        self.calls: list[bool] = []
+
+    def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+        self.calls.append(force_github)
+        return self.snapshot, state
+
+
+@pytest.fixture(autouse=True)
+def no_mmdflux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console.status, "status_text", lambda snapshot: (snapshot.mermaid, None))
+
+
+async def settle(pilot) -> None:
+    try:
+        await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
+    except TimeoutError as error:
+        raise AssertionError("Textual workers did not complete within 5 seconds") from error
+    await pilot.pause()
 
 
 @dataclass(frozen=True)

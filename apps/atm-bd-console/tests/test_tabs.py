@@ -3,13 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 
-import pytest
+from conftest import FakeStep, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
-from test_app import FakeStep, settle
 
-from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, status_header
 from atm_bd_console.types import SprintView, StepView
 
@@ -32,11 +30,6 @@ SNAPSHOT = replace(
     sprints=SPRINTS,
     mermaid=f"graph TD\n  {WIDE}",
 )
-
-
-@pytest.fixture(autouse=True)
-def no_mmdflux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(console.status, "status_text", lambda snapshot: (snapshot.mermaid, None))
 
 
 def lines(app: ConsoleApp, selector: str) -> list[str]:
