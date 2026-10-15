@@ -93,6 +93,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         now,
         atm_bd.dispatch_spec,
     )
+    next_state = state if config.dry_run else next_state
     persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     writes = (store.write_state(next_state), store.write_snapshot(persisted))
     snapshot = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))

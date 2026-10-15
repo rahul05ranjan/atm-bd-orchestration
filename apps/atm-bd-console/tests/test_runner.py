@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,7 @@ from contract_samples import (
 from atm_bd_console import runner
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import Err, Ok
-from atm_bd_console.state import acquire_lock, load_prs, load_snapshot
+from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, Task
 
 RUNNING_STATE = replace(STATE, idle_since=None)
@@ -235,6 +235,46 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
     assert [name for name, _ in writes] == ["state", "snapshot"]
     assert writes[0][1] == next_state and writes[1][1] == snapshot
     assert ("tick_end", {"actions": 0}) in events
+
+
+@pytest.mark.parametrize("stopped", ("closed", "idle"))
+@pytest.mark.parametrize("dry_run", (True, False))
+def test_stopped_tick_preserves_durable_state_in_dry_run(monkeypatch, tmp_path, stopped, dry_run) -> None:
+    now = ACTION.at
+    previous = replace(STATE, last_cycle=now - timedelta(minutes=20), idle_since=now - timedelta(minutes=61))
+    root = replace(BEAD, id=PHASE_FILE.root_id, status="closed" if stopped == "closed" else "open")
+    config = replace(CONFIG, repo_root=str(tmp_path), dry_run=dry_run)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, _timezone): return now
+
+    monkeypatch.setattr(runner, "datetime", Clock)
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=stopped == "closed", steps=(), step_errors=())))
+    locked = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(locked, Ok)
+
+    with locked.value as store:
+        assert isinstance(store.write_state(previous), Ok)
+        state_path = store.directory / "state.json"
+        original_bytes = state_path.read_bytes()
+        snapshot, next_state = runner.step(config, previous, False, store)
+
+        assert snapshot.stopped == stopped
+        assert snapshot.generated_at == now
+        assert not snapshot.errors
+        assert load_snapshot(tmp_path, PHASE_FILE.root_id) == Ok(snapshot)
+        assert load_state(tmp_path, PHASE_FILE.root_id) == Ok(next_state)
+        if dry_run:
+            assert next_state == previous
+            assert state_path.read_bytes() == original_bytes
+        else:
+            assert next_state.last_cycle == now
+            assert not next_state.problems
+            assert next_state != previous
 
 
 def test_closed_root_write_failure_is_returned_in_snapshot(monkeypatch, tmp_path) -> None:
