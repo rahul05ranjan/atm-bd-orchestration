@@ -436,6 +436,20 @@ def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
     assert (result.value.branch, result.value.target, result.value.layer, result.value.difficulty) == ("b", "t", 4, "normal")
 
 
+@pytest.mark.parametrize("suffix,kind,metadata", (
+    ("dev", "dev", {}),
+    ("sanity", "sanity", {"dev_bead": "atm-bh-4.group-dev"}),
+    ("qa", "qa", {"checked_bead": "atm-bh-4.group-dev", "round": 1, "sprint_bead": "atm-bh-4"}),
+))
+def test_step_maps_group_suffixes_without_stage_labels(suffix, kind, metadata) -> None:
+    from atm_bd_console.atm_bd import step
+
+    bead = _bead(f"atm-bh-4.group-{suffix}", "atm-bh-4", ("phase:bh",), metadata)
+    result = step(bead, {})
+
+    assert isinstance(result, Ok) and result.value.kind == kind
+
+
 def test_step_top_epic_is_none_when_the_chain_is_broken_anywhere() -> None:
     from atm_bd_console.atm_bd import step
 
