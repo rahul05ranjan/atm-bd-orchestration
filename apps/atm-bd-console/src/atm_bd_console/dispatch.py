@@ -69,22 +69,22 @@ def dispatch(
     for step in candidates(phase, tasks):
         sprint = sprint_of(step, phase, repo.bead_prefix)
         target = step.target or (sprint.target if sprint else None)
-        reason: str | None = None
+        reasons: list[str] = []
         if not step.ready:
-            reason = "not ready"
-        elif not step.branch or step.branch not in remote_by_branch:
-            reason = f"branch not on origin: {step.branch or '<missing>'}"
-        elif not step.worktree or not any(
+            reasons.append("not ready")
+        if not step.branch or step.branch not in remote_by_branch:
+            reasons.append(f"branch not on origin: {step.branch or '<missing>'}")
+        if not step.worktree or not any(
             worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
         ):
-            reason = f"no worktree for {step.branch}"
-        elif target and (merge := merge_by_pair.get((step.branch, target))) and merge.state == "conflict":
-            reason = f"merge conflict with {target}: {', '.join(merge.files)}"
+            reasons.append(f"no worktree for {step.branch}")
+        if target and (merge := merge_by_pair.get((step.branch, target))) and merge.state == "conflict":
+            reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
 
         pr = pr_by_branch.get(step.branch or "")
-        if reason is not None:
+        if reasons:
             age_s = max(0, int((now - (step.claimed_at or now)).total_seconds()))
-            held.append(SectionRow(step.bead_id, age_s, reason, pr.number if pr else None))
+            held.extend(SectionRow(step.bead_id, age_s, reason, pr.number if pr else None) for reason in reasons)
             continue
         if sprint is None:
             errors.append(NotFound("not_found", f"sprint for {step.bead_id}", "repair the phase step's sprint mapping"))
