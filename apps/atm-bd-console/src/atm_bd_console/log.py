@@ -1,16 +1,19 @@
 """One file-only sc-observability logger for each console process."""
 from __future__ import annotations
 
+from dataclasses import asdict
+from functools import cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from sc_observability import Err as ObservabilityErr
 from sc_observability import LogEvent, Logger, LoggerConfig, LogQuery, create_logger
 
 from .paths import CONSOLE_NAME, console_root
-from .result import Err, IoFailed, Ok, Result
+from .result import Err, Error, IoFailed, Ok, Result
 
 EventAction = Literal["tick_start", "tick_end", "read", "github_read", "action", "hold", "error"]
+Value = TypeVar("Value")
 
 
 class ConsoleLogger:
@@ -37,9 +40,49 @@ class ConsoleLogger:
         return Ok(queried.value.events)
 
 
+class TickLog:
+    """Collect logging failures without changing the outcome of business effects."""
+
+    def __init__(self, logger: Result[ConsoleLogger]) -> None:
+        self.logger = logger
+        self.errors: list[Error] = [logger.error] if isinstance(logger, Err) else []
+
+    def event(self, action: EventAction, **fields: object) -> None:
+        if isinstance(self.logger, Ok):
+            admitted = self.logger.value.event(action, **fields)
+            if isinstance(admitted, Err):
+                self.errors.append(admitted.error)
+
+    def finish(self, actions: int) -> None:
+        self.event("tick_end", actions=actions)
+        self.flush()
+
+    def flush(self) -> None:
+        if isinstance(self.logger, Ok):
+            flushed = self.logger.value.flush()
+            if isinstance(flushed, Err):
+                self.errors.append(flushed.error)
+
+    def result(self, source: str, result: Result[Value], **fields: object) -> Result[Value]:
+        self.event(
+            "read", source=source, outcome="failed" if isinstance(result, Err) else "ok",
+            error=asdict(result.error) if isinstance(result, Err) else None, **fields,
+        )
+        return result
+
+
 def create_console_logger(repo_root: str | Path) -> Result[ConsoleLogger]:
-    # sc-observability writes its files under <log_root>/logs, so the root is the console directory.
+    """Reuse the process-owned logger for this repository across every tick."""
     log_root = console_root(repo_root)
+    try:
+        return _process_logger(log_root.resolve())
+    except (OSError, RuntimeError) as error:
+        return Err(IoFailed("io_failed", str(log_root), str(error), "repair the log directory path"))
+
+
+@cache
+def _process_logger(log_root: Path) -> Result[ConsoleLogger]:
+    # sc-observability writes its files under <log_root>/logs, so the root is the console directory.
     try:
         log_root.mkdir(parents=True, exist_ok=True)
     except OSError as error:

@@ -15,6 +15,7 @@ from contract_samples import (
     ACTION,
     BEAD,
     CONFIG,
+    IO_FAILED,
     MERGE,
     PHASE_FILE,
     REMOTE_REF,
@@ -229,6 +230,14 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed", errors=(TIMEOUT,)), None))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
+    for stopped in ("idle", "closed"):
+        logging_error = replace(IO_FAILED, path="logs", fix="inspect the console log directory")
+        failed_snapshot = replace(SNAPSHOT, stopped=stopped, errors=(logging_error,))
+        monkeypatch.setattr(cli.runner, "step", lambda *_, value=failed_snapshot: (value, None))
+        assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+        output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert len(output) == 1
+        assert output[0]["kind"] == "error" and "inspect the console log directory" in output[0]["text"]
 
 
 def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
@@ -318,18 +327,22 @@ def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch,
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
-    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Err(TIMEOUT))
+    logging_error = replace(IO_FAILED, path="logs", fix="inspect the console log directory")
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Err(logging_error))
     directory = tmp_path / ".atm-bd/atm-bd-console" / PHASE_FILE.root_id
     directory.mkdir(parents=True)
     (directory / "state.json").write_text("{}")
 
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
 
-    output = json.loads(capsys.readouterr().out)
-    assert output["kind"] == "error" and "state.json.corrupt-" in output["text"]
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(output) == 2 and all(line["kind"] == "error" for line in output)
+    assert "state.json.corrupt-" in output[0]["text"]
+    assert logging_error.fix in output[1]["text"]
     persisted = load_snapshot(tmp_path, PHASE_FILE.root_id)
     assert isinstance(persisted, Ok) and persisted.value.stopped == "closed"
-    assert len(persisted.value.errors) == 1 and persisted.value.errors[0].kind == "parse_failed"
+    assert len(persisted.value.errors) == 2 and persisted.value.errors[0].kind == "parse_failed"
+    assert persisted.value.errors[1] == logging_error
     assert len(list(directory.glob("state.json.corrupt-*"))) == 1
 
 
@@ -373,6 +386,9 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
 
     class Logger:
         def event(self, *_args, **_kwargs):
+            return Ok(None)
+
+        def flush(self):
             return Ok(None)
 
     monkeypatch.setattr(runner, "datetime", FixedDateTime)

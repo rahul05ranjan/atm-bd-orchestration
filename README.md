@@ -52,6 +52,9 @@ nothing is copied.
 
 ## Develop
 
+Console logging, delivery outcomes, and retention/rotation procedures are
+documented in [apps/atm-bd-console/README.md](apps/atm-bd-console/README.md).
+
 ```bash
 cd plugins/atm-bd-orchestration
 uv run --with pytest --with pydantic --with pyyaml python -m pytest -q

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,11 +22,12 @@ from contract_samples import (
     TIMEOUT,
 )
 
-from atm_bd_console import runner
+from atm_bd_console import log, runner
+from atm_bd_console.log import TickLog
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import ConfigInvalid, Err, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
-from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Task
+from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Section, SectionRow, Task
 
 RUNNING_STATE = replace(STATE, idle_since=None)
 
@@ -54,6 +55,7 @@ def isolate_console_logger(monkeypatch: pytest.MonkeyPatch):
 
     class Logger:
         def event(self, _action, **_fields): return Ok(None)
+        def flush(self): return Ok(None)
 
     def fake_factory(*args):
         calls.append(args)
@@ -89,6 +91,8 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         def event(self, action, **fields):
             events.append((action, fields))
             return Ok(None)
+
+        def flush(self): return Ok(None)
 
     monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
@@ -248,6 +252,7 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
 
     class Logger:
         def event(self, action, **fields): events.append((action, fields)); return Ok(None)
+        def flush(self): return Ok(None)
 
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -356,7 +361,9 @@ def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> Non
     assert calls == ["rest"]
     assert inputs[0].prs == Err(TIMEOUT)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
-    assert [event for event in events if event[0] == "github_read"] == [("github_read", {"forced": True})]
+    assert [event for event in events if event[0] == "github_read"] == [
+        ("github_read", {"forced": True, "outcome": "failed", "error": asdict(TIMEOUT)})
+    ]
 
 
 def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkeypatch) -> None:
@@ -444,9 +451,158 @@ def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
             return Ok(None)
 
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: Err(COMMAND_FAILED))
-    reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at)
+    logger = TickLog(runner.create_console_logger(CONFIG.repo_root))
+    reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at, logger)
     assert errors == (COMMAND_FAILED,)
     assert reported == (replace(ACTION, outcome="failed command_failed"),)
+
+
+@pytest.mark.parametrize("failure", ("construction", "tick_start", "read", "github_read", "action", "tick_end", "flush"))
+@pytest.mark.parametrize("delivery_fails", (False, True))
+def test_logging_failure_is_persisted_without_changing_delivery(github_runtime, monkeypatch, failure, delivery_fails):
+    store, _, _, _ = github_runtime
+    snapshots = []
+    store.write_snapshot = lambda snapshot: snapshots.append(snapshot) or Ok(None)
+    logging_error = replace(IO_FAILED, path="logs", message=failure)
+
+    class Logger:
+        def event(self, action, **_fields):
+            return Err(logging_error) if action == failure else Ok(None)
+
+        def flush(self):
+            return Err(logging_error) if failure == "flush" else Ok(None)
+
+    created = Err(logging_error) if failure == "construction" else Ok(Logger())
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: created)
+    monkeypatch.setattr(runner.model, "tick", lambda *_: (replace(SNAPSHOT, errors=()), (ACTION,), RUNNING_STATE))
+    delivered = Err(COMMAND_FAILED) if delivery_fails else Ok(None)
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: delivered)
+
+    snapshot, next_state = runner.step(replace(CONFIG, dry_run=False), RUNNING_STATE, False, store)
+
+    assert logging_error in snapshot.errors
+    assert snapshots[-1].errors == snapshot.errors
+    assert snapshot.sent[-1].outcome == ("failed command_failed" if delivery_fails else "sent")
+    assert (COMMAND_FAILED in snapshot.errors) == delivery_fails
+    assert next_state.sent == (RUNNING_STATE.sent if delivery_fails else (*RUNNING_STATE.sent, snapshot.sent[-1]))
+
+
+@pytest.mark.parametrize("stopped", ("closed", "idle", "invalid_config"))
+@pytest.mark.parametrize("failure", ("construction", "tick_start", "tick_end", "flush"))
+def test_logging_failure_surfaces_on_early_return(github_runtime, monkeypatch, stopped, failure):
+    store, _, _, _ = github_runtime
+    logging_error = replace(IO_FAILED, path="logs", message=failure)
+    recovery_error = replace(IO_FAILED, path="state.json", message="preserved corrupt state")
+    write_error = replace(IO_FAILED, path="state.json", message="state write failed")
+    writes = []
+    store.load_errors = (recovery_error,)
+    store.write_state = lambda value: writes.append(("state", value)) or Err(write_error)
+    store.write_snapshot = lambda value: writes.append(("snapshot", value)) or Ok(None)
+
+    class Logger:
+        def event(self, action, **_fields):
+            return Err(logging_error) if action == failure else Ok(None)
+
+        def flush(self):
+            return Err(logging_error) if failure == "flush" else Ok(None)
+
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Err(logging_error) if failure == "construction" else Ok(Logger()))
+    state = RUNNING_STATE
+    if stopped == "closed":
+        monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status="closed"),)))
+    elif stopped == "idle":
+        state = replace(state, idle_since=ACTION.at - timedelta(days=365))
+    else:
+        monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Err(TIMEOUT))
+
+    snapshot, _ = runner.step(CONFIG, state, False, store)
+
+    assert logging_error in snapshot.errors
+    assert recovery_error in snapshot.errors and write_error in snapshot.errors
+    assert [name for name, _ in writes] == ["state", "snapshot"]
+    assert writes[-1][1] == snapshot
+
+
+@pytest.mark.parametrize("kind", ("assign", "send", "batch"))
+@pytest.mark.parametrize("outcome", ("sent", "failed command_failed", "dry_run"))
+def test_every_effect_outcome_has_recipient_task_and_error_context(github_runtime, monkeypatch, kind, outcome):
+    store, _, events, _ = github_runtime
+    actions = tuple(replace(ACTION, kind=kind, bead_ids=(f"task-{index}", "related-task")) for index in range(7))
+    monkeypatch.setattr(runner.model, "tick", lambda *_: (SNAPSHOT, actions, RUNNING_STATE))
+    attempts = []
+
+    def deliver(*args):
+        attempts.append(args)
+        return Err(COMMAND_FAILED) if outcome.startswith("failed") else Ok(None)
+
+    monkeypatch.setattr(runner.atm_source, "assign", deliver)
+    monkeypatch.setattr(runner.atm_source, "send", deliver)
+
+    snapshot, _ = runner.step(replace(CONFIG, dry_run=outcome == "dry_run"), RUNNING_STATE, False, store)
+
+    effect_events = [fields for action, fields in events if action == "action"]
+    assert len(effect_events) == len(actions)
+    assert len(attempts) == (0 if outcome == "dry_run" else len(actions))
+    for action, fields in zip(actions, effect_events):
+        assert fields == {
+            "effect": kind, "recipient": action.to, "task_ids": list(action.bead_ids),
+            "outcome": outcome, "error": asdict(COMMAND_FAILED) if outcome.startswith("failed") else None,
+        }
+    assert all(action.outcome == outcome for action in snapshot.sent)
+
+
+def test_process_logger_is_reused_across_ticks(github_runtime, monkeypatch, tmp_path):
+    store, _, _, _ = github_runtime
+    created = []
+    factory = log.create_logger
+
+    def create(config):
+        created.append(config)
+        return factory(config)
+
+    monkeypatch.setattr(log, "create_logger", create)
+    monkeypatch.setattr(runner, "create_console_logger", log.create_console_logger)
+    config = replace(CONFIG, repo_root=str(tmp_path))
+
+    runner.step(config, RUNNING_STATE, False, store)
+    runner.step(config, RUNNING_STATE, False, store)
+
+    assert len(created) == 1
+    logger = log.create_console_logger(tmp_path)
+    assert isinstance(logger, Ok)
+    queried = logger.value.query()
+    assert isinstance(queried, Ok)
+    assert [event.action for event in queried.value].count("tick_start") == 2
+    assert [event.action for event in queried.value].count("tick_end") == 2
+
+
+def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkeypatch):
+    store, _, events, _ = github_runtime
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"),), False))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Err(COMMAND_FAILED))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
+
+    assert ("read", {"source": "git.fetch", "outcome": "failed", "error": asdict(TIMEOUT)}) in events
+    assert ("read", {"source": "git.merge", "outcome": "failed", "error": asdict(COMMAND_FAILED),
+                     "branch": "topic", "target": "base"}) in events
+
+
+def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch):
+    store, _, events, _ = github_runtime
+    held_step = PHASE.steps[0]
+    held = SectionRow(held_step.bead_id, 0, "branch not on origin", None)
+    snapshot = replace(SNAPSHOT, sections=(Section("Held", (held,)),))
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.model, "tick", lambda *_: (snapshot, (), RUNNING_STATE))
+
+    runner.step(CONFIG, RUNNING_STATE, False, store)
+
+    assert ("read", {"source": "atm.members", "outcome": "failed", "error": asdict(TIMEOUT),
+                     "team": CONFIG.team}) in events
+    assert ("hold", {"task_ids": [held.bead_id], "recipient": held_step.assignee or CONFIG.lead,
+                     "outcome": "held", "reason": held.reason}) in events
 
 
 def test_failed_notice_is_not_committed_and_remains_pending() -> None:
@@ -514,6 +670,40 @@ def test_stubbed_write_snapshot_failure_is_visible(github_runtime) -> None:
     store.write_snapshot = lambda _value: Err(IO_FAILED)
     snapshot, _ = runner.step(CONFIG, RUNNING_STATE, False, store)
     assert IO_FAILED in snapshot.errors
+
+
+@pytest.mark.parametrize("path", ("normal", "closed", "invalid_config"))
+@pytest.mark.parametrize("logging_fails", (False, True))
+def test_snapshot_write_failure_is_logged_and_flushed_once(github_runtime, monkeypatch, path, logging_fails):
+    store, _, _, _ = github_runtime
+    snapshot_error = replace(IO_FAILED, path="snapshot.json", message="snapshot write failed")
+    admission_error = replace(IO_FAILED, path="logs", message="error admission failed")
+    flush_error = replace(IO_FAILED, path="logs", message="error flush failed")
+    events, flushes, writes = [], [], []
+
+    class Logger:
+        def event(self, action, **fields):
+            events.append((action, fields))
+            return Err(admission_error) if logging_fails and fields.get("source") == "snapshot.write" else Ok(None)
+
+        def flush(self):
+            flushes.append(len(events))
+            return Err(flush_error) if logging_fails and len(flushes) == 2 else Ok(None)
+
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
+    store.write_snapshot = lambda value: writes.append(value) or Err(snapshot_error)
+    if path == "closed":
+        monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status="closed"),)))
+    elif path == "invalid_config":
+        monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Err(TIMEOUT))
+
+    snapshot, _ = runner.step(CONFIG, RUNNING_STATE, False, store)
+
+    assert len(writes) == 1
+    assert [action for action, _ in events].count("tick_end") == 1
+    assert events[-1] == ("error", {"source": "snapshot.write", "error": asdict(snapshot_error)})
+    assert flushes[-1] == len(events) and len(flushes) == 2
+    assert snapshot.errors == (*writes[0].errors, snapshot_error, *((admission_error, flush_error) if logging_fails else ()))
 
 
 def test_runner_reports_real_read_only_store_write_failure(github_runtime, tmp_path) -> None:
