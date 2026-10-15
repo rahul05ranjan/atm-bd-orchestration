@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from contract_samples import (
+    INPUTS,
     MERGE,
     METRICS,
     NOW,
@@ -49,6 +50,7 @@ ACTION_LINES = (
 
 def fixtures() -> dict[str, str]:
     files = {name: to_json(snapshot) + "\n" for name, snapshot in SNAPSHOTS.items()}
+    files["inputs.json"] = to_json(INPUTS) + "\n"
     files["merge.json"] = to_json(MergeFile(NOW, {MERGE.branch: MERGE, "sprint/bh-4-dispatch": replace(
         MERGE, branch="sprint/bh-4-dispatch", state="clean", files=(), messages=())})) + "\n"
     files["prs.json"] = to_json(replace(PRS_FILE, gh=GH_RUNNING, prs=(PULL_REQUEST, replace(

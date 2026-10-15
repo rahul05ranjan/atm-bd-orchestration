@@ -4,10 +4,11 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from .dispatch import candidates, dispatch
-from .result import Err, Error, Ok
+from .result import Err, Error, Ok, Result
 from .types import (
     Action,
     AgentView,
+    Bead,
     Due,
     Inputs,
     Merge,
@@ -122,7 +123,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         phase=phase.label.removeprefix("phase-") if phase else "",
         root_closed=root_closed,
         stopped=stopped,
-        agents=_agent_views(members, tasks, phase, now),
+        agents=_agent_views(members, tasks, phase, inputs.task_beads, now),
         sections=sections,
         problems=problems,
         errors=tuple(errors),
@@ -143,7 +144,8 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
 
 
 def _read_errors(inputs: Inputs) -> list[Error]:
-    results = (inputs.phase, inputs.members, inputs.tasks, inputs.worktrees, inputs.remotes, inputs.prs)
+    results = (inputs.phase, inputs.members, inputs.tasks, inputs.worktrees, inputs.remotes, inputs.prs,
+               inputs.task_beads)
     errors = [result.error for result in results if isinstance(result, Err)]
     errors.extend(result.error for result in inputs.merges or () if isinstance(result, Err))
     if inputs.gh.error is not None and inputs.gh.error not in errors:
@@ -151,9 +153,13 @@ def _read_errors(inputs: Inputs) -> list[Error]:
     return errors
 
 
-def _agent_views(members, tasks: tuple[Task, ...], phase: Phase | None, now: datetime) -> tuple[AgentView, ...]:
+def _agent_views(
+    members, tasks: tuple[Task, ...], phase: Phase | None,
+    task_beads: Result[tuple[Bead, ...]], now: datetime,
+) -> tuple[AgentView, ...]:
     steps = {step.bead_id: step for step in phase.steps} if phase else {}
     root_id = phase.root_id if phase else None
+    known_beads = {bead.id for bead in task_beads.value} if isinstance(task_beads, Ok) else None
     views: list[AgentView] = []
     for member in members:
         mine = sorted((task for task in tasks if task.agent == member.name), key=lambda task: (task.state != "active", task.position))
@@ -171,7 +177,7 @@ def _agent_views(members, tasks: tuple[Task, ...], phase: Phase | None, now: dat
         for task in mine:
             step = steps.get(task.id)
             if step is None:
-                marker = "yellow"
+                marker = None if known_beads is None else "red" if task.id in known_beads else "yellow"
             elif step.kind == "container":
                 marker = None
             elif step.top_epic != root_id:

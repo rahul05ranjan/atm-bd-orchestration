@@ -11,7 +11,7 @@ from contract_fixtures import SNAPSHOTS, fixtures
 
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.result import Ok, Rejected
-from atm_bd_console.types import ActionLine, MergeFile, PrsFile, Snapshot
+from atm_bd_console.types import ActionLine, Inputs, MergeFile, PrsFile, Snapshot
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
 
@@ -57,6 +57,8 @@ def test_each_snapshot_shape_has_its_distinguishing_field() -> None:
 
 
 def test_cache_fixtures_are_populated() -> None:
+    inputs = _load("inputs.json", Inputs)
+    assert isinstance(inputs.task_beads, Ok) and inputs.task_beads.value
     merge = _load("merge.json", MergeFile)
     assert {item.state for item in merge.merges.values()} == {"clean", "conflict"}
     assert all(key == item.branch for key, item in merge.merges.items())

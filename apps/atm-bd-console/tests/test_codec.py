@@ -96,7 +96,7 @@ def test_tick_context_round_trip() -> None:
     repo = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", (), "/plans")
     sprint = Sprint("bh-6", "tick rules", 6, "sprint/bh-6-tick-rules", "sprint/bh-1-contract", "phase-bh", (), False, 0)
     now = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
-    inputs = Inputs(now, "fenix", repo, 60, Err(NotFound("not_found", "phase", "load it")), Ok(()), Ok(()), Ok(()), None, None, None, GhStatus("off", None, None, None, False))
+    inputs = Inputs(now, "fenix", repo, 60, Err(NotFound("not_found", "phase", "load it")), Ok(()), Ok(()), Ok(()), None, None, None, GhStatus("off", None, None, None, False), Ok(()))
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     assert from_json(Inputs, to_json(inputs)) == Ok(inputs)
 

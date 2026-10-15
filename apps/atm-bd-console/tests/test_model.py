@@ -8,6 +8,7 @@ from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.model import _reconcile_problems, due, tick
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.types import (
+    Bead,
     GhStatus,
     Inputs,
     Member,
@@ -56,7 +57,7 @@ def phase(*steps: Step, sprints=None, closed=False, step_errors=()) -> Phase:
 def inputs(value: Phase, **changes) -> Inputs:
     original = Inputs(
         NOW, "fenix", REPO, 60, Ok(value), Ok(()), Ok(()), Ok(()), Ok(()), (), Ok(()),
-        GhStatus("off", None, None, None, False),
+        GhStatus("off", None, None, None, False), Ok(()),
     )
     return replace(original, **changes)
 
@@ -106,6 +107,23 @@ def test_agent_status_uses_task_state_when_presence_disagrees() -> None:
     assert actions == ()
     assert tuple(agent.status for agent in snapshot.agents) == ("busy", "stalling")
     assert tuple(agent.rows[0].state for agent in snapshot.agents) == ("running", "queued")
+
+
+def test_existing_out_of_phase_bead_is_red_and_missing_bead_is_yellow() -> None:
+    member = Member("solar", "active", NOW)
+    tasks = (
+        Task("foreign", "solar", "active", 1, NOW, NOW, "foreign task"),
+        Task("missing", "solar", "assigned", 2, NOW, NOW, "missing bead"),
+    )
+    foreign = Bead("foreign", "foreign task", "open", (), "other-root", (), "solar", {}, NOW, None, None)
+    supplied = inputs(phase(), members=Ok((member,)), tasks=Ok(tasks), task_beads=Ok((foreign,)))
+    snapshot, _, _ = tick(supplied, STATE, NOW, render)
+    assert [row.marker for row in snapshot.agents[0].rows] == ["red", "yellow"]
+
+    error = NotFound("not_found", "task bead read", "retry")
+    snapshot, _, _ = tick(replace(supplied, task_beads=Err(error)), STATE, NOW, render)
+    assert [row.marker for row in snapshot.agents[0].rows] == [None, None]
+    assert error in snapshot.errors
 
 
 def test_due_cycle_fetch_missing_ref_and_merge_pairs() -> None:
@@ -301,7 +319,7 @@ def test_all_input_and_step_errors_reach_snapshot_without_exception() -> None:
     error = NotFound("not_found", "input", "repair it")
     value = phase(step_errors=(("bad", error),))
     base = inputs(value)
-    for name in ("phase", "members", "tasks", "worktrees", "remotes", "prs"):
+    for name in ("phase", "members", "tasks", "worktrees", "remotes", "prs", "task_beads"):
         snapshot, _, _ = tick(replace(base, **{name: Err(error)}), STATE, NOW, lambda context: Err(error))
         assert error in snapshot.errors
     snapshot, _, _ = tick(replace(base, merges=(Err(error),)), STATE, NOW, lambda context: Err(error))
