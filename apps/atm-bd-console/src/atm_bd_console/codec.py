@@ -5,15 +5,30 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from types import UnionType
-from typing import Any, Literal, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from .result import Err, Error, Ok, ParseFailed, Result
+from .result import (
+    CommandFailed,
+    ConfigInvalid,
+    Err,
+    Error,
+    IoFailed,
+    LockHeld,
+    NotFound,
+    Ok,
+    ParseFailed,
+    Rejected,
+    Result,
+    Timeout,
+    Unreachable,
+)
 
-_ERRORS = {
-    "command_failed": "CommandFailed", "timeout": "Timeout", "rejected": "Rejected", "unreachable": "Unreachable",
-    "parse_failed": "ParseFailed", "not_found": "NotFound", "config_invalid": "ConfigInvalid",
-    "lock_held": "LockHeld", "io_failed": "IoFailed",
+_ERRORS: dict[str, type[Any]] = {
+    "command_failed": CommandFailed, "timeout": Timeout, "rejected": Rejected, "unreachable": Unreachable,
+    "parse_failed": ParseFailed, "not_found": NotFound, "config_invalid": ConfigInvalid,
+    "lock_held": LockHeld, "io_failed": IoFailed,
 }
+_ERROR_TYPES = frozenset(_ERRORS.values())
 
 
 def to_json(obj: Any) -> str:
@@ -39,12 +54,28 @@ def _encode(obj: Any) -> Any:
     return obj
 
 
+class _DecodeError(Exception):
+    """A decode mismatch at a field path; converted to ParseFailed at the from_json boundary."""
+
+    def __init__(self, path: str, message: str) -> None:
+        super().__init__(f"{path}: {message}")
+        self.path = path
+        self.message = message
+
+
+_FIX = "correct the JSON contract value"
+
+
 def from_json(cls: type[Any], text: str) -> Result[Any]:
     """Decode a contract value; malformed input is data, never an exception."""
     try:
         return Ok(_decode(cls, json.loads(text), "$"))
-    except (TypeError, ValueError, KeyError, json.JSONDecodeError) as error:
-        return Err(ParseFailed("parse_failed", "$", str(error), "correct the JSON contract value"))
+    except _DecodeError as error:
+        return Err(ParseFailed("parse_failed", error.path, str(error), _FIX))
+    except json.JSONDecodeError as error:
+        return Err(ParseFailed("parse_failed", "$", f"invalid JSON: {error}", _FIX))
+    except RecursionError:
+        return Err(ParseFailed("parse_failed", "$", "value nested too deeply", _FIX))
 
 
 def _decode(cls: Any, value: Any, path: str) -> Any:
@@ -53,74 +84,96 @@ def _decode(cls: Any, value: Any, path: str) -> Any:
     origin, args = get_origin(cls), get_args(cls)
     if cls is datetime:
         if not isinstance(value, str) or not value.endswith("Z"):
-            raise ValueError(f"{path}: expected UTC Z datetime")
-        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+            raise _DecodeError(path, "expected UTC datetime YYYY-MM-DDTHH:MM:SSZ")
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError as error:
+            raise _DecodeError(path, f"invalid datetime: {error}") from None
         return parsed.replace(tzinfo=UTC)
     if origin is Literal:
-        if value not in args:
-            raise ValueError(f"{path}: expected one of {args}")
+        if not isinstance(value, str) or value not in args:
+            raise _DecodeError(path, f"expected one of {args}")
         return value
-    if origin in (tuple,):
+    if origin is tuple:
         if not isinstance(value, list):
-            raise ValueError(f"{path}: expected array")
+            raise _DecodeError(path, "expected array")
         if len(args) == 2 and args[1] is Ellipsis:
             return tuple(_decode(args[0], item, f"{path}[{index}]") for index, item in enumerate(value))
         if len(value) != len(args):
-            raise ValueError(f"{path}: expected {len(args)} items")
+            raise _DecodeError(path, f"expected {len(args)} items")
         return tuple(_decode(item_type, item, f"{path}[{index}]") for index, (item_type, item) in enumerate(zip(args, value)))
     if origin in (dict, Mapping) or cls is Mapping:
         if not isinstance(value, dict):
-            raise ValueError(f"{path}: expected object")
+            raise _DecodeError(path, "expected object")
         value_type = args[1] if len(args) == 2 else Any
         return {key: _decode(value_type, item, f"{path}.{key}") for key, item in value.items()}
-    if origin in (UnionType,) or str(origin) == "typing.Union":
-        for option in args:
-            if option is type(None) and value is None:
-                return None
-            try:
-                return _decode(option, value, path)
-            except (TypeError, ValueError, KeyError):
-                continue
-        raise ValueError(f"{path}: does not match any permitted type")
+    if origin is UnionType or origin is Union:
+        return _decode_union(args, value, path)
     if cls is Ok or origin is Ok:
         if not isinstance(value, dict) or set(value) != {"ok"}:
-            raise ValueError(f"{path}: expected ok envelope")
+            raise _DecodeError(path, "expected ok envelope")
         return Ok(_decode(args[0] if args else Any, value["ok"], f"{path}.ok"))
     if cls is Err:
         if not isinstance(value, dict) or set(value) != {"err"}:
-            raise ValueError(f"{path}: expected err envelope")
+            raise _DecodeError(path, "expected err envelope")
         return Err(_decode_error(value["err"], f"{path}.err"))
-    if cls is Error:
-        return _decode_error(value, path)
-    if is_dataclass(cls):
-        if not isinstance(value, dict):
-            raise ValueError(f"{path}: expected object")
-        hints = get_type_hints(cls)
-        decoded = {}
-        for field in fields(cls):
-            if field.name not in value:
-                raise KeyError(f"{path}.{field.name}: missing field")
-            decoded[field.name] = _decode(hints[field.name], value[field.name], f"{path}.{field.name}")
-        return cls(**decoded)
+    if is_dataclass(cls) and isinstance(cls, type):
+        return _decode_dataclass(cls, value, path)
     if cls in (str, int, bool, float):
         if type(value) is not cls:
-            raise ValueError(f"{path}: expected {cls.__name__}")
+            raise _DecodeError(path, f"expected {cls.__name__}")
         return value
     if cls is type(None):
         if value is not None:
-            raise ValueError(f"{path}: expected null")
+            raise _DecodeError(path, "expected null")
         return None
-    return value
+    raise _DecodeError(path, f"unsupported annotation {cls!r}")
+
+
+def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
+    if not isinstance(value, dict):
+        raise _DecodeError(path, "expected object")
+    hints = get_type_hints(cls)
+    names = [field.name for field in fields(cls)]
+    unknown = sorted(set(value) - set(names))
+    if unknown:
+        raise _DecodeError(f"{path}.{unknown[0]}", f"unknown field (unknown: {', '.join(unknown)})")
+    decoded = {}
+    for name in names:
+        if name not in value:
+            raise _DecodeError(f"{path}.{name}", "missing field")
+        decoded[name] = _decode(hints[name], value[name], f"{path}.{name}")
+    return cls(**decoded)
+
+
+def _decode_union(options: tuple[Any, ...], value: Any, path: str) -> Any:
+    if value is None and type(None) in options:
+        return None
+    present = tuple(option for option in options if option is not type(None))
+    if present and all(option in _ERROR_TYPES for option in present):
+        return _decode_error(value, path)
+    failures: list[_DecodeError] = []
+    for option in present:
+        try:
+            return _decode(option, value, path)
+        except _DecodeError as error:
+            failures.append(error)
+    if not failures:
+        raise _DecodeError(path, "expected null")
+    # The alternative that matched deepest names the field that is actually wrong.
+    deepest = max(failures, key=lambda error: len(error.path))
+    if deepest.path == path:
+        raise _DecodeError(path, "does not match any permitted type: " + "; ".join(e.message for e in failures))
+    raise deepest
 
 
 def _decode_error(value: Any, path: str) -> Error:
     if not isinstance(value, dict) or not isinstance(value.get("kind"), str):
-        raise TypeError(f"{path}: error kind missing")
-    from . import result
-    name = _ERRORS.get(value["kind"])
-    if name is None:
-        raise ValueError(f"{path}.kind: unknown error kind")
-    return _decode(getattr(result, name), value, path)
+        raise _DecodeError(f"{path}.kind", "error kind missing")
+    error_type = _ERRORS.get(value["kind"])
+    if error_type is None:
+        raise _DecodeError(f"{path}.kind", f"unknown error kind {value['kind']!r}")
+    return _decode(error_type, value, path)
 
 
 def snapshot_stale(snapshot: Any, now: datetime) -> bool:
