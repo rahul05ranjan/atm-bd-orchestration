@@ -12,6 +12,7 @@ from contract_samples import (
     IO_FAILED,
     PHASE,
     PHASE_FILE,
+    PRS_FILE,
     REPO_CONFIG,
     SNAPSHOT,
     STATE,
@@ -19,8 +20,9 @@ from contract_samples import (
 )
 
 from atm_bd_console import runner
+from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import Err, Ok
-from atm_bd_console.state import acquire_lock
+from atm_bd_console.state import acquire_lock, load_prs, load_snapshot
 from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem
 
 
@@ -173,6 +175,40 @@ def test_github_off_skips_forced_read_and_event(github_runtime) -> None:
 
     runner.step(replace(CONFIG, github="off"), STATE, True, store)
 
+    assert calls == []
+    assert not [event for event in events if event[0] == "github_read"]
+
+
+@pytest.mark.parametrize("cached_mode", ("rest", "graphql"))
+@pytest.mark.parametrize("force_github", (False, True))
+def test_github_off_discards_populated_active_cache(github_runtime, monkeypatch, tmp_path, cached_mode, force_github) -> None:
+    _, calls, events, _ = github_runtime
+    class Clock:
+        @staticmethod
+        def now(_timezone):
+            return SNAPSHOT.generated_at
+
+    monkeypatch.setattr(runner, "datetime", Clock)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=())))
+    monkeypatch.setattr(runner.model, "tick", model_tick)
+    cached = replace(PRS_FILE, gh=GhStatus(cached_mode, True, None, SNAPSHOT.generated_at, False))
+    acquired = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(acquired, Ok)
+    config = replace(CONFIG, github="off", repo_root=str(tmp_path))
+
+    with acquired.value as store:
+        assert store.write_prs(cached) == Ok(None)
+        assert load_prs(tmp_path, PHASE_FILE.root_id) == Ok(cached)
+
+        snapshot, _ = runner.step(config, INITIAL_STATE, force_github, store)
+
+    assert snapshot.gh == GhStatus("off", None, None, None, False)
+    assert snapshot.prs == ()
+    assert snapshot.top_pr is None and snapshot.top_ci is None
+    assert load_snapshot(tmp_path, PHASE_FILE.root_id) == Ok(snapshot)
+    persisted = load_prs(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(persisted, Ok)
+    assert persisted.value.gh == snapshot.gh and persisted.value.prs == ()
     assert calls == []
     assert not [event for event in events if event[0] == "github_read"]
 

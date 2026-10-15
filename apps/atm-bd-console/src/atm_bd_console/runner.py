@@ -136,9 +136,10 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
             checked = git_source.merge(config.repo_root, branch, target)
             merge_results.append(checked)
             if isinstance(checked, Ok): merges[branch] = checked.value
-    gh = saved_prs.value.gh if isinstance(saved_prs, Ok) else _gh(config.github)
-    prs = saved_prs.value.prs if isinstance(saved_prs, Ok) else ()
-    prs_input = Ok(prs) if isinstance(saved_prs, Ok) else None
+    cached_prs = saved_prs.value if config.github != "off" and isinstance(saved_prs, Ok) else None
+    gh = cached_prs.gh if cached_prs is not None else _gh(config.github)
+    prs = cached_prs.prs if cached_prs is not None else ()
+    prs_input = Ok(prs) if cached_prs is not None else None
     if config.github != "off" and (force_github or (due and due.github)):
         prs_input, gh = github_source.open_prs(config.github)
         prs = prs_input.value if isinstance(prs_input, Ok) else ()
