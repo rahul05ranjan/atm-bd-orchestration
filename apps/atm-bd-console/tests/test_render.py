@@ -152,6 +152,10 @@ def test_status_bar_formats_and_cell_width() -> None:
         assert status_bar(failed, 120).plain == (
             "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
         )
+        truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
+        assert status_bar(truncated_ok, 120).plain == (
+            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+        )
         for width in (80, 120):
             assert cell_len(status_bar(value, width).plain) <= width
             assert cell_len(status_bar(failed, width).plain) <= width
