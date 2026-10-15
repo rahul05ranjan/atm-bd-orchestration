@@ -126,6 +126,7 @@ def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_source, "members", forbidden)
     snapshot, _ = runner.step(CONFIG, STATE, False, Store())
     assert snapshot.root_closed and snapshot.stopped == "closed"
+    assert snapshot.errors == ()
 
 
 def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> None:
@@ -302,7 +303,7 @@ def test_closed_root_write_failure_is_returned_in_snapshot(monkeypatch, tmp_path
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
     snapshot, _ = runner.step(CONFIG, STATE, False, Store())
-    assert snapshot.errors.count(IO_FAILED) == 2
+    assert snapshot.errors == (IO_FAILED, IO_FAILED)
 
 
 def test_github_off_never_calls_github(monkeypatch) -> None:

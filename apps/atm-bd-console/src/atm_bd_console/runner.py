@@ -86,6 +86,8 @@ def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], r
 
 def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger):
     phase = atm_bd.phase(file, root_bead, (), (), ())
+    if root_bead is not None and root_bead.status == "closed" and isinstance(phase, Ok):
+        phase = Ok(replace(phase.value, step_errors=()))
     empty = Ok(())
     snapshot, _, next_state = model.tick(
         Inputs(now, config.lead, repo, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty),
