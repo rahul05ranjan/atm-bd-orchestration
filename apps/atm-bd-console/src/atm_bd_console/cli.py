@@ -28,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--phase"); parser.add_argument("--as", dest="lead")
     parser.add_argument("--github", choices=("graphql", "rest", "off")); parser.add_argument("--interval", type=int)
     parser.add_argument("--dry-run", action="store_true"); parser.add_argument("--no-fetch", action="store_true")
-    parser.add_argument("--once", action="store_true"); parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--once", action="store_true", help="run one headless tick")
+    parser.add_argument("--headless", action="store_true")
     args = parser.parse_args(argv)
     if not args.phase:
         print(f"{CONSOLE_NAME}: --phase <phase> is required; name the phase to run")
@@ -56,10 +57,6 @@ def main(argv: list[str] | None = None) -> int:
             return 3
     saved = load_state(loaded.value.repo_root, root_id)
     state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
-    if args.once and not args.headless and args.command != "snapshot":
-        from .app import run
-
-        return run(loaded.value, runner.step)
     if args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):

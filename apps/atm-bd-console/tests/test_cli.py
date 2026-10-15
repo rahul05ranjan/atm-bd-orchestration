@@ -67,6 +67,14 @@ def test_cli_import_does_not_load_textual() -> None:
     assert check.returncode == 0, check.stderr
 
 
+def test_headless_main_does_not_load_textual() -> None:
+    check = subprocess.run(
+        [sys.executable, "-c", "import sys; from atm_bd_console.cli import main; main(['--phase', 'x', '--as', 'y', '--headless']); assert 'textual' not in sys.modules"],
+        capture_output=True, text=True, check=False,
+    )
+    assert check.returncode == 0, check.stderr
+
+
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(replace(SNAPSHOT, generated_at=datetime.now(UTC))))
     monkeypatch.setattr(cli.runner, "step", lambda *_: (_ for _ in ()).throw(AssertionError("step")))
