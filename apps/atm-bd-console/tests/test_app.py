@@ -128,7 +128,7 @@ def test_held_lock_exits_1_with_its_message_before_drawing(tmp_path, monkeypatch
     monkeypatch.setattr(console, "ConsoleApp", lambda *args: drawn.append(args))
     step = FakeStep(RUNNING)
     with holder.value:
-        assert run(config, step) == 1
+        assert run(config, step, STATE) == 1
     assert drawn == [] and step.calls == []
     err = capsys.readouterr().err
     assert "lock held" in err and "wait for the running console process" in err
@@ -149,8 +149,8 @@ def test_run_takes_the_lock_and_returns_the_app_code(tmp_path, monkeypatch) -> N
 
     monkeypatch.setattr(console, "ConsoleApp", Recorder)
     step = FakeStep(RUNNING)
-    assert run(config, step) == 0
-    assert seen[0][2] == console.INITIAL_STATE and seen[0][3] is None
+    assert run(config, step, STATE) == 0
+    assert seen[0][2] == STATE and seen[0][3] is None
     assert isinstance(acquire_lock(config.repo_root, "bh"), Ok)
 
 

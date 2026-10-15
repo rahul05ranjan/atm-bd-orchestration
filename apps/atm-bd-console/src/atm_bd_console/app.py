@@ -16,9 +16,9 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import prs, render, status
-from .result import Err, Error, IoFailed, NotFound, Ok
-from .state import acquire_lock, load_state
-from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
+from .result import Err, Error, IoFailed
+from .state import acquire_lock
+from .types import Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 
@@ -178,17 +178,13 @@ class ConsoleApp(App[int]):
         self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
 
 
-def run(config: Config, step: StepFn) -> int:
+def run(config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> int:
     """Take the console lock, then run the app until q; a held lock exits 1 before drawing."""
     root_id = Path(config.state_dir).name
     lock = acquire_lock(config.repo_root, root_id)
     if isinstance(lock, Err):
         print(_lock_message(lock.error), file=sys.stderr)
         return 1
-    loaded = load_state(config.repo_root, root_id)
-    state = loaded.value if isinstance(loaded, Ok) else INITIAL_STATE
-    # A missing state file is a first run; any other read failure starts empty and stays shown in == Errors.
-    startup_error = loaded.error if isinstance(loaded, Err) and not isinstance(loaded.error, NotFound) else None
     with lock.value:
         result = ConsoleApp(config, step, state, startup_error, lock.value).run()
     return result or 0

@@ -8,9 +8,10 @@ from datetime import UTC, datetime
 import pytest
 from contract_samples import CONFIG, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
 
-from atm_bd_console import __version__, cli
+from atm_bd_console import __version__, app, cli
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.state import acquire_lock
+from atm_bd_console.types import INITIAL_STATE
 
 
 def test_missing_as_uses_documented_message(capsys) -> None:
@@ -57,7 +58,7 @@ def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
-    monkeypatch.setattr("atm_bd_console.app.run", lambda config, step: 17)
+    monkeypatch.setattr("atm_bd_console.app.run", lambda config, step, state, startup_error: 17)
     assert cli.main(["--phase", "bh", "--as", "fenix"]) == 17
 
 
@@ -144,3 +145,16 @@ def test_headless_real_lock_held_is_a_json_error(monkeypatch, capsys, tmp_path) 
     with held.value:
         assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
+
+
+def test_interactive_launch_passes_the_cli_loaded_state_to_the_app(monkeypatch) -> None:
+    seen: list[tuple] = []
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli, "load_state", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(app, "run", lambda *args: seen.append(args) or 0)
+
+    assert cli.main(["--phase", "bh", "--as", "fenix"]) == 0
+    assert seen == [(CONFIG, cli.runner.step, INITIAL_STATE, TIMEOUT)]
