@@ -8,7 +8,7 @@ from typing import Literal
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .log import create_console_logger
 from .result import Err, Ok
-from .state import StateStore, load_merges, load_prs
+from .state import StateStore
 from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, Metrics, PrsFile, Snapshot, State
 
 
@@ -96,9 +96,11 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         atm_bd.dispatch_spec,
     )
     next_state = state if config.dry_run else next_state
-    persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
-    writes = (store.write_state(next_state), store.write_snapshot(persisted))
-    snapshot = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
+    written = store.write_state(next_state)
+    errors = (*snapshot.errors, *store.load_errors, *((written.error,) if isinstance(written, Err) else ()))
+    persisted = replace(snapshot, errors=errors, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+    snapshot_written = store.write_snapshot(persisted)
+    snapshot = replace(persisted, errors=(*persisted.errors, snapshot_written.error)) if isinstance(snapshot_written, Err) else persisted
     if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
     return snapshot, next_state
 
@@ -108,7 +110,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     now = datetime.now(UTC)
     file, repo = atm_bd.phase_file(config.repo_root, config.phase), atm_bd.repo_config(config.repo_root)
     if isinstance(file, Err) or isinstance(repo, Err):
-        errors = tuple(item.error for item in (file, repo) if isinstance(item, Err))
+        errors = (*store.load_errors, *(item.error for item in (file, repo) if isinstance(item, Err)))
         snapshot = Snapshot(1, now, config.phase, False, None, (), (), (), errors, Metrics(0, 0, 0, 0),
                             _gh(config.github), None, None, "graph TD", (), config.interval_s, config.lead,
                             "", (), (), {})
@@ -158,7 +160,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
                     repo.value.bead_prefix, config.github, now,
                     tasks.value if isinstance(tasks, Ok) else (),
                 )
-    saved_merges, saved_prs = load_merges(config.repo_root, file.value.root_id), load_prs(config.repo_root, file.value.root_id)
+    saved_merges, saved_prs = store.load_merges(), store.load_prs()
     merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
     merge_results = []
     if due:
@@ -184,7 +186,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
     def persist(store: StateStore):
             reported, action_errors = _run_actions(config, actions, store, now)
-            errors = list(action_errors)
+            errors = [*store.load_errors, *action_errors]
             durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
             reported_sent = (*state.sent, *reported)[-5:]
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs)),), store.write_state(durable)):

@@ -210,20 +210,23 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
     class Lock:
         def __enter__(self): return self
         def __exit__(self, *_): return None
+        def load_state(self): return Ok(INITIAL_STATE)
 
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
-    monkeypatch.setattr(cli, "load_state", lambda *_: Err(NotFound("not_found", "state", "run")))
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="idle"), None))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="idle", errors=()), None))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert capsys.readouterr().out == ""
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed"), None))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed", errors=()), None))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert capsys.readouterr().out == ""
     monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), None))
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert '"kind": "error"' in capsys.readouterr().out
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed", errors=(TIMEOUT,)), None))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
 
@@ -232,12 +235,12 @@ def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
     class Lock:
         def __enter__(self): return self
         def __exit__(self, *_): return None
+        def load_state(self): return Ok(INITIAL_STATE)
 
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
-    monkeypatch.setattr(cli, "load_state", lambda *_: Ok(INITIAL_STATE))
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
     monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(), sent=(replace(ACTION, outcome="failed command_failed"),)), INITIAL_STATE))
 
@@ -269,18 +272,17 @@ def test_headless_real_lock_held_is_a_json_error(monkeypatch, capsys, tmp_path) 
     assert '"kind": "error"' in capsys.readouterr().out
 
 
-def test_interactive_launch_passes_the_cli_loaded_state_to_the_app(monkeypatch) -> None:
+def test_interactive_launch_defers_state_loading_to_the_locked_app(monkeypatch) -> None:
     seen: list[tuple] = []
     kwargs = []
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
-    monkeypatch.setattr(cli, "load_state", lambda *_: Err(TIMEOUT))
     monkeypatch.setattr(app, "run", lambda *args, **values: seen.append(args) or kwargs.append(values) or 0)
 
     assert cli.main(["--phase", "bh", "--as", "fenix"]) == 0
-    assert seen == [(CONFIG, None, INITIAL_STATE, TIMEOUT)]
+    assert seen == [(CONFIG, None, INITIAL_STATE, None)]
     assert kwargs == [{"runner_step": cli.runner.step}]
 
 
@@ -307,9 +309,34 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
     assert seen[3] is not None
 
 
+def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch, tmp_path, capsys):
+    config = replace(CONFIG, repo_root=str(tmp_path))
+    phase_file = replace(PHASE_FILE, sprints=(), depends_on={})
+    root = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(config))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(phase_file))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Err(TIMEOUT))
+    directory = tmp_path / ".atm-bd/atm-bd-console" / PHASE_FILE.root_id
+    directory.mkdir(parents=True)
+    (directory / "state.json").write_text("{}")
+
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["kind"] == "error" and "state.json.corrupt-" in output["text"]
+    persisted = load_snapshot(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(persisted, Ok) and persisted.value.stopped == "closed"
+    assert len(persisted.value.errors) == 1 and persisted.value.errors[0].kind == "parse_failed"
+    assert len(list(directory.glob("state.json.corrupt-*"))) == 1
+
+
 @pytest.mark.parametrize("member_read_fails", (False, True))
+@pytest.mark.parametrize("runtime_damage", (None, "corrupt", "unreadable"))
 def test_headless_cli_and_app_run_real_runner_step_with_state_store(
-    monkeypatch, tmp_path, capsys, member_read_fails: bool,
+    monkeypatch, tmp_path, capsys, member_read_fails: bool, runtime_damage,
 ) -> None:
     """Both entry paths share runner.step, persistence, an action, and source-error reporting."""
     fixed_now = datetime(2026, 10, 15, tzinfo=UTC)
@@ -367,14 +394,44 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     monkeypatch.setattr(cli, "now", lambda: fixed_now)
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin/tool")
 
+    damaged = {"state.json": b'{"problems":[]}', "merge.json": b'{', "prs.json": b'\xff'}
+
+    def damage_runtime():
+        if runtime_damage is None:
+            return
+        directory = Path(config.state_dir)
+        directory.mkdir(parents=True)
+        for name, payload in damaged.items():
+            path = directory / name
+            path.write_bytes(payload)
+            if runtime_damage == "unreadable":
+                path.chmod(0)
+
+    def assert_preserved(snapshot):
+        if runtime_damage is None:
+            return
+        for name, payload in damaged.items():
+            backups = list(Path(config.state_dir).glob(f"{name}.corrupt-*"))
+            assert len(backups) == 1
+            backups[0].chmod(0o600)
+            assert backups[0].read_bytes() == payload
+            assert any(str(backups[0]) in error.fix for error in snapshot.errors)
+            assert (Path(config.state_dir) / name).read_bytes() != payload
+
+    damage_runtime()
     assert cli.main(["--phase", "bh", "--as", "fenix", "--headless"]) == 0
     headless_output = capsys.readouterr().out
     headless_snapshot = load_snapshot(repo, phase_file.root_id)
     headless_state = load_state(repo, phase_file.root_id)
     assert isinstance(headless_snapshot, Ok) and isinstance(headless_state, Ok)
     assert any(json.loads(line)["kind"] == "assign" for line in headless_output.splitlines())
+    assert_preserved(headless_snapshot.value)
+    if runtime_damage is not None:
+        for name in damaged:
+            assert any(name in json.loads(line)["text"] for line in headless_output.splitlines() if json.loads(line)["kind"] == "error")
 
     shutil.rmtree(config.state_dir)
+    damage_runtime()
     app_result = []
 
     def run_in_pilot(console_app):
@@ -382,6 +439,9 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
             async with console_app.run_test() as pilot:
                 await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
                 await pilot.pause()
+                if runtime_damage is not None:
+                    assert console_app.is_running
+                    assert "Errors" in str(console_app.query_one("#dashboard").render())
             app_result.append((console_app.snapshot, console_app.state))
 
         asyncio.run(scenario())
@@ -394,5 +454,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     assert actions == ["assign", "assign"]
     assert headless_snapshot.value.sent == app_snapshot.sent
     assert headless_state.value == app_state
-    assert headless_snapshot.value.errors == app_snapshot.errors
-    assert headless_snapshot.value.errors == ((TIMEOUT,) if member_read_fails else ())
+    assert [error.kind for error in headless_snapshot.value.errors] == [error.kind for error in app_snapshot.errors]
+    assert len(app_snapshot.errors) == (3 if runtime_damage else 0) + int(member_read_fails)
+    assert load_snapshot(repo, phase_file.root_id) == Ok(app_snapshot)
+    assert_preserved(app_snapshot)

@@ -4,13 +4,15 @@ from __future__ import annotations
 import fcntl
 import os
 import tempfile
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
+from uuid import uuid4
 
 from .codec import from_json, to_json
 from .paths import state_directory
-from .result import Err, IoFailed, LockHeld, NotFound, Ok, Result
+from .result import Err, Error, IoFailed, LockHeld, NotFound, Ok, ParseFailed, Result
 from .types import ActionLine, MergeFile, PrsFile, Snapshot, State
 
 
@@ -20,6 +22,37 @@ class StateStore:
     def __init__(self, directory: Path, lock_file: Any) -> None:
         self.directory = directory
         self._lock_file = lock_file
+        self.load_errors: list[Error] = []
+        self._blocked_writes: dict[str, Err] = {}
+
+    def load_state(self) -> Result[State]:
+        return self._load_runtime("state.json", State)
+
+    def load_merges(self) -> Result[MergeFile]:
+        return self._load_runtime("merge.json", MergeFile)
+
+    def load_prs(self) -> Result[PrsFile]:
+        return self._load_runtime("prs.json", PrsFile)
+
+    def _load_runtime(self, name: str, cls: type[Any]) -> Result[Any]:
+        if name in self._blocked_writes:
+            return self._blocked_writes[name]
+        path = self.directory / name
+        loaded = _read(path, cls)
+        if isinstance(loaded, Ok) or isinstance(loaded.error, NotFound):
+            return loaded
+        backup = path.with_name(f"{name}.corrupt-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid4().hex}")
+        try:
+            path.rename(backup)
+        except OSError as error:
+            self.load_errors.append(loaded.error)
+            blocked = Err(IoFailed("io_failed", str(path), str(error), f"preserve {path} before resetting it; writes are blocked"))
+            self._blocked_writes[name] = blocked
+            self.load_errors.append(blocked.error)
+            return blocked
+        recovered = Err(replace(loaded.error, fix=f"inspect preserved file {backup}; runtime data was reset"))
+        self.load_errors.append(recovered.error)
+        return recovered
 
     def close(self) -> None:
         """Release promptly; process death also releases this OS lock."""
@@ -60,6 +93,8 @@ class StateStore:
             return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
 
     def _write(self, name: str, value: object) -> Result[None]:
+        if name in self._blocked_writes:
+            return self._blocked_writes[name]
         path = self.directory / name
         temporary: str | None = None
         try:
@@ -129,10 +164,15 @@ def _discard(path: str) -> None:
 
 
 def _read(path: Path, cls: type[Any]) -> Result[Any]:
-    if not path.is_file():
-        return Err(NotFound("not_found", str(path), "run a console tick to create it"))
     try:
-        return from_json(cls, path.read_text(encoding="utf-8"))
+        decoded = from_json(cls, path.read_text(encoding="utf-8"))
+        if isinstance(decoded, Err) and isinstance(decoded.error, ParseFailed):
+            return Err(replace(decoded.error, source=f"{path}:{decoded.error.source}"))
+        return decoded
+    except FileNotFoundError:
+        if not path.is_symlink():
+            return Err(NotFound("not_found", str(path), "run a console tick to create it"))
+        return Err(IoFailed("io_failed", str(path), "broken symbolic link", "repair the runtime file"))
     except (OSError, UnicodeDecodeError) as error:
         return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
 

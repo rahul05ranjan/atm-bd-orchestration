@@ -24,14 +24,21 @@ from contract_samples import (
 
 from atm_bd_console import runner
 from atm_bd_console.model import tick as model_tick
-from atm_bd_console.result import Err, Ok
+from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Task
 
 RUNNING_STATE = replace(STATE, idle_since=None)
 
 
-class Store:
+class StoreReads:
+    load_errors = ()
+
+    def load_merges(self): return Err(NotFound("not_found", "merge.json", "run"))
+    def load_prs(self): return Err(NotFound("not_found", "prs.json", "run"))
+
+
+class Store(StoreReads):
     directory = Path(".")
 
     def append_action(self, _line): return Ok(None)
@@ -69,7 +76,7 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     events: list[tuple[str, dict]] = []
     inputs = []
 
-    class Store:
+    class Store(StoreReads):
         directory = tmp_path
 
         def append_action(self, _line): return Ok(None)
@@ -173,7 +180,7 @@ def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -
         lambda mode: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
     )
 
-    class Store:
+    class Store(StoreReads):
         directory = tmp_path
 
         def write_merges(self, _value): return Ok(None)
@@ -211,7 +218,7 @@ def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -
         lambda mode: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
     )
 
-    class Store:
+    class Store(StoreReads):
         directory = tmp_path
 
         def write_merges(self, _value): return Ok(None)
@@ -234,7 +241,7 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
     closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
     writes, events = [], []
 
-    class Store:
+    class Store(StoreReads):
         directory = tmp_path
         def write_state(self, value): writes.append(("state", value)); return Ok(None)
         def write_snapshot(self, value): writes.append(("snapshot", value)); return Ok(None)
@@ -294,7 +301,7 @@ def test_stopped_tick_preserves_durable_state_in_dry_run(monkeypatch, tmp_path, 
 
 def test_closed_root_write_failure_is_returned_in_snapshot(monkeypatch, tmp_path) -> None:
     closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
-    class Store:
+    class Store(StoreReads):
         directory = tmp_path
         def write_state(self, _value): return Err(IO_FAILED)
         def write_snapshot(self, _value): return Err(IO_FAILED)
@@ -356,7 +363,7 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
     store, _, _, inputs = github_runtime
     writes = []
     cached = replace(PRS_FILE, read_at=EARLIER)
-    monkeypatch.setattr(runner, "load_prs", lambda *_: Ok(cached))
+    monkeypatch.setattr(store, "load_prs", lambda: Ok(cached))
     store.write_prs = lambda value: writes.append(value) or Ok(None)
 
     snapshot, _ = runner.step(CONFIG, STATE, True, store)

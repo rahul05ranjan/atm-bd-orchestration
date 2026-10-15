@@ -10,8 +10,8 @@ from . import __version__, atm_bd, render, runner
 from . import config as config_source
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
-from .result import Err, NotFound, Ok
-from .state import acquire_lock, load_snapshot, load_state
+from .result import Err, Ok
+from .state import acquire_lock, load_snapshot
 from .types import INITIAL_STATE
 
 MISSING_AS = f"""{CONSOLE_NAME}: --as <phase lead> is required: the ATM identity that leads this phase.
@@ -56,8 +56,6 @@ def main(argv: list[str] | None = None) -> int:
         if shutil.which(command) is None:
             print(f"{CONSOLE_NAME}: not_found: install {command} and retry")
             return 3
-    saved = load_state(loaded.value.repo_root, root_id)
-    state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
     if args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
@@ -68,14 +66,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:
+            saved = lock.value.load_state()
+            state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
             snapshot, _ = runner.step(loaded.value, state, False, lock.value)
         if args.headless and snapshot.stopped is None:
             for action in (item for item in snapshot.sent if item.at == snapshot.generated_at):
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))
+        if args.headless:
             for error in snapshot.errors:
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
         return 0
     from .app import run
 
-    startup_error = saved.error if isinstance(saved, Err) and not isinstance(saved.error, NotFound) else None
-    return run(loaded.value, None, state, startup_error, runner_step=runner.step)
+    return run(loaded.value, None, INITIAL_STATE, None, runner_step=runner.step)

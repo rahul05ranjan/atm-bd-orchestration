@@ -17,9 +17,9 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import prs, render, status
-from .result import Err, Error, IoFailed
+from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
-from .types import Config, Snapshot, SprintView, State, StepFn
+from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 
@@ -224,6 +224,9 @@ def run(config: Config, step: StepFn | None, state: State, startup_error: Error 
         print(_lock_message(lock.error), file=sys.stderr)
         return 1
     with lock.value:
+        if runner_step is not None:
+            saved = lock.value.load_state()
+            state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
         bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value)
         assert bound_step is not None
         result = ConsoleApp(config, bound_step, state, startup_error).run()
