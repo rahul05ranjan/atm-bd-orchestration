@@ -38,7 +38,7 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore,
     return tuple(errors)
 
 
-def step(config: Config, state: State, force_github: bool, store=None):
+def step(config: Config, state: State, force_github: bool, store: StateStore | None = None):
     """Run one best-effort tick and atomically persist its inspectable files."""
     now = datetime.now(UTC)
     file, repo = atm_bd.phase_file(config.repo_root, config.phase), atm_bd.repo_config(config.repo_root)
@@ -91,9 +91,11 @@ def step(config: Config, state: State, force_github: bool, store=None):
     remotes = git_source.remote_refs(config.repo_root) if due and due.fetch else None
     saved_merges, saved_prs = load_merges(config.repo_root, file.value.root_id), load_prs(config.repo_root, file.value.root_id)
     merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
+    merge_results = []
     if due:
         for branch, target in due.merges:
             checked = git_source.merge(config.repo_root, branch, target)
+            merge_results.append(checked)
             if isinstance(checked, Ok): merges[branch] = checked.value
     gh = saved_prs.value.gh if isinstance(saved_prs, Ok) else _gh(config.github)
     prs = saved_prs.value.prs if isinstance(saved_prs, Ok) else ()
@@ -102,12 +104,12 @@ def step(config: Config, state: State, force_github: bool, store=None):
         prs_input, gh = github_source.open_prs(config.github)
         prs = prs_input.value if isinstance(prs_input, Ok) else ()
         if isinstance(logger, Ok): logger.value.event("github_read", forced=force_github)
-    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
+    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
     lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
     active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
     if active_store is not None:
-        def persist(store):
+        def persist(store: StateStore):
             errors = list(_run_actions(config, actions, store, now))
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
                 if isinstance(written, Err): errors.append(written.error)
