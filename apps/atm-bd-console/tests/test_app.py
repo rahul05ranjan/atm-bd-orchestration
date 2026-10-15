@@ -7,6 +7,7 @@ from dataclasses import replace
 from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
+from rich.cells import cell_len
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
@@ -60,6 +61,35 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
             assert app.is_running
             shown = str(app.query_one("#dashboard").render())
             assert "== Errors (1)" in shown and "step exploded" in shown
+
+    run_scenario(scenario())
+
+
+def test_raised_multiline_error_fits_dashboard_and_header_after_resize() -> None:
+    class LongRaisingStep:
+        def __call__(self, *_args) -> tuple[Snapshot, State]:
+            raise RuntimeError("first error detail is far too long for a narrow terminal\nsecond line should be normalized")
+
+    async def scenario() -> None:
+        app = ConsoleApp(CONFIG, LongRaisingStep(), STATE)
+        async with app.run_test(size=(120, 24)) as pilot:
+            await settle(pilot)
+            dashboard = app.query_one("#dashboard")
+            shown = dashboard.render().plain.splitlines()
+            assert len(shown) == 2
+            assert "first error detail" in shown[1]
+            assert "second line should be normalized" in shown[1]
+            assert max(cell_len(line) for line in shown) <= app.size.width
+
+            await pilot.resize_terminal(18, 10)
+            app.query_one("TabbedContent").active = "status"
+            await pilot.pause()
+            dashboard = app.query_one("#dashboard")
+            shown = dashboard.render().plain.splitlines()
+            assert max(cell_len(line) for line in shown) <= app.size.width
+            header = app.query_one("#status-header")
+            assert max(cell_len(line) for line in header.render().plain.splitlines()) <= app.size.width
+            assert "…" in shown[1]
 
     run_scenario(scenario())
 

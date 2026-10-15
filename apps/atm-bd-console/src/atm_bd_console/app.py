@@ -155,8 +155,7 @@ class ConsoleApp(App[int]):
         if not self.is_running:
             return
         self.tick_error = error
-        self.query_one("#dashboard", Static).update(Text(f"== Errors (1)\n {error.kind}: {error.message}", style="red"))
-        self.query_one("#status-header", Static).update(Text(f"{error.kind}: {error.fix}", style="red"))
+        self.refresh_views()
 
     def _show(self, snapshot: Snapshot, text: str, error: Error | None) -> None:
         # A tick can finish after q has begun shutdown; its screen is gone, so there is nothing to draw.
@@ -192,20 +191,26 @@ class ConsoleApp(App[int]):
 
     def refresh_views(self) -> None:
         snapshot = self.snapshot
-        if snapshot is None:
+        if snapshot is None and self.tick_error is None:
             return
         width = self.size.width
         panel = self.query_one("#dispatch-panel")
-        height = panel.size.height or self.size.height
-        self.query_one("#dashboard", Static).update(render.dashboard(snapshot, min(panel.size.width or width, width), height))
-        self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width))
-        self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
-        header = Text(status_header(snapshot), no_wrap=True, overflow="ellipsis")
-        if self.status_error is not None:
-            header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
-        header.truncate(width, overflow="ellipsis")
-        self.query_one("#status-header", Static).update(header)
-        self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
+        dashboard_width = min(panel.size.width or width, width)
+        if snapshot is not None:
+            height = panel.size.height or self.size.height
+            self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
+            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width))
+            self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
+            header = Text(status_header(snapshot), no_wrap=True, overflow="ellipsis")
+            if self.status_error is not None:
+                header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
+            header.truncate(width, overflow="ellipsis")
+            self.query_one("#status-header", Static).update(header)
+            self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
+        if self.tick_error is not None:
+            dashboard, header = render.tick_error(self.tick_error, dashboard_width)
+            self.query_one("#dashboard", Static).update(dashboard)
+            self.query_one("#status-header", Static).update(header)
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]
