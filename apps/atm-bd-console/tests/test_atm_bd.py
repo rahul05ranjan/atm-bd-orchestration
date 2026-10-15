@@ -11,8 +11,8 @@ from typing import get_args
 import pytest
 
 from atm_bd_console import beads_source
-from atm_bd_console.atm_bd import dispatch_spec, phase, phase_file, step
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.atm_bd import dispatch_spec, group_suffix, phase, phase_file, step
+from atm_bd_console.result import ConfigInvalid, Err, NotFound, Ok
 from atm_bd_console.types import (
     Bead,
     DispatchContext,
@@ -231,3 +231,18 @@ def test_qa_without_round_or_checked_bead_is_a_step_error_and_every_other_step_i
     assert not step_ids & {"atm-bh-7.qa-no-round", "atm-bh-7.qa-no-checked"}
     others = set(beads) - set(errors) - set(file.sprints) - {"atm-phase-bh"}
     assert step_ids == others
+
+
+@pytest.mark.parametrize("kind", ["dev", "fix", "finding", "plan_review", "container", "other"])
+def test_unsupported_kind_is_config_invalid_not_a_missing_value(kind: str) -> None:
+    from dataclasses import replace
+
+    result = dispatch_spec(context(replace(mapped(SANITY), kind=kind), PR))
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert (result.error.key, result.error.value) == ("atm-bh-5.group-sanity.kind", kind)
+
+
+def test_group_suffix_names_only_poured_group_beads() -> None:
+    assert [group_suffix(bead_id) for bead_id in (
+        "atm-bh-5.group-dev", "atm-bh-5.group-sanity", "atm-bh-5.group-qa", "atm-bh-5.group-qa-f1", "atm-bh-5",
+    )] == ["dev", "sanity", "qa", None, None]

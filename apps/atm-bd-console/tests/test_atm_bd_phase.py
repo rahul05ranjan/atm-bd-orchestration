@@ -228,7 +228,7 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     fixed = step(fix_qa, {fix.id: fix}).value
     assert (fixed.carry_forward, fixed.qa_round) == ("atm-bh-4.f1", 2)
     no_checked = step(_bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",)), {})
-    assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.checked_bead" in no_checked.error.what
+    assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.dev_bead" in no_checked.error.what
     no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})
     assert isinstance(no_round, Err) and "metadata.round" in no_round.error.what
     no_sprint = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "round": 1}), {})
