@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from atm_bd_console import github_source
-from atm_bd_console.result import Err, Ok, Rejected, Timeout, Unreachable
+from atm_bd_console.result import CommandFailed, Err, Ok, Rejected, Timeout, Unreachable
 
 
 def fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_code: int = 0, stderr: str = "", sleep: int = 0) -> Path:
@@ -63,11 +63,20 @@ def test_rest_truncation_and_off_make_only_the_allowed_calls(tmp_path, monkeypat
     assert off.value == () and off_status.ok is None and not calls.exists()
 
 
-@pytest.mark.parametrize(("stderr", "kind"), [("HTTP 401", Rejected), ("HTTP 502", Rejected), ("error connecting to host", Unreachable)])
-def test_gh_errors_are_typed(tmp_path, monkeypatch, stderr, kind) -> None:
+@pytest.mark.parametrize(("stderr", "kind", "http"), [
+    ("gh: Bad credentials (HTTP 401)", Rejected, 401),
+    ("gh: Resource not accessible by integration (HTTP 403)", Rejected, 403),
+    ("gh: Bad Gateway (HTTP 502)", Rejected, 502),
+    ("gh: Not Found (HTTP 404)", CommandFailed, None),
+    ("unknown flag: --5", CommandFailed, None),
+    ("error connecting to api.github.com", Unreachable, None),
+])
+def test_gh_errors_are_typed(tmp_path, monkeypatch, stderr, kind, http) -> None:
     fake_gh(tmp_path, monkeypatch, {}, exit_code=1, stderr=stderr)
     result, status = github_source.open_prs("graphql")
-    assert isinstance(result, Err) and isinstance(result.error, kind) and status.ok is False
+    assert isinstance(result, Err) and isinstance(result.error, kind) and status.ok is False and status.error == result.error
+    if http is not None:
+        assert result.error.status == http
 
 
 def test_gh_timeout_is_typed(tmp_path, monkeypatch) -> None:

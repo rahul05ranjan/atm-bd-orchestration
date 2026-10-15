@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import UTC, datetime
 
@@ -17,12 +18,16 @@ def _status(mode: str, ok: bool | None, error=None, truncated: bool = False) -> 
     return GhStatus(mode, ok, error, datetime.now(UTC) if ok is not None else None, truncated)  # type: ignore[arg-type]
 
 
+def _http_status(stderr: str) -> int | None:
+    match = re.search(r"HTTP (\d{3})", stderr)
+    return int(match.group(1)) if match else None
+
+
 def _error(mode: str, argv: tuple[str, ...], code: int, stderr: str):
     lower = stderr.lower()
     if "timed out" in lower or "timeout" in lower:
         error = Timeout("timeout", argv, 20, "check GitHub connectivity and retry")
-    elif "401" in stderr or "403" in stderr or "5" in stderr:
-        status = 401 if "401" in stderr else 403 if "403" in stderr else 500
+    elif (status := _http_status(stderr)) is not None and (status in (401, 403) or 500 <= status <= 599):
         error = Rejected("rejected", argv, status, stderr, "check GitHub credentials or retry")
     elif "connect" in lower or "dns" in lower or "network" in lower:
         error = Unreachable("unreachable", argv, stderr, "check network connectivity and retry")
