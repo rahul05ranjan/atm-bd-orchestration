@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import get_args, get_type_hints
 
 import pytest
+from conftest import SYSTEM_PATH, FakeBin
 from contract_fixtures import SNAPSHOTS, fixtures
 
 from atm_bd_console.codec import from_json, to_json
@@ -78,10 +80,24 @@ def _load_line(line: str) -> ActionLine:
     return decoded.value
 
 
-def test_fake_bin_records_argv(fake_bin, monkeypatch, tmp_path: Path) -> None:
-    log = tmp_path / "argv.log"
-    monkeypatch.setenv("FAKE_ARGV_LOG", str(log))
-    fake_bin("bd", "echo canned-output\nexit 0\n")
-    completed = subprocess.run(["bd", "ready", "--json"], check=False, capture_output=True, text=True)
+def test_fake_bin_records_argv(fake_bin: FakeBin) -> None:
+    assert os.environ["FAKE_ARGV_LOG"] == str(fake_bin.log)
+    assert os.environ["PATH"].split(":") == [str(fake_bin.dir), *SYSTEM_PATH]
+    fake_bin.make("bd", "echo canned-output\nexit 0\n")
+    completed = subprocess.run(
+        ["bd", "ready", "--json"], check=False, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+    )
     assert completed.returncode == 0
-    assert log.read_text().splitlines() == ["ready", "--json"]
+    assert completed.stdout == "canned-output\n"
+    assert fake_bin.argv() == [("bd", "ready", "--json")]
+
+
+def test_fake_bin_keeps_invocations_and_awkward_arguments_apart(fake_bin: FakeBin) -> None:
+    fake_bin.make("gh", "echo 'boom' >&2\nexit 3\n")
+    first = subprocess.run(
+        ["gh", "api", "two words", "line\nbreak"], check=False, capture_output=True, text=True, timeout=10,
+        stdin=subprocess.DEVNULL,
+    )
+    second = subprocess.run(["gh"], check=False, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    assert (first.returncode, first.stderr, second.returncode) == (3, "boom\n", 3)
+    assert fake_bin.argv() == [("gh", "api", "two words", "line\nbreak"), ("gh",)]
