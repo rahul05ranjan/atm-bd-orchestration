@@ -124,6 +124,20 @@ def test_sections_error_first_sent_last_height_and_links() -> None:
     pacific_test(check)
 
 
+def test_long_titles_with_wide_chars_and_emoji_clip_at_80_and_120() -> None:
+    long_row = Row("atm-long-title", "running", "dev", "hard", "bh", "red", 45,
+                   "🌀 界界界界界界界界界界界界界界界界界界界界界界界界 emoji 💎📥⚠️ " + "x" * 120)
+    value = replace(snapshot(), agents=(AgentView("busy", "busy", NOW, 1, (long_row,)),), errors=(), sections=())
+
+    for width in (80, 120):
+        lines = dashboard(value, width, 40).plain.splitlines()
+        assert all(cell_len(line) <= width for line in lines), width
+        assert any(line.endswith("…") for line in lines), width
+        assert any("🌀 long-title" in line and "❗bh:" in line for line in lines), width
+
+    assert any("💎" in line for line in dashboard(value, 120, 40).plain.splitlines())
+
+
 def test_status_bar_formats_and_cell_width() -> None:
     value = replace(snapshot(), metrics=Metrics(3, 9, 33, 14 * 3600 + 20 * 60),
                     gh=GhStatus("graphql", True, None, NOW, False))
