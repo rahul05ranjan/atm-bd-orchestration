@@ -24,7 +24,7 @@ from atm_bd_console import runner
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot
-from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem
+from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, Task
 
 RUNNING_STATE = replace(STATE, idle_since=None)
 
@@ -261,6 +261,26 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
     runner.step(replace(CONFIG, github="off"), STATE, True, Store())
+
+
+def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    assigned = Task(PHASE.steps[0].bead_id, "quality-mgr", "active", 0, ACTION.at, ACTION.at, "running")
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok((assigned,)))
+
+    def due(_state, _phase, _prefix, _github, _now, tasks):
+        assert tasks == (assigned,)
+        return Due(False, (), False)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("assigned ready work must not trigger this due read")
+
+    monkeypatch.setattr(runner.model, "due", due)
+    monkeypatch.setattr(runner.git_source, "fetch", forbidden)
+    monkeypatch.setattr(runner.git_source, "remote_refs", forbidden)
+    monkeypatch.setattr(runner.git_source, "merge", forbidden)
+
+    runner.step(CONFIG, STATE, False, store)
 
 
 def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> None:

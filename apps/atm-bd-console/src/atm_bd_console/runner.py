@@ -136,7 +136,14 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
         phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
     members, tasks, worktrees = atm_source.members(config.team), atm_source.tasks(config.team), git_source.worktrees(config.repo_root)
     task_beads = beads_source.show(tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ())
-    due = model.due(state, phase.value, repo.value.bead_prefix, config.github, now) if isinstance(phase, Ok) else None
+    due = model.due(
+        state,
+        phase.value,
+        repo.value.bead_prefix,
+        config.github,
+        now,
+        tasks.value if isinstance(tasks, Ok) else (),
+    ) if isinstance(phase, Ok) else None
     if due and due.fetch and not config.no_fetch: git_source.fetch(config.repo_root)
     remotes = git_source.remote_refs(config.repo_root) if due and due.fetch else None
     saved_merges, saved_prs = load_merges(config.repo_root, file.value.root_id), load_prs(config.repo_root, file.value.root_id)
