@@ -165,7 +165,7 @@ def test_type_aliases() -> None:
     assert get_args(result.Error) == tuple(_class(name) for name in ERROR_NAMES)
     assert get_args(result.Result) == (result.Ok[result.T], result.Err)
     assert get_args(types.SpecFn) == ([types.DispatchContext], result.Result[types.DispatchSpec])
-    assert get_args(types.StepFn) == ([types.Config, types.State, bool, object | None], tuple[types.Snapshot, types.State])
+    assert get_args(types.StepFn) == ([types.Config, types.State, bool, object], tuple[types.Snapshot, types.State])
 
 
 @pytest.mark.parametrize("module", ["result.py", "types.py"])

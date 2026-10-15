@@ -8,7 +8,7 @@ from typing import Literal
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .log import create_console_logger
 from .result import Err, Ok
-from .state import StateStore, acquire_lock, load_merges, load_prs
+from .state import StateStore, load_merges, load_prs
 from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, Metrics, PrsFile, Snapshot, State
 
 
@@ -38,8 +38,8 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore,
     return tuple(errors)
 
 
-def step(config: Config, state: State, force_github: bool, store: StateStore | None = None):
-    """Run one best-effort tick and atomically persist its inspectable files."""
+def step(config: Config, state: State, force_github: bool, store: StateStore):
+    """Run one best-effort tick using the caller-owned lock-backed store."""
     now = datetime.now(UTC)
     file, repo = atm_bd.phase_file(config.repo_root, config.phase), atm_bd.repo_config(config.repo_root)
     if isinstance(file, Err) or isinstance(repo, Err):
@@ -61,19 +61,9 @@ def step(config: Config, state: State, force_github: bool, store: StateStore | N
         phase = atm_bd.phase(file.value, root_bead, (), (), ())
         empty = Ok(())
         snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
-        lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
-        active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
-        if store is None and isinstance(lock, Err):
-            snapshot = replace(snapshot, errors=(*snapshot.errors, lock.error))
-        if active_store is not None:
-            persisted = replace(snapshot, files={"snapshot": str(active_store.directory / "snapshot.json"), "state": str(active_store.directory / "state.json")})
-            if store is not None:
-                writes = (active_store.write_state(next_state), active_store.write_snapshot(persisted))
-            else:
-                with active_store:
-                    writes = (active_store.write_state(next_state), active_store.write_snapshot(persisted))
-            persisted = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
-            snapshot = persisted
+        persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+        writes = (store.write_state(next_state), store.write_snapshot(persisted))
+        snapshot = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
         if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
         return snapshot, next_state
     opened, ready = beads_source.open_beads(file.value.label), beads_source.ready(file.value.label)
@@ -109,12 +99,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore | N
         if isinstance(logger, Ok): logger.value.event("github_read", forced=force_github)
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
-    lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
-    active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
-    if store is None and isinstance(lock, Err):
-        snapshot = replace(snapshot, errors=(*snapshot.errors, lock.error))
-    if active_store is not None:
-        def persist(store: StateStore):
+    def persist(store: StateStore):
             errors = list(_run_actions(config, actions, store, now))
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
                 if isinstance(written, Err): errors.append(written.error)
@@ -123,10 +108,6 @@ def step(config: Config, state: State, force_github: bool, store: StateStore | N
             if isinstance(snapshot_written, Err):
                 persisted = replace(persisted, errors=(*persisted.errors, snapshot_written.error))
             return persisted
-        if store is not None:
-            snapshot = persist(active_store)
-        else:
-            with active_store:
-                snapshot = persist(active_store)
+    snapshot = persist(store)
     if isinstance(logger, Ok): logger.value.event("tick_end", actions=len(actions))
     return snapshot, next_state

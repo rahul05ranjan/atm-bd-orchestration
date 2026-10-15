@@ -23,6 +23,16 @@ from atm_bd_console.result import Err, Ok
 from atm_bd_console.types import Due, GhStatus
 
 
+class Store:
+    directory = Path(".")
+
+    def append_action(self, _line): return Ok(None)
+    def write_merges(self, _value): return Ok(None)
+    def write_prs(self, _value): return Ok(None)
+    def write_state(self, _value): return Ok(None)
+    def write_snapshot(self, _value): return Ok(None)
+
+
 @pytest.fixture
 def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """A runner fixture with no live sources and observable writes/logging."""
@@ -83,7 +93,7 @@ def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
 
     monkeypatch.setattr(runner.beads_source, "open_beads", forbidden)
     monkeypatch.setattr(runner.atm_source, "members", forbidden)
-    snapshot, _ = runner.step(CONFIG, STATE, False)
+    snapshot, _ = runner.step(CONFIG, STATE, False, Store())
     assert snapshot.root_closed and snapshot.stopped == "closed"
 
 
@@ -135,7 +145,7 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
-    runner.step(replace(CONFIG, github="off"), STATE, True)
+    runner.step(replace(CONFIG, github="off"), STATE, True, Store())
 
 
 def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> None:
@@ -168,6 +178,25 @@ def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
     assert errors == (COMMAND_FAILED,)
 
 
+def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    snapshots = []
+    store.write_snapshot = lambda value: snapshots.append(value) or Ok(None)
+    monkeypatch.setattr(runner.model, "tick", lambda _inputs, state, _now, _spec: (SNAPSHOT, (ACTION, ACTION), state))
+    outcomes = iter((Ok(None), Err(COMMAND_FAILED)))
+    monkeypatch.setattr(runner.atm_source, "send", lambda *_: next(outcomes))
+    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    assert COMMAND_FAILED in snapshot.errors
+    assert snapshots[-1].errors == snapshot.errors
+
+
+def test_read_only_store_write_failure_is_visible(github_runtime) -> None:
+    store, _, _, _ = github_runtime
+    store.write_snapshot = lambda _value: Err(IO_FAILED)
+    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    assert IO_FAILED in snapshot.errors
+
+
 def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -178,7 +207,7 @@ def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, m
     fake_bin.make("atm", 'printf "{}"\n')
     config = replace(CONFIG, lead="fenix", team="atm-dev", github="off", repo_root=str(tmp_path))
 
-    runner.step(config, STATE, True)
+    runner.step(config, STATE, True, Store())
 
     argv = fake_bin.argv()
     assert ("atm", "members", "--team", "atm-dev", "--json") in argv
