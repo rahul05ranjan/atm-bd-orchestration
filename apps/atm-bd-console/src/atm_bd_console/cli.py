@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__, app, render, runner
 from . import config as config_source
-from .codec import snapshot_stale
+from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
 from .result import Err, Ok
 from .state import acquire_lock, load_snapshot, load_state
@@ -47,10 +48,20 @@ def main(argv: list[str] | None = None) -> int:
     state = saved.value if isinstance(saved, Ok) else EMPTY
     if args.once or args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
-        if isinstance(lock, Err): return 0
+        if isinstance(lock, Err):
+            snapshot = load_snapshot(loaded.value.repo_root, root_id)
+            if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, datetime.now(UTC)):
+                text = f"{CONSOLE_NAME} stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
+                print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
+            return 0
         # Probe the live-holder condition before any sources are read.  The
         # runner then owns a fresh lock for its complete read/action/write tick.
         lock.value.close()
-        runner.step(loaded.value, state, False)
+        snapshot, _ = runner.step(loaded.value, state, False)
+        if args.headless and snapshot.stopped is None:
+            for action in snapshot.sent:
+                print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text}))
+            for error in snapshot.errors:
+                print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
         return 0
     return app.run(loaded.value, runner.step)
