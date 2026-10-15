@@ -433,6 +433,39 @@ def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
     assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
 
 
+def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="topic", target="base")
+    conflict = Merge("topic", "base", "conflict", ("model.py", "dispatch.py"), (), NOW)
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok(()), merges=(Ok(conflict),))
+
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+
+    conflict_text = "merge conflict with base: model.py, dispatch.py"
+    assert snapshot.sections[0].label == "Held"
+    assert [row.reason for row in snapshot.sections[0].rows] == ["no worktree for topic", conflict_text]
+    assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:topic"]
+    assert [problem.text for problem in snapshot.problems] == ["no worktree for topic", conflict_text]
+    assert [(action.kind, action.to, action.text) for action in actions] == [
+        ("send", "solar", "no worktree for topic"), ("send", "solar", conflict_text),
+    ]
+
+    refreshed = replace(supplied, merges=(Ok(replace(conflict, checked_at=NOW + timedelta(minutes=5))),))
+    snapshot, actions, _ = tick(refreshed, state, NOW + timedelta(minutes=5), render)
+
+    assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:topic"]
+    assert all(problem.first_seen == NOW for problem in snapshot.problems)
+    assert actions == ()
+
+    recovered_worktree = replace(refreshed, worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)))
+    snapshot, actions, _ = tick(recovered_worktree, state, NOW + timedelta(minutes=6), render)
+
+    assert [problem.key for problem in snapshot.problems] == ["conflict:topic"]
+    assert snapshot.problems[0].text == conflict_text
+    assert snapshot.problems[0].first_seen == NOW
+    assert actions == ()
+
+
 def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="sprint/bh-1",
                      worktree="/worktrees/atm-bh-1")
@@ -440,9 +473,9 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
                     worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
     conflict = Merge("sprint/bh-1", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
     snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar"), ("send", "solar")]
-    assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:sprint/bh-1"]
-    assert "model.py" in snapshot.problems[1].text
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert [problem.key for problem in snapshot.problems] == ["conflict:sprint/bh-1"]
+    assert "model.py" in snapshot.problems[0].text
 
     error = NotFound("not_found", "checked_bead", "repair metadata")
     verified = replace(common, merges=(Ok(replace(conflict, state="clean", files=())),))

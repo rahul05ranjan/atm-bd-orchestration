@@ -338,18 +338,24 @@ def _problems(
         )
     by_branch = _branch_owners(phase)
     by_id = {step.bead_id: step for step in phase.steps}
+    conflicts = {
+        f"conflict:{merge.branch}": Problem(
+            f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
+            f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
+        )
+        for merge in merges
+        if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
+    }
     problems: list[Problem] = []
     for row in held:
         if row.reason == "not ready":
             continue
         step = by_id[row.bead_id]
+        conflict = conflicts.get(f"conflict:{step.branch}")
+        if conflict is not None and row.reason == conflict.text:
+            continue
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
-    for merge in merges:
-        if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None:
-            problems.append(Problem(
-                f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
-                f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
-            ))
+    problems.extend(conflicts.values())
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
