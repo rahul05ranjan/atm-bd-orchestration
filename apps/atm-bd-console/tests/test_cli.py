@@ -220,14 +220,23 @@ def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
     assert cli.main(["--phase", "bh", "--as", "fenix"]) == 17
 
 
-@pytest.mark.parametrize("failure", ("config", "phase", "repo", "tool"))
+@pytest.mark.parametrize("failure", ("config", "phase", "repo", "bd", "atm", "git"))
 def test_launch_checks_fail_before_running(monkeypatch, capsys, failure) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("failed launch checks must not acquire a lock or run a tick")
+
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Err(TIMEOUT) if failure == "config" else Ok(CONFIG))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Err(TIMEOUT) if failure == "phase" else Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Err(TIMEOUT) if failure == "repo" else Ok(REPO_CONFIG))
-    monkeypatch.setattr(cli.shutil, "which", lambda _: None if failure == "tool" else "/fixture/bin")
+    monkeypatch.setattr(cli.shutil, "which", lambda command: None if command == failure else "/fixture/bin")
+    monkeypatch.setattr(cli, "acquire_lock", forbidden)
+    monkeypatch.setattr(cli.runner, "step", forbidden)
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 3
-    assert "not_found" in capsys.readouterr().out if failure == "tool" else "timeout" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    if failure in ("bd", "atm", "git"):
+        assert output == f"atm-bd-console: not_found: install {failure} and retry\n"
+    else:
+        assert "timeout" in output
 
 
 def test_show_uses_the_configured_repository_root(monkeypatch, capsys, tmp_path) -> None:

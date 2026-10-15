@@ -17,7 +17,7 @@ TASK_STATES = frozenset({"assigned", "active"})
 MEMBER_STATES = frozenset({"active", "idle", "offline", "blocked"})
 
 
-# Own runner, not beads_source's: this one takes an injected timeout and maps timeout and missing-binary errors, which bd's runner does not.
+# Own runner: ATM sends stdin text and maps missing binaries or undecodable output to Unreachable.
 def _run(argv: list[str], stdin: str | None = None, timeout_s: int | None = None) -> Result[str]:
     timeout_s = TIMEOUT_S if timeout_s is None else timeout_s
     try:

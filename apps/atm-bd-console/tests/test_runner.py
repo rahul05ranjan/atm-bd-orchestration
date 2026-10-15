@@ -14,6 +14,7 @@ from contract_samples import (
     CONFIG,
     EARLIER,
     IO_FAILED,
+    NOW,
     PHASE,
     PHASE_FILE,
     PRS_FILE,
@@ -26,6 +27,7 @@ from contract_samples import (
 
 from atm_bd_console import log, runner
 from atm_bd_console.log import TickLog
+from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
@@ -368,12 +370,25 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
 
 def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
-    assigned = Task(PHASE.steps[0].bead_id, "quality-mgr", "active", 0, ACTION.at, ACTION.at, "running")
+    candidate = replace(PHASE.steps[0], status="open", anchor=False, quick_fix=False, ready=True)
+    phase = replace(PHASE, closed=False, step_errors=(), steps=(candidate,))
+    state = replace(RUNNING_STATE, last_cycle=NOW)
+    assigned = Task(candidate.bead_id, "quality-mgr", "active", 0, ACTION.at, ACTION.at, "running")
+    due_calls = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok((assigned,)))
 
-    def due(_state, _phase, _prefix, _github, _now, tasks):
-        assert tasks == (assigned,)
-        return Due(False, (), False)
+    def due(current_state, current_phase, prefix, github, now, tasks=()):
+        decision = model_due(current_state, current_phase, prefix, github, now, tasks)
+        due_calls.append((current_state, current_phase, prefix, github, now, tasks, decision))
+        return decision
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("assigned ready work must not trigger this due read")
@@ -383,7 +398,12 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     monkeypatch.setattr(runner.git_source, "remote_refs", forbidden)
     monkeypatch.setattr(runner.git_source, "merge", forbidden)
 
-    runner.step(CONFIG, STATE, False, store)
+    without_task = model_due(state, phase, REPO_CONFIG.bead_prefix, CONFIG.github, NOW)
+    assert without_task.fetch and without_task.merges == ((candidate.branch, candidate.target),)
+
+    runner.step(replace(CONFIG, no_fetch=False), state, False, store)
+
+    assert due_calls == [(state, phase, REPO_CONFIG.bead_prefix, CONFIG.github, NOW, (assigned,), Due(False, (), False))]
 
 
 def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> None:
@@ -405,10 +425,18 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
     cached = replace(PRS_FILE, read_at=EARLIER)
     monkeypatch.setattr(store, "load_prs", lambda: Ok(cached))
     store.write_prs = lambda value: writes.append(value) or Ok(None)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=())))
 
-    snapshot, _ = runner.step(CONFIG, STATE, True, store)
+    def tick(value, state, now, spec):
+        inputs.append(value)
+        return model_tick(value, state, now, spec)
+
+    monkeypatch.setattr(runner.model, "tick", tick)
+    snapshot, _ = runner.step(CONFIG, RUNNING_STATE, True, store)
 
     assert inputs[0].prs == Ok(cached.prs)
+    assert tuple(row.pr for row in snapshot.prs) == cached.prs
+    assert snapshot.gh == GhStatus(CONFIG.github, False, TIMEOUT, SNAPSHOT.generated_at, False)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
     assert writes == [replace(cached, gh=snapshot.gh)]
 
