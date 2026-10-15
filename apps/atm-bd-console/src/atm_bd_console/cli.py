@@ -57,7 +57,9 @@ def main(argv: list[str] | None = None) -> int:
             return 3
     saved = load_state(loaded.value.repo_root, root_id)
     state = saved.value if isinstance(saved, Ok) else EMPTY
-    if args.once or args.headless or args.command == "snapshot":
+    if args.once and not args.headless and args.command != "snapshot":
+        return app.run(loaded.value, runner.step)
+    if args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
@@ -65,10 +67,8 @@ def main(argv: list[str] | None = None) -> int:
                 text = f"{CONSOLE_NAME} stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
                 print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
-        # Probe the live-holder condition before any sources are read.  The
-        # runner then owns a fresh lock for its complete read/action/write tick.
-        lock.value.close()
-        snapshot, _ = runner.step(loaded.value, state, False)
+        with lock.value:
+            snapshot, _ = runner.step(loaded.value, state, False, lock.value)
         if args.headless and snapshot.stopped is None:
             for action in snapshot.sent:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text}))

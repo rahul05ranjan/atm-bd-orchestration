@@ -37,7 +37,7 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store, now: dateti
     return tuple(errors)
 
 
-def step(config: Config, state: State, force_github: bool):
+def step(config: Config, state: State, force_github: bool, store=None):
     """Run one best-effort tick and atomically persist its inspectable files."""
     now = datetime.now(UTC)
     file, repo = atm_bd.phase_file(config.repo_root, config.phase), atm_bd.repo_config(config.repo_root)
@@ -77,14 +77,20 @@ def step(config: Config, state: State, force_github: bool):
         if isinstance(logger, Ok): logger.value.event("github_read", forced=force_github)
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
-    lock = acquire_lock(config.repo_root, file.value.root_id)
-    if isinstance(lock, Ok):
-        with lock.value as store:
+    lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
+    active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
+    if active_store is not None:
+        def persist(store):
             errors = list(_run_actions(config, actions, store, now))
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
                 if isinstance(written, Err): errors.append(written.error)
             persisted = replace(snapshot, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             store.write_snapshot(persisted)
-            snapshot = persisted
+            return persisted
+        if store is not None:
+            snapshot = persist(active_store)
+        else:
+            with active_store:
+                snapshot = persist(active_store)
     if isinstance(logger, Ok): logger.value.event("tick_end", actions=len(actions))
     return snapshot, next_state
