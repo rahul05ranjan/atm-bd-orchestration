@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     root_id = f"atm-phase-{args.phase}"
     if args.command == "show":
         snapshot = load_snapshot(Path.cwd(), root_id)
-        if isinstance(snapshot, Ok) and not snapshot_stale(snapshot.value, datetime.now(UTC)):
+        if isinstance(snapshot, Ok) and (snapshot.value.stopped is not None or not snapshot_stale(snapshot.value, datetime.now(UTC))):
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 0
