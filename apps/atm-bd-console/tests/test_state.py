@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from atm_bd_console import state
 from atm_bd_console.codec import from_json
 from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_merges, load_prs, load_snapshot, load_state
@@ -60,6 +62,33 @@ def test_read_only_state_directory_returns_io_failed_naming_the_path(tmp_path: P
     assert written.error.path == str(directory / "snapshot.json")
     assert isinstance(appended, Err) and isinstance(appended.error, IoFailed)
     assert appended.error.path == str(directory / "actions.jsonl")
+
+
+def test_lock_held_reports_a_non_negative_snapshot_age_once_a_snapshot_exists(tmp_path: Path) -> None:
+    first = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(first, Ok)
+    with first.value as store:
+        assert store.write_snapshot(fixture("snapshot-running.json", Snapshot)) == Ok(None)
+        second = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(second, Err) and isinstance(second.error, LockHeld)
+    assert isinstance(second.error.snapshot_age_s, int) and second.error.snapshot_age_s >= 0
+
+
+def test_failed_write_leaves_the_previous_snapshot_intact(tmp_path: Path, monkeypatch) -> None:
+    previous = fixture("snapshot-running.json", Snapshot)
+    newer = replace(previous, phase="other")
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        assert store.write_snapshot(previous) == Ok(None)
+
+        def fail(*_args, **_kwargs):
+            raise OSError("disk full mid-write")
+
+        monkeypatch.setattr(state.os, "replace", fail)
+        result = store.write_snapshot(newer)
+    assert isinstance(result, Err) and isinstance(result.error, IoFailed)
+    assert load_snapshot(tmp_path, "atm-bh") == Ok(previous)
 
 
 def test_missing_data_and_live_process_lock_are_typed(tmp_path: Path) -> None:
