@@ -152,6 +152,7 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         lines.extend(_agent_lines(agent, snapshot.bead_prefix))
     if snapshot.errors:
         lines.extend((Text(), Text(f"== Errors ({len(snapshot.errors)})")))
+        # Error carries no time of its own, so each row shows the tick that surfaced it (generated_at), not the mock's per-error time.
         lines.extend(Text(f" {_clock(snapshot.generated_at)} {_error_text(error)}") for error in snapshot.errors)
     for section in snapshot.sections:
         if not section.rows:
