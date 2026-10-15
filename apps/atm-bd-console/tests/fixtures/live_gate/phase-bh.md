@@ -21,10 +21,13 @@ cd /Users/randlee/github/atm-core && TERM=xterm-256color \
 Exact controlled tmux interaction after the initial tick completed:
 
 ```text
+tmux capture-pane -pt bh10r3clean -S -200                             # Dispatch first
 tmux send-keys -t bh10r3clean -l $'\033[<0;17;1M\033[<0;17;1m'  # Status
-tmux send-keys -t bh10r3clean -l $'\033[<0;20;14M\033[<0;20;14m'  # select atm-bh-10
+tmux send-keys -t bh10r3clean -l $'\033[<0;20;14M\033[<0;20;14m'  # select atm-bh-10 (no forced read)
+tmux capture-pane -pt bh10r3clean -S -200                             # Status and selected steps
 tmux send-keys -t bh10r3clean -l $'\033[<0;23;1M\033[<0;23;1m'  # PRs, once
 tmux send-keys -t bh10r3clean r                                      # refresh, once
+tmux capture-pane -pt bh10r3clean -S -200                             # PRs pane
 tmux send-keys -t bh10r3clean q                                      # quit
 ```
 
@@ -35,7 +38,7 @@ No tab switch occurred after PRs activation.
 ```text
  Dispatch  Status  PRs
 ╸━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-phase-bh · 07:24 · next 60s
+phase-bh · 07:58 · next 60s
 
 · team-lead  0
 ● arch-ctm  1
@@ -64,7 +67,7 @@ phase-bh · 07:24 · next 60s
   bh-10.qa1-f1-r1-sanity   0s  branch not on origin: <missing>
   bh-10.qa1-f1-r1-sanity   0s  no worktree for None
 
-gh: graphql ✅ 07:24 | 10/11 [████████░] 91% | active 0h00m | tick 07:24:09
+gh: graphql ✅ 07:58 | 10/11 [████████░] 91% | active 0h00m | tick 07:58:41
 ```
 
 ## Status tab and selected sprint
@@ -107,7 +110,7 @@ atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
 │ ✅ atm-bh-3 bh-3: ATM source: members, tasks, presence, send, assign │      │ ✅ atm-bh-4 bh-4: beads source and the atm-bd phase and fo
 └──────────────────────────────────────────────────────────────────────┘      └───────────────────────────────────────────────────────────
 
-gh: graphql ✅ 07:20 | 10/11 [████████░] 91% | active 0h00m | tick 07:23:31
+gh: graphql ✅ 07:58 | 10/11 [████████░] 91% | active 0h00m | tick 07:58:41
 ```
 
 ## PRs tab after refresh
