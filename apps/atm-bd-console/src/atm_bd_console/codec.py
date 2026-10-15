@@ -60,10 +60,36 @@ class _DecodeError(Exception):
 
 
 _FIX = "correct the JSON contract value"
+_MAX_JSON_DEPTH = 128
+
+
+def _exceeds_depth_limit(text: str) -> bool:
+    depth = 0
+    quoted = False
+    escaped = False
+    for character in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+        elif character == '"':
+            quoted = True
+        elif character in "[{":
+            depth += 1
+            if depth > _MAX_JSON_DEPTH:
+                return True
+        elif character in "]}":
+            depth -= 1
+    return False
 
 
 def from_json(cls: type[Any], text: str) -> Result[Any]:
-    """Decode a contract value; malformed input is data, never an exception."""
+    """Decode up to 128 JSON container levels; malformed input is data, never an exception."""
+    if _exceeds_depth_limit(text):
+        return Err(ParseFailed("parse_failed", "$", "value nested too deeply", _FIX))
     try:
         return Ok(_decode(cls, json.loads(text), "$"))
     except _DecodeError as error:

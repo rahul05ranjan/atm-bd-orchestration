@@ -14,13 +14,16 @@ jobs:
     env:
       SC_COMPOSE_VERSION: "1.7.0"
       SC_COMPOSE_SHA256: 5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84
+      UV_TOOL_DIR: ${{ runner.temp }}/console-tools
+      UV_TOOL_BIN_DIR: ${{ runner.temp }}/console-bin
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.x"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v5
@@ -40,14 +43,17 @@ jobs:
           install -m 0755 "$bin" "$HOME/.local/bin/sc-compose"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install console in isolation
-        run: uv tool install ./apps/atm-bd-console
+        run: uv tool install --python '${{ steps.python.outputs.python-path }}' ./apps/atm-bd-console
       - name: Console tests
         working-directory: apps/atm-bd-console
-        run: uv run pytest -q
+        run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q
       - name: Console CLI smoke tests
+        working-directory: apps/atm-bd-console
+        env:
+          ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd-console
         run: |
-          atm-bd-console --help
-          atm-bd-console --version
+          "$ATM_BD_CONSOLE_BIN" --help
+          uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick
 
   package-tests:
     strategy:

@@ -75,30 +75,66 @@ def test_installed_cron_command_runs_one_headless_tick(tmp_path) -> None:
     (repo / ".claude/project").mkdir(parents=True)
     shutil.copy2(fixtures / ".claude/project/atm-bd-orchestration.yaml", repo / ".claude/project/atm-bd-orchestration.yaml")
     (repo / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n', encoding="utf-8")
+    (repo / ".atm-bd/console.toml").write_text('[console]\ngithub = "off"\n', encoding="utf-8")
+    (repo / "docs/plans/phase-bh.jsonl").write_text('{"sprint": "bh-1"}\n', encoding="utf-8")
+    beads = [
+        {"id": "atm-phase-bh", "title": "Smoke phase", "status": "open", "labels": ["phase-bh"]},
+        {"id": "atm-bh-1", "title": "Smoke sprint", "status": "open", "parent": "atm-phase-bh",
+         "metadata": {"layer": 1, "branch": "sprint/bh-1", "pr_target": "main", "stack": "phase-bh"}},
+    ]
+    (repo / "beads.json").write_text(json.dumps(beads), encoding="utf-8")
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    for name in ("bd", "atm"):
+    scripts = {
+        "bd": 'case "$1" in show|list) cat beads.json;; ready) printf "[]\\n";; *) exit 97;; esac\n',
+        "atm": 'case "$1:$2" in members:--team) printf \'{"members": []}\\n\';; task:list) printf "[]\\n";; *) exit 97;; esac\n',
+        "git": 'case "$1" in fetch|for-each-ref) exit 0;; worktree) printf "worktree %s\\nHEAD %s\\nbranch refs/heads/main\\n" "$PWD" "0123456789abcdef";; *) exit 97;; esac\n',
+    }
+    for name, script in scripts.items():
         executable = fake_bin / name
-        executable.write_text("#!/bin/sh\nprintf '[]\\n'\n", encoding="utf-8")
+        executable.write_text("#!/bin/sh\n" + script, encoding="utf-8")
         executable.chmod(0o755)
     environment = os.environ.copy()
-    environment["PATH"] = os.pathsep.join((str(fake_bin), environment.get("PATH", "")))
-    uv = shutil.which("uv", path=environment["PATH"])
-    assert uv is not None, "uv is required to run the installed console entry point"
+    environment["PATH"] = os.pathsep.join((str(fake_bin), "/usr/bin", "/bin"))
+    environment.pop("PYTHONPATH", None)
+    environment.pop("PYTHONHOME", None)
+    installed = environment.get("ATM_BD_CONSOLE_BIN")
+    if installed:
+        command = [str(Path(installed).resolve(strict=True))]
+    else:
+        uv = shutil.which("uv")
+        assert uv is not None, "uv is required to run the console entry point"
+        command = [uv, "run", "--frozen", "--project", str(PKG), "atm-bd-console"]
 
     help_result = subprocess.run(
-        [uv, "run", "--project", str(PKG), "atm-bd-console", "--help"],
+        [*command, "--help"],
         capture_output=True, text=True, check=False, cwd=repo, env=environment,
     )
     assert help_result.returncode == 0, help_result.stderr
     assert "run one tick and exit" in help_result.stdout
 
     check = subprocess.run(
-        [uv, "run", "--project", str(PKG), "atm-bd-console", "--headless", "--phase", "bh", "--as", "fenix", "--dry-run"],
+        [*command, "--headless", "--phase", "bh", "--as", "fenix", "--dry-run"],
         capture_output=True, text=True, check=False, cwd=repo, env=environment,
     )
     assert check.returncode == 0, check.stderr + check.stdout
+    assert check.stdout == ""
+    saved = json.loads((repo / ".atm-bd/atm-bd-console/atm-phase-bh/snapshot.json").read_text())
+    assert saved["phase"] == "bh" and saved["stopped"] is None
+    assert saved["errors"] == [] and len(saved["sprints"]) == 1
+    assert saved["sprints"][0]["id"] == "atm-bh-1"
+
+
+def test_ci_covers_minimum_latest_and_installed_cron_smoke() -> None:
+    workflow = (PKG.parents[1] / ".github/workflows/tests.yml").read_text()
+    console = workflow.split("  console-tests:\n", 1)[1].split("\n  package-tests:", 1)[0]
+    assert 'python-version: ["3.11", "3.x"]' in console
+    assert "uv tool install --python '${{ steps.python.outputs.python-path }}' ./apps/atm-bd-console" in console
+    assert "pytest -q\n" in console
+    assert '"$ATM_BD_CONSOLE_BIN" --help' in console
+    assert "ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd-console" in console
+    assert "tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick" in console
 
 
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:

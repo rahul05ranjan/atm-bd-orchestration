@@ -57,6 +57,23 @@ def test_deep_nesting_is_an_err_not_a_recursion_error() -> None:
     assert "nested too deeply" in error.message
 
 
+@pytest.mark.parametrize("opening, closing", [("[", "]"), ('{"value":', "}")])
+def test_json_nesting_limit_has_a_stable_boundary(opening: str, closing: str) -> None:
+    assert isinstance(from_json(Any, opening * 128 + "null" + closing * 128), Ok)
+    error = _parse_failed(from_json(Any, opening * 129 + "null" + closing * 129))
+    assert error.source == "$" and error.message == "value nested too deeply"
+
+
+@pytest.mark.parametrize("value", ["[{" * 100_000, '\\"quoted [brackets] and {braces}"\\'])
+def test_json_nesting_ignores_quoted_delimiters(value: str) -> None:
+    assert from_json(str, to_json(value)) == Ok(value)
+
+
+def test_json_nesting_counts_depth_not_siblings() -> None:
+    value = [[], {}] * 129
+    assert from_json(Any, to_json(value)) == Ok(value)
+
+
 def test_union_failure_keeps_the_inner_path() -> None:
     repo = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", (), "/plans")
     sprint = Sprint("bh-6", "tick rules", 6, "sprint/bh-6", "integrate/phase-bh", "phase-bh", (), False, 0)
