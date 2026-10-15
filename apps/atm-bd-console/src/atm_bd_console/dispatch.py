@@ -101,7 +101,6 @@ def dispatch(
             sprint=sprint,
             phase_id=phase.root_id,
             phase_title=phase.title,
-            stack=sprint.stack,
             lead=lead,
             commit=remote_by_branch[step.branch],
             base=pr.base if pr else target,

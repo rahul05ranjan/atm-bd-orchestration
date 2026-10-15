@@ -84,7 +84,7 @@ def dispatch_spec(ctx: DispatchContext) -> Result[DispatchSpec]:
     if step.kind == "sanity":
         return Ok(DispatchSpec("dev-sanity-template.xml.j2", common | {"primary_checkout": ctx.repo.primary_checkout, "lint_command": ctx.repo.lint_command, "layer_prs": ctx.layer_prs}))
     if step.kind == "qa":
-        values = common | {"phase": ctx.phase_id, "phase_feature": ctx.phase_title, "stack": ctx.stack, "layer": ctx.sprint.layer, "round": step.qa_round or 1, "policy_path": ctx.repo.policy_path, "reviewers_round1": ctx.repo.reviewers_round1, "layer_prs": ctx.layer_prs, "sprint_bead": step.sprint_bead or ""}
+        values = common | {"phase": ctx.phase_id, "phase_feature": ctx.phase_title, "stack": ctx.sprint.stack, "layer": ctx.sprint.layer, "round": step.qa_round or 1, "policy_path": ctx.repo.policy_path, "reviewers_round1": ctx.repo.reviewers_round1, "layer_prs": ctx.layer_prs, "sprint_bead": step.sprint_bead or ""}
         if step.carry_forward: values["carry_forward"] = step.carry_forward
         return Ok(DispatchSpec("qa-template.xml.j2", values))
     return _missing(f"dispatch template for {step.kind}")

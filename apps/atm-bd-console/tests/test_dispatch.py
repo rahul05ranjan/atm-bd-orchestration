@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 
+from atm_bd_console.atm_bd import dispatch_spec
 from atm_bd_console.dispatch import candidates, dispatch
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.types import (
@@ -85,7 +86,7 @@ def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
     assert outcome.actions[0].to == "quality-mgr"
     assert outcome.actions[0].spec == DispatchSpec("qa", {"commit": "abc123"})
     assert seen[0] == DispatchContext(
-        step(), SPRINT, "atm-phase-bh", "Phase BH", "phase-bh", "fenix", "abc123",
+        step(), SPRINT, "atm-phase-bh", "Phase BH", "fenix", "abc123",
         "sprint/bh-1", "/worktrees/bh-6", pr, (pr,), REPO,
     )
     sanity = run(step(kind="sanity", sprint="bh-6", sprint_bead=None))
@@ -104,3 +105,27 @@ def test_missing_sprint_is_an_error_not_a_silent_drop() -> None:
     assert outcome.actions == ()
     assert isinstance(outcome.errors[0], NotFound)
     assert "sprint" in outcome.errors[0].what
+
+
+def _context() -> DispatchContext:
+    step = Step(
+        "atm-bh-6.qa", "bh-6", "qa", False, False, "open", True, None, "sprint/bh-6-tick", "integrate/phase-bh",
+        "/worktrees/bh-6", 6, "normal", "bh-6", "atm-bh-6", None, None, "QA bh-6", "atm-bh-6.dev", "atm-bh-6", 1, None,
+    )
+    sprint = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6-tick", "integrate/phase-bh", "phase-bh", (), False, 0)
+    repo = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", ("req-qa",), "/plans")
+    pr = PullRequest(12, "https://example.invalid/pull/12", "sprint/bh-6-tick", "integrate/phase-bh", "abc123", "success", ())
+    return DispatchContext(step, sprint, "bh", "console", "fenix", "abc123", "integrate/phase-bh", "/worktrees/bh-6", pr, (pr,), repo)
+
+
+def test_stack_has_one_owner_sprint() -> None:
+    assert "stack" in {field.name for field in fields(Sprint)}
+    assert "stack" not in {field.name for field in fields(DispatchContext)}
+
+
+def test_qa_dispatch_reads_stack_from_sprint() -> None:
+    spec = dispatch_spec(_context())
+    assert isinstance(spec, Ok)
+    assert spec.value.template == "qa-template.xml.j2"
+    assert spec.value.vars["stack"] == "phase-bh"
+    assert spec.value.vars["layer"] == 6

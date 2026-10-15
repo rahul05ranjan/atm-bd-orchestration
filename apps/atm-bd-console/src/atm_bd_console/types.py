@@ -41,7 +41,7 @@ class RepoConfig: bead_prefix: str; sanity_member: str; qa_member: str; primary_
 @dataclass(frozen=True)
 class Config: phase: str; lead: str; github: Literal["graphql", "rest", "off"]; interval_s: int; dry_run: bool; no_fetch: bool; repo_root: str; state_dir: str
 @dataclass(frozen=True)
-class DispatchContext: step: Step; sprint: Sprint; phase_id: str; phase_title: str; stack: str; lead: str; commit: str; base: str; worktree_path: str; pr: PullRequest | None; layer_prs: tuple[PullRequest, ...]; repo: RepoConfig
+class DispatchContext: step: Step; sprint: Sprint; phase_id: str; phase_title: str; lead: str; commit: str; base: str; worktree_path: str; pr: PullRequest | None; layer_prs: tuple[PullRequest, ...]; repo: RepoConfig
 @dataclass(frozen=True)
 class Inputs: now: datetime; lead: str; repo: RepoConfig; interval_s: int; phase: Result[Phase]; members: Result[tuple[Member, ...]]; tasks: Result[tuple[Task, ...]]; worktrees: Result[tuple[Worktree, ...]]; remotes: Result[tuple[RemoteRef, ...]] | None; merges: tuple[Result[Merge], ...] | None; prs: Result[tuple[PullRequest, ...]] | None; gh: GhStatus
 @dataclass(frozen=True)
