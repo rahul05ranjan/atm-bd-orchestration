@@ -3,8 +3,8 @@
 Installed from this branch with:
 
 ```text
-UV_TOOL_DIR=/tmp/atm-bh10-r1-uv-tools UV_TOOL_BIN_DIR=/tmp/atm-bh10-r1-uv-bin \
-  uv tool install --force /Users/randlee/github/atm-bd-orchestration-worktrees/fix/bh-10-sanity-r1/apps/atm-bd-console
+UV_TOOL_DIR=/tmp/atm-bh10-f1-uv-tools UV_TOOL_BIN_DIR=/tmp/atm-bh10-f1-uv-bin \
+  uv tool install --force /Users/randlee/github/atm-bd-orchestration-worktrees/fix/bh-10-qa-r1/apps/atm-bd-console
 ```
 
 Ran from `/Users/randlee/github/atm-core` with real `bd`, `atm`, `git`, and
@@ -12,8 +12,8 @@ GitHub GraphQL reads. Dispatches used `--dry-run`: ATM rejects a mutation when
 `--as` does not match the session `ATM_IDENTITY` base agent.
 
 ```text
-TERM=xterm-256color /tmp/atm-bh10-r1-uv-bin/atm-bd-console \
-  --phase bh --as arch-ctm --once --interval 60 --dry-run
+TERM=xterm-256color /tmp/atm-bh10-f1-uv-bin/atm-bd-console \
+  --phase bh --as arch-ctm --interval 60 --dry-run
 ```
 
 ## Dispatch tab
@@ -70,10 +70,23 @@ gh: graphql ✅ 05:45 | 9/12 [███████░░] 75% | active 0h00m | 
 gh: graphql ✅ 05:45 | 9/12 [███████░░] 75% | active 0h00m | tick 05:45:38
 ```
 
+## Selected sprint steps
+
+```text
+atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
+  dev    atm-bh-10.group-dev  closed  arch-ctm
+  qa     atm-bh-10.group-qa  closed  quality-mgr
+  fix    atm-bh-10.qa1-f2-r1-fix  open  arch-ctm
+  qa     atm-bh-10.qa1-f2-r1-qa  open  unassigned
+  fix    atm-bh-10.qa1-f1-r1-fix  in_progress  arch-ctm
+  qa     atm-bh-10.qa1-f1-r1-qa  open  unassigned
+```
+
 ## GitHub read count
 
 ```text
-baseline=9 total=11 delta=2
-2026-10-15T12:45:20.074787Z forced=false  initial live tick
-2026-10-15T12:45:41.499184Z forced=true   one r on the PRs tab
+baseline=11 total=14 delta=3
+2026-10-15T13:26:58.41678Z  forced=false  initial live tick
+2026-10-15T13:27:31.059958Z forced=true   PRs-tab activation
+2026-10-15T13:28:23.005893Z forced=true   one r on the PRs tab
 ```
