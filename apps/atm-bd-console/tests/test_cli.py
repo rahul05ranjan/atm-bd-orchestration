@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -10,11 +11,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from contract_samples import ACTION, CONFIG, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
+from contract_samples import (
+    ACTION,
+    BEAD,
+    CONFIG,
+    MERGE,
+    PHASE_FILE,
+    REMOTE_REF,
+    REPO_CONFIG,
+    SNAPSHOT,
+    SPRINT,
+    TIMEOUT,
+    WORKTREE,
+)
 
-from atm_bd_console import __version__, app, cli
+from atm_bd_console import __version__, app, cli, runner
 from atm_bd_console.result import Err, NotFound, Ok
-from atm_bd_console.state import acquire_lock
+from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE
 
 PKG = Path(__file__).resolve().parents[1]
@@ -244,3 +257,94 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
     assert app.run(config, None, INITIAL_STATE, runner_step=runner_step) == 0
     assert seen[:3] == [config, INITIAL_STATE, False]
     assert seen[3] is not None
+
+
+@pytest.mark.parametrize("member_read_fails", (False, True))
+def test_headless_cli_and_app_run_real_runner_step_with_state_store(
+    monkeypatch, tmp_path, capsys, member_read_fails: bool,
+) -> None:
+    """Both entry paths share runner.step, persistence, an action, and source-error reporting."""
+    fixed_now = datetime(2026, 10, 15, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+    phase_file = replace(PHASE_FILE, sprints=(SPRINT.id,), depends_on={SPRINT.id: ()})
+    root = replace(BEAD, id=phase_file.root_id, title="phase", status="open", labels=(phase_file.label,), parent=None, metadata={})
+    sprint = replace(
+        BEAD, id=SPRINT.id, title=SPRINT.title, status="open", labels=("stage:sprint",), parent=root.id,
+        metadata={"layer": SPRINT.layer, "branch": SPRINT.branch, "pr_target": SPRINT.target, "stack": SPRINT.stack},
+    )
+    sanity = replace(
+        BEAD, id="atm-bh-6.group-sanity", title="sanity", status="open", labels=("stage:dev-sanity",),
+        parent=sprint.id, assignee=None,
+        metadata={
+            "dev_bead": "atm-bh-6.group-dev", "sprint": "bh-6", "sprint_bead": sprint.id,
+            "branch": SPRINT.branch, "pr_target": SPRINT.target, "worktree": WORKTREE.path,
+            "layer": SPRINT.layer, "difficulty": "normal",
+        },
+    )
+    beads = {root.id: root, sprint.id: sprint, sanity.id: sanity}
+    merge = replace(MERGE, branch=SPRINT.branch, target=SPRINT.target, state="clean", files=(), messages=())
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = replace(
+        CONFIG, github="off", dry_run=False, no_fetch=False, repo_root=str(repo),
+        state_dir=str(repo / ".atm-bd/atm-bd-console/atm-phase-bh"),
+    )
+    actions = []
+
+    class Logger:
+        def event(self, *_args, **_kwargs):
+            return Ok(None)
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(phase_file))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda ids: Ok(tuple(beads[item] for item in ids if item in beads)))
+    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok((sanity,)))
+    monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok((sanity,)))
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Err(TIMEOUT) if member_read_fails else Ok(()))
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: actions.append("assign") or Ok(None))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok((WORKTREE,)))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok((REMOTE_REF,)))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Ok(merge))
+    monkeypatch.setattr(cli.config_source, "repo_root", lambda: repo)
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(config))
+    monkeypatch.setattr(cli, "now", lambda: fixed_now)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin/tool")
+
+    assert cli.main(["--phase", "bh", "--as", "fenix", "--headless"]) == 0
+    headless_output = capsys.readouterr().out
+    headless_snapshot = load_snapshot(repo, phase_file.root_id)
+    headless_state = load_state(repo, phase_file.root_id)
+    assert isinstance(headless_snapshot, Ok) and isinstance(headless_state, Ok)
+    assert any(json.loads(line)["kind"] == "assign" for line in headless_output.splitlines())
+
+    shutil.rmtree(config.state_dir)
+    app_result = []
+
+    def run_in_pilot(console_app):
+        async def scenario():
+            async with console_app.run_test() as pilot:
+                await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
+                await pilot.pause()
+            app_result.append((console_app.snapshot, console_app.state))
+
+        asyncio.run(scenario())
+        return 0
+
+    monkeypatch.setattr(app.ConsoleApp, "run", run_in_pilot)
+    assert cli.main(["--phase", "bh", "--as", "fenix"]) == 0
+    assert len(app_result) == 1 and app_result[0][0] is not None
+    app_snapshot, app_state = app_result[0]
+    assert actions == ["assign", "assign"]
+    assert headless_snapshot.value.sent == app_snapshot.sent
+    assert headless_state.value == app_state
+    assert headless_snapshot.value.errors == app_snapshot.errors
+    assert headless_snapshot.value.errors == ((TIMEOUT,) if member_read_fails else ())
