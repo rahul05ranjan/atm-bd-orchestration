@@ -36,9 +36,9 @@ def _cycle_due(state: State, now: datetime) -> bool:
     return state.last_cycle is None or now - state.last_cycle >= CYCLE
 
 
-def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime) -> Due:
+def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime, tasks: tuple[Task, ...] = ()) -> Due:
     cycle_due = _cycle_due(state, now)
-    ready = tuple(step for step in candidates(phase, ()) if step.ready)
+    ready = tuple(step for step in candidates(phase, tasks) if step.ready)
     pushed = {remote.branch for remote in state.remotes}
     fetch = cycle_due or any(step.branch not in pushed for step in ready)
     pairs: list[tuple[str, str]] = []

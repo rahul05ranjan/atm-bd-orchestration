@@ -149,6 +149,13 @@ def test_due_cycle_fetch_missing_ref_and_merge_pairs() -> None:
     assert inherited.merges == (("branch", "sprint/bh-1"),)
 
 
+def test_due_excludes_ready_steps_with_open_tasks() -> None:
+    ready = step("qa", "atm-bh-1", kind="qa", ready=True, branch="missing", target="base")
+    task = Task("qa", "trinity", "active", 0, NOW, NOW, "running")
+
+    assert due(replace(STATE, last_cycle=NOW), phase(ready), "atm", "graphql", NOW + timedelta(minutes=5), (task,)).fetch is False
+
+
 def test_one_sprint_lookup_for_due_dispatch_and_sprint_views() -> None:
     # A foreign sprint whose id ends with the step's tag used to win due's endswith match while dispatch and the
     # sprint views used the prefixed id: one step, two targets.
