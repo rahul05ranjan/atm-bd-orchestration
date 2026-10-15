@@ -191,7 +191,7 @@ def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> 
     assert snapshots[-1].errors == snapshot.errors
 
 
-def test_read_only_store_write_failure_is_visible(github_runtime) -> None:
+def test_stubbed_write_snapshot_failure_is_visible(github_runtime) -> None:
     store, _, _, _ = github_runtime
     store.write_snapshot = lambda _value: Err(IO_FAILED)
     snapshot, _ = runner.step(CONFIG, STATE, False, store)
