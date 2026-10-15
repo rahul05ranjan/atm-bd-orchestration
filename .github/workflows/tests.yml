@@ -8,6 +8,29 @@ permissions:
   contents: read
 
 jobs:
+  console-tests:
+    name: console (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Install console in isolation
+        run: uv tool install ./apps/atm-bd-console
+      - name: Console tests
+        working-directory: apps/atm-bd-console
+        run: uv run pytest -q
+      - name: Console CLI smoke tests
+        run: |
+          atm-bd-console --help
+          atm-bd-console --once --headless --phase bh --as ci --dry-run --github off
+
   package-tests:
     strategy:
       fail-fast: false
