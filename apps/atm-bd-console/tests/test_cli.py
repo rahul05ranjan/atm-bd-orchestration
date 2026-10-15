@@ -22,7 +22,10 @@ PKG = Path(__file__).resolve().parents[1]
 
 def test_missing_as_uses_documented_message(capsys) -> None:
     assert cli.main(["--phase", "bh"]) == 3
-    assert capsys.readouterr().out.strip() == cli.MISSING_AS
+    message = capsys.readouterr().out.strip()
+    assert message == cli.MISSING_AS
+    assert "--as <phase lead> is required" in message
+    assert "ATM identity" in message
 
 
 def test_missing_phase_is_a_launch_check(capsys) -> None:
