@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import ERRORS, NOT_FOUND, PLUS_TWO, SAMPLES, SNAPSHOT, TASK
+from contract_samples import ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, REPO_CONFIG, SAMPLES, SNAPSHOT, TASK
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
@@ -24,7 +24,7 @@ from atm_bd_console.result import (
     Timeout,
     Unreachable,
 )
-from atm_bd_console.types import Config, GhStatus, Inputs, RepoConfig, Snapshot, Sprint
+from atm_bd_console.types import Config, Inputs, Snapshot, Sprint
 
 
 def test_config_round_trip_and_literal_rejection() -> None:
@@ -93,12 +93,29 @@ def test_non_utc_aware_datetime_is_written_as_utc_z() -> None:
 
 
 def test_tick_context_round_trip() -> None:
-    repo = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", (), "/plans")
-    sprint = Sprint("bh-6", "tick rules", 6, "sprint/bh-6-tick-rules", "sprint/bh-1-contract", "phase-bh", (), False, 0)
-    now = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
-    inputs = Inputs(now, "fenix", repo, 60, Err(NotFound("not_found", "phase", "load it")), Ok(()), Ok(()), Ok(()), None, None, None, GhStatus("off", None, None, None, False), Ok(()))
+    sprint = PHASE.sprints[0]
+    inputs = replace(INPUTS, repo=REPO_CONFIG, phase=Ok(PHASE))
+    assert sprint.stack == "phase-bh"
+    assert REPO_CONFIG.reviewers_round1
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     assert from_json(Inputs, to_json(inputs)) == Ok(inputs)
+
+
+def test_tick_context_missing_contract_fields_report_paths() -> None:
+    import json
+
+    cases = (
+        (Sprint, to_json(PHASE.sprints[0]), "stack", "$.stack"),
+        (Inputs, to_json(INPUTS), "repo", "$.repo"),
+        (Inputs, to_json(INPUTS), "interval_s", "$.interval_s"),
+    )
+    for cls, text, field, path in cases:
+        value = json.loads(text)
+        value.pop(field)
+        decoded = from_json(cls, json.dumps(value))
+        assert isinstance(decoded, Err)
+        assert isinstance(decoded.error, ParseFailed)
+        assert decoded.error.source == path
 
 
 def test_missing_field_and_datetime_errors_are_results() -> None:

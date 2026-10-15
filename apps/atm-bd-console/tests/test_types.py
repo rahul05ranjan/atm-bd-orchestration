@@ -144,6 +144,20 @@ def test_key_field_annotations() -> None:
     assert get_type_hints(result.LockHeld)["snapshot_age_s"] == int | None
 
 
+def test_tick_context_contract_field_names_are_pinned() -> None:
+    assert tuple(field.name for field in fields(types.Sprint)) == (
+        "id", "title", "layer", "branch", "target", "stack", "depends_on", "closed", "findings",
+    )
+    assert tuple(field.name for field in fields(types.RepoConfig)) == (
+        "bead_prefix", "sanity_member", "qa_member", "primary_checkout", "worktree_base", "lint_command",
+        "policy_path", "reviewers_round1", "plans_dir",
+    )
+    assert tuple(field.name for field in fields(types.Inputs)) == (
+        "now", "lead", "repo", "interval_s", "phase", "members", "tasks", "worktrees", "remotes", "merges",
+        "prs", "gh", "task_beads",
+    )
+
+
 def test_type_aliases() -> None:
     assert get_args(types.Presence) == LITERALS[("Member", "presence")]
     assert get_args(types.StepKind) == LITERALS[("Step", "kind")]
