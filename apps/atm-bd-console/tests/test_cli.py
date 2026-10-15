@@ -36,9 +36,12 @@ PKG = Path(__file__).resolve().parents[1]
 def test_missing_as_uses_documented_message(capsys) -> None:
     assert cli.main(["--phase", "bh"]) == 3
     message = capsys.readouterr().out.strip()
-    assert message == cli.MISSING_AS
     assert "--as <phase lead> is required" in message
-    assert "ATM identity" in message
+    assert "the ATM identity that leads this phase" in message
+    assert "Tasks are assigned as that identity" in message
+    assert "escalations go to it when no escalation recipient is set" in message
+    assert "The phase lead varies by phase" in message
+    assert "never inferred from $ATM_IDENTITY or the repository's lead" in message
 
 
 def test_missing_phase_is_a_launch_check(capsys) -> None:
