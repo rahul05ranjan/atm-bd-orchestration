@@ -63,13 +63,16 @@ def step(config: Config, state: State, force_github: bool, store: StateStore | N
         snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
         lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
         active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
+        if store is None and isinstance(lock, Err):
+            snapshot = replace(snapshot, errors=(*snapshot.errors, lock.error))
         if active_store is not None:
             persisted = replace(snapshot, files={"snapshot": str(active_store.directory / "snapshot.json"), "state": str(active_store.directory / "state.json")})
             if store is not None:
-                active_store.write_state(next_state); active_store.write_snapshot(persisted)
+                writes = (active_store.write_state(next_state), active_store.write_snapshot(persisted))
             else:
                 with active_store:
-                    active_store.write_state(next_state); active_store.write_snapshot(persisted)
+                    writes = (active_store.write_state(next_state), active_store.write_snapshot(persisted))
+            persisted = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
             snapshot = persisted
         if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
         return snapshot, next_state
@@ -108,6 +111,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore | N
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
     lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
     active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
+    if store is None and isinstance(lock, Err):
+        snapshot = replace(snapshot, errors=(*snapshot.errors, lock.error))
     if active_store is not None:
         def persist(store: StateStore):
             errors = list(_run_actions(config, actions, store, now))
