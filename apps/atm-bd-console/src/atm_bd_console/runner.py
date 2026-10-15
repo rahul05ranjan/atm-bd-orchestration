@@ -15,19 +15,26 @@ def _gh(mode: str) -> GhStatus:
     return GhStatus(mode, None, None, None, False)  # type: ignore[arg-type]
 
 
-def _run_actions(config: Config, actions: tuple[Action, ...], store, now: datetime) -> None:
+def _run_actions(config: Config, actions: tuple[Action, ...], store, now: datetime):
+    """Return boundary errors so they are visible in the persisted snapshot."""
+    errors = []
     for action in actions:
         bead = action.bead_ids[0] if action.bead_ids else None
         if config.dry_run:
-            store.append_action(ActionLine(now, "dry_run", action.to, bead, action.text))
+            logged = store.append_action(ActionLine(now, "dry_run", action.to, bead, action.text))
+            if isinstance(logged, Err): errors.append(logged.error)
             continue
         if action.kind == "assign" and action.spec is not None and bead:
             result = atm_source.assign(action.to, bead, action.spec, config.lead)
         else:
             result = atm_source.send(action.to, action.text, config.lead)
-        store.append_action(ActionLine(now, action.kind, action.to, bead, action.text))
+        logged = store.append_action(ActionLine(now, action.kind, action.to, bead, action.text))
+        if isinstance(logged, Err): errors.append(logged.error)
         if isinstance(result, Err):
-            store.append_action(ActionLine(now, "hold", action.to, bead, result.error.fix))
+            errors.append(result.error)
+            held = store.append_action(ActionLine(now, "hold", action.to, bead, result.error.fix))
+            if isinstance(held, Err): errors.append(held.error)
+    return tuple(errors)
 
 
 def step(config: Config, state: State, force_github: bool):
@@ -73,9 +80,11 @@ def step(config: Config, state: State, force_github: bool):
     lock = acquire_lock(config.repo_root, file.value.root_id)
     if isinstance(lock, Ok):
         with lock.value as store:
-            _run_actions(config, actions, store, now)
-            store.write_merges(MergeFile(now, merges)); store.write_prs(PrsFile(now, gh, tuple(prs)))
-            store.write_state(next_state)
-            store.write_snapshot(replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")}))
+            errors = list(_run_actions(config, actions, store, now))
+            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
+                if isinstance(written, Err): errors.append(written.error)
+            persisted = replace(snapshot, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+            store.write_snapshot(persisted)
+            snapshot = persisted
     if isinstance(logger, Ok): logger.value.event("tick_end", actions=len(actions))
     return snapshot, next_state
