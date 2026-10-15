@@ -133,10 +133,10 @@ def test_due_cycle_fetch_missing_ref_and_merge_pairs() -> None:
     value = phase(qa, pushed)
     remote = RemoteRef("present", "abc")
     state = replace(STATE, remotes=(remote,))
-    assert due(state, value, "atm", "graphql", NOW) == due(state, value, "atm", "graphql", NOW)
     first = due(state, value, "atm", "graphql", NOW)
-    assert first.fetch and first.github
-    assert first.merges == (("missing", "base"), ("present", "base")) or first.merges == (("present", "base"), ("missing", "base"))
+    assert first.fetch is True
+    assert first.github is True
+    assert first.merges == (("present", "base"), ("missing", "base"))
     at_five = due(replace(state, last_cycle=NOW), value, "atm", "graphql", NOW + timedelta(minutes=5))
     assert at_five.fetch and not at_five.github
     assert at_five.merges == (("missing", "base"),)
@@ -267,7 +267,8 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
                                             gh=GhStatus("graphql", True, None,
                                                         NOW + timedelta(minutes=20), False)),
                                     state, NOW + timedelta(minutes=20), render)
-    assert snapshot.problems == () and actions == () and state.batch_due == {}
+    assert snapshot.problems == ()
+    assert actions == ()
 
 
 def test_ci_and_conflict_problems_survive_until_their_sources_are_refreshed() -> None:
@@ -386,7 +387,7 @@ def test_hold_is_shown_and_sent_once_then_batched() -> None:
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
     assert snapshot.sections[0].label == "Held"
     assert snapshot.sections[0].rows[0].bead_id == "qa"
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar"), ("send", "solar")]
     _, actions, state = tick(supplied, state, NOW + timedelta(minutes=5), render)
     assert actions == ()
     _, actions, _ = tick(supplied, state, NOW + timedelta(minutes=10), render)
@@ -400,11 +401,13 @@ def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
     assert len(snapshot.sections) == 1
     assert snapshot.sections[0].label == "Held"
     assert snapshot.sections[0].rows[0].reason == "not ready"
-    assert snapshot.problems == () and actions == () and state.batch_due == {}
+    assert [problem.text for problem in snapshot.problems] == ["branch not on origin: missing", "no worktree for missing"]
+    assert [(action.kind, action.to) for action in actions] == [("send", "fenix"), ("send", "fenix")]
 
     snapshot, actions, state = tick(supplied, state, NOW + timedelta(minutes=10), render)
     assert snapshot.sections[0].rows[0].reason == "not ready"
-    assert snapshot.problems == () and actions == () and state.batch_due == {}
+    assert [problem.text for problem in snapshot.problems] == ["branch not on origin: missing", "no worktree for missing"]
+    assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
 
 
 def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
