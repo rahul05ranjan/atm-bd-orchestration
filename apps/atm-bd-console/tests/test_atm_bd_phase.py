@@ -182,3 +182,53 @@ def test_unusable_root_is_err(fake_bin) -> None:
     assert mislabelled.error.key == "atm-phase-bh.labels"
     for result in (missing, wrong, mislabelled):
         assert result.error.fix
+
+
+def _bead(bead_id: str, parent: str | None, labels: tuple[str, ...] = (), metadata: dict | None = None) -> Bead:
+    from datetime import UTC, datetime
+
+    return Bead(bead_id, bead_id, "open", labels, parent, (), None, metadata or {}, datetime(2026, 10, 15, tzinfo=UTC), None, None)
+
+
+def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
+    from atm_bd_console.atm_bd import step
+
+    root = _bead("atm-phase-bh", None, ("scope:epic",))
+    sprint = _bead("atm-bh-4", "atm-phase-bh", ("stage:sprint",))
+    dev = _bead("atm-bh-4.group-dev", "atm-bh-4", ("stage:dev",), {"sprint": "bh-4", "branch": "b", "pr_target": "t", "layer": 4, "difficulty": "normal"})
+    result = step(dev, {root.id: root, sprint.id: sprint})
+    assert isinstance(result, Ok)
+    assert (result.value.kind, result.value.top_epic, result.value.tag) == ("dev", "atm-phase-bh", "phase-bh")
+    assert (result.value.branch, result.value.target, result.value.layer, result.value.difficulty) == ("b", "t", 4, "normal")
+
+
+def test_step_top_epic_is_none_when_the_chain_is_broken_anywhere() -> None:
+    from atm_bd_console.atm_bd import step
+
+    sprint = _bead("atm-bh-4", "atm-phase-bh", ("stage:sprint",))
+    dev = _bead("atm-bh-4.group-dev", "atm-bh-4", ("stage:dev",), {"sprint": "bh-4"})
+    partway = step(dev, {sprint.id: sprint})  # parent present, grandparent referenced but missing
+    assert isinstance(partway, Ok) and partway.value.top_epic is None
+    first = step(dev, {})  # parent itself missing
+    assert isinstance(first, Ok) and first.value.top_epic is None
+    orphan = step(_bead("atm-phase-bh", None), {})
+    assert isinstance(orphan, Ok) and orphan.value.top_epic is None and orphan.value.tag == "phase-bh"
+
+
+def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
+    from atm_bd_console.atm_bd import step
+
+    sanity = _bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",), {"dev_bead": "atm-bh-4.group-dev", "sprint": "bh-4"})
+    assert step(sanity, {}).value.checked_bead == "atm-bh-4.group-dev"
+    qa = _bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.group-dev", "round": 1, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
+    got = step(qa, {}).value
+    assert (got.kind, got.checked_bead, got.qa_round, got.sprint_bead, got.carry_forward) == ("qa", "atm-bh-4.group-dev", 1, "atm-bh-4", None)
+    fix_qa = _bead("atm-bh-4.f1-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.f1", "round": 2, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
+    fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",))
+    assert step(fix_qa, {fix.id: fix}).value.carry_forward == "atm-bh-4.f1"
+    no_checked = step(_bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",)), {})
+    assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.checked_bead" in no_checked.error.what
+    no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})
+    assert isinstance(no_round, Err) and "metadata.round" in no_round.error.what
+    no_sprint = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "round": 1}), {})
+    assert isinstance(no_sprint, Err) and "metadata.sprint_bead" in no_sprint.error.what

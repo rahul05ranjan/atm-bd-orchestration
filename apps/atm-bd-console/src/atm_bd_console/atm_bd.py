@@ -173,6 +173,20 @@ def repo_config(repo_root: str) -> Result[RepoConfig]:
     return Ok(RepoConfig(**fields))
 
 
+def _top_epic(bead: Bead, parents: Mapping[str, Bead]) -> str | None:
+    """The root of `bead`'s parent chain within `parents`; None when the chain is broken anywhere,
+    a referenced parent missing from `parents`, never the partial top."""
+    top = None
+    parent_id = bead.parent
+    while parent_id:
+        parent = parents.get(parent_id)
+        if parent is None:
+            return None
+        top = parent.id
+        parent_id = parent.parent
+    return top
+
+
 def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     metadata = bead.metadata
     stage = next((label.removeprefix("stage:") for label in bead.labels if label.startswith("stage:")), "other")
@@ -187,11 +201,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     sprint_bead = metadata.get("sprint_bead")
     if kind == "qa" and not sprint_bead and checked in parents: sprint_bead = parents[checked].metadata.get("sprint_bead")
     if kind == "qa" and not sprint_bead: return _missing(f"{bead.id}.metadata.sprint_bead")
-    parent = parents.get(bead.parent or "")
-    top = None
-    while parent:
-        top = parent.id
-        parent = parents.get(parent.parent or "")
+    top = _top_epic(bead, parents)
     carry = checked if kind == "qa" and stage == "qa" and ("stage:fix" in parents.get(checked, bead).labels or "stage:finding" in parents.get(checked, bead).labels) else None
     prefix = (top or bead.id).split("-", 1)[0] + "-"
     return Ok(Step(bead.id, sprint, kind, bool(metadata.get("quick_fix")), "anchor" in bead.labels, bead.status, False, bead.assignee, metadata.get("branch"), metadata.get("pr_target"), metadata.get("worktree"), metadata.get("layer"), metadata.get("difficulty"), (top or bead.id).removeprefix(prefix), top, bead.claimed_at, bead.closed_at, bead.title, checked, sprint_bead, metadata.get("round"), carry))
