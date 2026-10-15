@@ -10,6 +10,7 @@ from .types import GhStatus, PullRequest
 
 GRAPHQL = """query { repository(owner: \"randlee\", name: \"atm-bd-orchestration\") { pullRequests(states: OPEN, first: 100) { totalCount nodes { number url headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion status } } } } } } } } } } }"""
 FAILURES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}
+REQUEST_TIMEOUT_S = 20
 
 
 def _status(mode: str, ok: bool | None, error=None, truncated: bool = False) -> GhStatus:
@@ -46,9 +47,9 @@ def open_prs(mode: str):
         return Ok(()), _status("off", None)
     argv = ("gh", "api", "graphql", "-f", f"query={GRAPHQL}") if mode == "graphql" else ("gh", "api", "repos/randlee/atm-bd-orchestration/pulls?state=open&per_page=100")
     try:
-        completed = subprocess.run(argv, capture_output=True, text=True, timeout=20, check=False)
+        completed = subprocess.run(argv, capture_output=True, text=True, timeout=REQUEST_TIMEOUT_S, check=False)
     except subprocess.TimeoutExpired:
-        error = Timeout("timeout", argv, 20, "check GitHub connectivity and retry")
+        error = Timeout("timeout", argv, REQUEST_TIMEOUT_S, "check GitHub connectivity and retry")
         return Err(error), _status(mode, False, error)
     if completed.returncode:
         return _error(mode, argv, completed.returncode, (completed.stderr or completed.stdout).strip())
