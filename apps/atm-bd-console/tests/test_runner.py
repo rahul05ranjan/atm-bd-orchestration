@@ -20,6 +20,7 @@ from contract_samples import (
 
 from atm_bd_console import runner
 from atm_bd_console.result import Err, Ok
+from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Due, GhStatus
 
 
@@ -195,6 +196,20 @@ def test_read_only_store_write_failure_is_visible(github_runtime) -> None:
     store.write_snapshot = lambda _value: Err(IO_FAILED)
     snapshot, _ = runner.step(CONFIG, STATE, False, store)
     assert IO_FAILED in snapshot.errors
+
+
+def test_runner_reports_real_read_only_store_write_failure(github_runtime, tmp_path) -> None:
+    _, _, _, _ = github_runtime
+    acquired = acquire_lock(tmp_path, "atm-phase-bh")
+    assert isinstance(acquired, Ok)
+    directory = acquired.value.directory
+    with acquired.value as store:
+        directory.chmod(0o500)
+        try:
+            snapshot, _ = runner.step(replace(CONFIG, repo_root=str(tmp_path)), STATE, False, store)
+        finally:
+            directory.chmod(0o700)
+    assert any(error.kind == "io_failed" for error in snapshot.errors)
 
 
 def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, monkeypatch, tmp_path) -> None:
