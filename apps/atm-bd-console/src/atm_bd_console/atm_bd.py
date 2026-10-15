@@ -21,10 +21,10 @@ GROUP_SUFFIXES = ("dev", "sanity", "qa")
 SPRINT_META = ("layer", "branch", "pr_target", "stack")
 FINDING_LABEL = "stage:finding"
 REPO_CONFIG_PATH = ".claude/project/atm-bd-orchestration.yaml"
-# RepoConfig field -> key in the repository configuration file.
+# RepoConfig field -> key in the repository configuration file; primary_checkout is repo_root (per-machine path).
 REPO_KEYS = (
     ("bead_prefix", "bead_prefix"), ("sanity_member", "dev_sanity_member"), ("qa_member", "qa_member"),
-    ("primary_checkout", "primary_checkout"), ("worktree_base", "worktree_base"), ("lint_command", "lint_command"),
+    ("worktree_base", "worktree_base"), ("lint_command", "lint_command"),
     ("policy_path", "policy_path"), ("reviewers_round1", "reviewers_round1"), ("plans_dir", "plans_dir"),
 )
 
@@ -151,13 +151,14 @@ def _yaml_value(value: str) -> Any:
 
 
 def repo_config(repo_root: str) -> Result[RepoConfig]:
-    """`.claude/project/atm-bd-orchestration.yaml`; a missing key is Err(NotFound) naming it."""
+    """`.claude/project/atm-bd-orchestration.yaml`; a missing key is Err(NotFound) naming it.
+    primary_checkout is `repo_root`, never read from the file (plan-owner ruling on atm-bh-4)."""
     path = Path(repo_root) / REPO_CONFIG_PATH
     text = _read(path, "install atm-bd-orchestration into this repository")
     if isinstance(text, Err):
         return text
     values = _yaml_scalars(text.value)
-    fields: dict[str, Any] = {}
+    fields: dict[str, Any] = {"primary_checkout": repo_root}
     for field, key in REPO_KEYS:
         if key not in values:
             return Err(NotFound("not_found", f"{path}: key {key}", "re-run the atm-bd-orchestration installer"))

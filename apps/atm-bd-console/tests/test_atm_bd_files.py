@@ -159,29 +159,24 @@ def test_bad_plan_rows_are_parse_failed(repo: Path, plan: str, source_suffix: st
     assert message in error.message
 
 
-def _with_primary_checkout(repo: Path) -> Path:
-    config = repo / CONFIG
-    config.write_text(config.read_text() + 'primary_checkout: "/Users/randlee/github/atm-core"\n')
-    return config
-
-
-def test_repo_config_on_the_real_file_names_the_key_it_lacks() -> None:
-    # atm-core's installed file has no primary_checkout; the design reads it from this file, so it is NotFound.
-    error = _err(repo_config(str(REPO)))
-    assert isinstance(error, NotFound)
-    assert error.what == f"{REPO / CONFIG}: key primary_checkout"
-
-
-def test_repo_config_yields_every_field(repo: Path) -> None:
-    _with_primary_checkout(repo)
-    assert repo_config(str(repo)) == Ok(RepoConfig(
-        "atm", "atm-sanity", "quality-mgr", "/Users/randlee/github/atm-core", "../atm-core-worktrees", "just lint",
+def test_repo_config_on_the_real_file_is_ok_and_primary_checkout_is_repo_root() -> None:
+    # Plan-owner ruling (atm-bh-4): primary_checkout is the repo_root passed in, never read from the yaml.
+    assert repo_config(str(REPO)) == Ok(RepoConfig(
+        "atm", "atm-sanity", "quality-mgr", str(REPO), "../atm-core-worktrees", "just lint",
         ".claude/project/quality-policy.md", REVIEWERS, "docs/plans",
     ))
 
 
+def test_repo_config_ignores_a_primary_checkout_key_in_the_file(repo: Path) -> None:
+    config = repo / CONFIG
+    config.write_text(config.read_text() + 'primary_checkout: "/elsewhere"\n')
+    result = repo_config(str(repo))
+    assert isinstance(result, Ok)
+    assert result.value.primary_checkout == str(repo)
+
+
 def test_repo_config_without_qa_member_is_not_found_naming_it(repo: Path) -> None:
-    config = _with_primary_checkout(repo)
+    config = repo / CONFIG
     config.write_text("".join(line + "\n" for line in config.read_text().splitlines()
                               if not line.startswith("qa_member:")))
     error = _err(repo_config(str(repo)))
@@ -190,7 +185,7 @@ def test_repo_config_without_qa_member_is_not_found_naming_it(repo: Path) -> Non
 
 
 def test_repo_config_reads_a_block_reviewer_list(repo: Path) -> None:
-    config = _with_primary_checkout(repo)
+    config = repo / CONFIG
     lines = [line for line in config.read_text().splitlines() if not line.startswith("reviewers_round1:")]
     config.write_text("\n".join([*lines, "reviewers_round1:", "  - req-qa", '  - "arch-qa"']) + "\n")
     result = repo_config(str(repo))
@@ -199,7 +194,7 @@ def test_repo_config_reads_a_block_reviewer_list(repo: Path) -> None:
 
 
 def test_repo_config_reviewers_not_a_list_is_config_invalid(repo: Path) -> None:
-    config = _with_primary_checkout(repo)
+    config = repo / CONFIG
     lines = [line for line in config.read_text().splitlines() if not line.startswith("reviewers_round1:")]
     config.write_text("\n".join([*lines, 'reviewers_round1: "req-qa"']) + "\n")
     error = _err(repo_config(str(repo)))
