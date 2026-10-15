@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import re
 import subprocess
 
 from .ids import short_id
-from .result import CommandFailed, Error, NotFound, Timeout
+from .result import CommandFailed, ConfigInvalid, Error, NotFound, Timeout
 from .types import Snapshot, SprintView
 
 _COMMAND = ("mmdflux", "--format", "text")
+_VERSION_COMMAND = ("mmdflux", "--version")
+_MINIMUM_VERSION = (2, 6, 1)
+_VERSION_PATTERN = re.compile(r"\b([0-9]+)\.([0-9]+)\.([0-9]+)\b")
 _ICONS = {"closed": "✅", "in_progress": "🌀", "ready": "📥", "not_ready": "⏳"}
 
 
@@ -37,6 +41,33 @@ def _fallback(snapshot: Snapshot) -> str:
 
 
 def status_text(snapshot: Snapshot) -> tuple[str, Error | None]:
+    try:
+        version = subprocess.run(
+            _VERSION_COMMAND, capture_output=True, text=True, timeout=20, check=False,
+        )
+    except FileNotFoundError:
+        return _fallback(snapshot), NotFound("not_found", "mmdflux", "install mmdflux >=2.6.1")
+    except subprocess.TimeoutExpired:
+        return _fallback(snapshot), Timeout("timeout", _VERSION_COMMAND, 20, "retry or simplify the status diagram")
+    except OSError as error:
+        return _fallback(snapshot), CommandFailed(
+            "command_failed", _VERSION_COMMAND, -1, str(error), "check the mmdflux installation",
+        )
+
+    reported = (version.stdout or version.stderr).strip()
+    match = _VERSION_PATTERN.search(reported)
+    if version.returncode != 0:
+        return _fallback(snapshot), CommandFailed(
+            "command_failed", _VERSION_COMMAND, version.returncode, version.stderr,
+            "install or upgrade mmdflux >=2.6.1",
+        )
+    actual = tuple(int(part) for part in match.groups()) if match else None
+    if actual is None or actual < _MINIMUM_VERSION:
+        return _fallback(snapshot), ConfigInvalid(
+            "config_invalid", "mmdflux_version", reported or "unknown",
+            "install or upgrade mmdflux >=2.6.1",
+        )
+
     try:
         completed = subprocess.run(
             _COMMAND, input=snapshot.mermaid, capture_output=True, text=True, timeout=20, check=False,

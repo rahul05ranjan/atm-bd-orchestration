@@ -106,12 +106,10 @@ PLACEHOLDER_RE = re.compile(r"\{\{ (" + "|".join(RENDER_VARIABLES) + r") \}\}")
 RETIRED_REPO_FILES = {"scripts/jev_client.py": "assets/scripts/jev_client.py"}
 
 REQUIRED_CONSOLE_VERSION = "0.1.0"
-REQUIRED_MMDFLUX_VERSION = "2.6.1"
 CONSOLE_INSTALL = (
     "uv tool install "
     "git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console"
 )
-MMDFLUX_INSTALL = "brew install kevinswiber/mmdflux/mmdflux or cargo install mmdflux"
 
 
 class InstallError(RuntimeError):
@@ -428,7 +426,6 @@ def check_tools() -> None:
         raise InstallError(f"the sc-compose CLI is {cli_version} and the python3 wheel is {wheel_version}; they must "
                            f"be the same version; install {sc_compose_upgrade()} and rerun")
     _check_required_tool("atm-bd-console", REQUIRED_CONSOLE_VERSION, CONSOLE_INSTALL)
-    _check_required_tool("mmdflux", REQUIRED_MMDFLUX_VERSION, MMDFLUX_INSTALL)
 
 
 def check_beads_server_mode(repo_root: Path) -> None:

@@ -93,8 +93,7 @@ def shim_sc_compose(bin_dir: Path, cli: str, wheel: str) -> None:
     """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
     bin_dir.mkdir(exist_ok=True)
     for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel),
-                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}"),
-                      ("mmdflux", f"mmdflux {install.REQUIRED_MMDFLUX_VERSION}")):
+                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}")):
         (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
         (bin_dir / name).chmod(0o755)
 
@@ -123,10 +122,8 @@ def test_check_tools_accepts_one_sc_compose_version_in_the_range(tmp_path, monke
 @pytest.mark.parametrize(("tool", "reported", "expected"), [
     ("atm-bd-console", None, "uv tool install"),
     ("atm-bd-console", "atm-bd-console 0.0.9", "older than required 0.1.0"),
-    ("mmdflux", None, "brew install kevinswiber/mmdflux/mmdflux"),
-    ("mmdflux", "mmdflux 2.6.0", "older than required 2.6.1"),
 ])
-def test_check_tools_requires_current_console_and_mmdflux(tmp_path, monkeypatch, tool, reported, expected):
+def test_check_tools_requires_current_console(tmp_path, monkeypatch, tool, reported, expected):
     bin_dir = tmp_path / "bin"
     shim_sc_compose(bin_dir, "1.7.0", "1.7.0")
     path = bin_dir / tool

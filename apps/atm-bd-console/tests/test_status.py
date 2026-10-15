@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from atm_bd_console.codec import from_json
-from atm_bd_console.result import CommandFailed, NotFound, Ok, Timeout
+from atm_bd_console.result import CommandFailed, ConfigInvalid, NotFound, Ok, Timeout
 from atm_bd_console.status import status_text
 from atm_bd_console.types import Snapshot, SprintView, StepView
 
@@ -27,11 +27,39 @@ def snapshot() -> Snapshot:
 def test_mmdflux_output_is_returned_verbatim(fake_bin, monkeypatch, tmp_path) -> None:
     stdin_log = tmp_path / "mmdflux-stdin"
     monkeypatch.setenv("FAKE_STDIN_LOG", str(stdin_log))
-    fake_bin.make("mmdflux", "cat > \"$FAKE_STDIN_LOG\"\nprintf 'rendered\\n'\n")
+    fake_bin.make(
+        "mmdflux",
+        'if [ "$1" = "--version" ]; then printf "mmdflux 2.6.1\\n"; exit 0; fi\n'
+        'cat > "$FAKE_STDIN_LOG"\nprintf \'rendered\\n\'\n',
+    )
     rendered, error = status_text(snapshot())
     assert rendered == "rendered\n" and error is None
     assert stdin_log.read_text() == "graph TD\n    a --> b"
-    assert fake_bin.argv() == [("mmdflux", "--format", "text")]
+    assert fake_bin.argv() == [("mmdflux", "--version"), ("mmdflux", "--format", "text")]
+
+
+def test_old_mmdflux_returns_typed_fix_without_rendering(fake_bin) -> None:
+    fake_bin.make("mmdflux", 'if [ "$1" = "--version" ]; then printf "mmdflux 2.6.0\\n"; exit 0; fi\n')
+
+    rendered, error = status_text(snapshot())
+
+    assert rendered == (FIXTURES / "render" / "status-fallback.txt").read_text().rstrip("\n")
+    assert isinstance(error, ConfigInvalid)
+    assert error.key == "mmdflux_version"
+    assert error.value == "mmdflux 2.6.0"
+    assert error.fix == "install or upgrade mmdflux >=2.6.1"
+    assert fake_bin.argv() == [("mmdflux", "--version")]
+
+
+def test_unversioned_mmdflux_returns_typed_fix_without_rendering(fake_bin) -> None:
+    fake_bin.make("mmdflux", 'if [ "$1" = "--version" ]; then printf "unknown\\n"; exit 0; fi\n')
+
+    _, error = status_text(snapshot())
+
+    assert isinstance(error, ConfigInvalid)
+    assert error.key == "mmdflux_version"
+    assert error.fix == "install or upgrade mmdflux >=2.6.1"
+    assert fake_bin.argv() == [("mmdflux", "--version")]
 
 
 def test_missing_binary_uses_dependency_depth_fallback(monkeypatch) -> None:
