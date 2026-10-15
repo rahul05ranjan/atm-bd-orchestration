@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import __version__, app, render, runner
+from . import __version__, app, atm_bd, render, runner
 from . import config as config_source
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
@@ -38,12 +39,19 @@ def main(argv: list[str] | None = None) -> int:
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 0
         last = f" (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})" if isinstance(snapshot, Ok) else ""
-        print(f"{CONSOLE_NAME} is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} --phase {args.phase} --as <lead>")
+        lead = snapshot.value.lead if isinstance(snapshot, Ok) else "<lead>"
+        print(f"{CONSOLE_NAME} is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} --phase {args.phase} --as {lead}")
         return 2
     if not args.lead:
         print(MISSING_AS); return 3
     loaded = config_source.load_config(Path.cwd(), args.phase, args.lead, github=args.github, interval_s=args.interval, dry_run=args.dry_run or args.command == "snapshot", no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{CONSOLE_NAME}: {loaded.error.kind}: {loaded.error.fix}"); return 3
+    for check in (atm_bd.phase_file(loaded.value.repo_root, args.phase), atm_bd.repo_config(loaded.value.repo_root)):
+        if isinstance(check, Err): print(f"{CONSOLE_NAME}: {check.error.kind}: {check.error.fix}"); return 3
+    for command in ("bd", "atm", "git"):
+        if shutil.which(command) is None:
+            print(f"{CONSOLE_NAME}: not_found: install {command} and retry")
+            return 3
     saved = load_state(loaded.value.repo_root, root_id)
     state = saved.value if isinstance(saved, Ok) else EMPTY
     if args.once or args.headless or args.command == "snapshot":
