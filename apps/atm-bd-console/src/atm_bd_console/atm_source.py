@@ -9,6 +9,10 @@ from pathlib import Path
 from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeout, Unreachable
 from .types import DispatchSpec, Member, Task
 
+# Team resolution: `members` and `task list` read a named roster, so they pass
+# `--team` explicitly. `send` takes no team here and resolves it from the invoking
+# shell's ATM_TEAM when `--team` is absent (docs/requirements.md §4.1). `task assign`
+# also takes no team; §4.1 has no row for it, so that resolution is unconfirmed.
 TIMEOUT_S = 20
 TASK_KEYS = frozenset({"id", "agent", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
