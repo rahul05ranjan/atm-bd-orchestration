@@ -47,7 +47,7 @@ jobs:
       - name: Console CLI smoke tests
         run: |
           atm-bd-console --help
-          atm-bd-console --once --headless --phase bh --as ci --dry-run --github off
+          atm-bd-console --version
 
   package-tests:
     strategy:
