@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 
-from .atm_bd import PHASE_DIR
 from .codec import from_json, to_json
+from .paths import state_directory
 from .result import Err, IoFailed, LockHeld, NotFound, Ok, Result
 from .types import ActionLine, MergeFile, PrsFile, Snapshot, State
 
@@ -72,10 +72,6 @@ class StateStore:
             return Ok(None)
         except (OSError, ValueError) as error:
             return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
-
-
-def state_directory(repo_root: str | Path, root_id: str) -> Path:
-    return Path(repo_root) / PHASE_DIR / "atm-bd-console" / root_id
 
 
 def acquire_lock(repo_root: str | Path, root_id: str) -> Result[StateStore]:

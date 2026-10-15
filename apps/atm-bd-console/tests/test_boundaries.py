@@ -8,6 +8,8 @@ PACKAGE = Path(__file__).resolve().parents[1] / "src" / "atm_bd_console"
 SOURCES = frozenset({"atm_source.py", "beads_source.py", "command.py", "git_source.py", "github_source.py", "status.py"})
 # Pure modules that must never import a *_source module.
 FORBIDDEN_IMPORTERS = frozenset({"model.py", "dispatch.py", "render.py", "prs.py"})
+# Only these modules may name the console's on-disk layout; every other module asks paths.py for a path.
+PATH_OWNERS = frozenset({"paths.py", "atm_bd.py"})
 MAX_LINES = 1000
 
 
@@ -36,6 +38,13 @@ def _runs_bd_list_all(tree: ast.AST) -> bool:
     return False
 
 
+def _names_console_layout(tree: ast.AST, modules: list[str]) -> bool:
+    """The console directory literal, or an import of the .atm-bd name, outside the path owners."""
+    if any(module.split(".")[-1] == "PHASE_DIR" for module in modules):
+        return True
+    return any(isinstance(node, ast.Constant) and node.value == "atm-bd-console" for node in ast.walk(tree))
+
+
 def violations(package: Path) -> list[str]:
     found = []
     for path in sorted(package.rglob("*.py")):
@@ -47,6 +56,8 @@ def violations(package: Path) -> list[str]:
             found.append(f"{relative}: subprocess")
         if relative in FORBIDDEN_IMPORTERS and any(module.split(".")[-1].endswith("_source") for module in modules):
             found.append(f"{relative}: source import")
+        if relative not in PATH_OWNERS and _names_console_layout(tree, modules):
+            found.append(f"{relative}: console layout")
         if len(text.splitlines()) > MAX_LINES:
             found.append(f"{relative}: exceeds {MAX_LINES} lines")
         if _runs_bd_list_all(tree):
@@ -94,6 +105,16 @@ def test_planted_bd_list_all_is_flagged(tmp_path: Path) -> None:
         "atm_source.py": 'ARGV = ["atm", "task", "list", "--all", "--json"]\n',
     })
     assert sorted(found) == ["beads_source.py: bd list --all", "status.py: bd list --all"]
+
+
+def test_planted_console_layout_outside_the_path_owners_is_flagged(tmp_path: Path) -> None:
+    found = _plant(tmp_path, {
+        "paths.py": 'CONSOLE_DIR = "atm-bd-console"\n',
+        "config.py": "from .atm_bd import PHASE_DIR\nSTATE = PHASE_DIR\n",
+        "log.py": 'NAME = "atm-bd-console"\n',
+        "app.py": 'print("atm-bd-console: lock held")\n',  # a message, not a path
+    })
+    assert sorted(found) == ["config.py: console layout", "log.py: console layout"]
 
 
 def test_comments_and_long_files(tmp_path: Path) -> None:

@@ -7,7 +7,7 @@ from typing import Literal
 from sc_observability import Err as ObservabilityErr
 from sc_observability import LogEvent, Logger, LoggerConfig, create_logger
 
-from .atm_bd import PHASE_DIR
+from .paths import CONSOLE_NAME, console_root
 from .result import Err, IoFailed, Ok, Result
 
 EventAction = Literal["tick_start", "tick_end", "read", "github_read", "action", "hold", "error"]
@@ -29,12 +29,13 @@ class ConsoleLogger:
 
 
 def create_console_logger(repo_root: str | Path) -> Result[ConsoleLogger]:
-    log_root = Path(repo_root) / PHASE_DIR / "atm-bd-console" / "logs"
+    # sc-observability writes its files under <log_root>/logs, so the root is the console directory.
+    log_root = console_root(repo_root)
     try:
         log_root.mkdir(parents=True, exist_ok=True)
     except OSError as error:
         return Err(IoFailed("io_failed", str(log_root), str(error), "repair the log directory permissions"))
-    created = create_logger(LoggerConfig(service="atm-bd-console", log_root=str(log_root), enable_console_sink=False))
+    created = create_logger(LoggerConfig(service=CONSOLE_NAME, log_root=str(log_root), enable_console_sink=False))
     if isinstance(created, ObservabilityErr):
         return Err(IoFailed("io_failed", str(log_root), str(created.error), "restore sc-observability"))
     return Ok(ConsoleLogger(created.value))
