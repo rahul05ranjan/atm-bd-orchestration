@@ -8,19 +8,20 @@ from pathlib import Path
 from . import __version__, app, render, runner
 from . import config as config_source
 from .codec import snapshot_stale
+from .paths import CONSOLE_NAME
 from .result import Err, Ok
 from .state import acquire_lock, load_snapshot, load_state
 from .types import State
 
-MISSING_AS = """atm-bd-console: --as <phase lead> is required: the ATM identity that leads this phase.
+MISSING_AS = f"""{CONSOLE_NAME}: --as <phase lead> is required: the ATM identity that leads this phase.
 Tasks are assigned as that identity, and escalations go to it when no escalation recipient is set.
 The phase lead varies by phase, so it is never inferred from $ATM_IDENTITY or the repository's lead.
-Example: atm-bd-console --phase <x> --as fenix"""
+Example: {CONSOLE_NAME} --phase <x> --as fenix"""
 EMPTY = State((), None, None, None, None, (), (), {})
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="atm-bd-console")
+    parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("command", choices=("show", "snapshot"), nargs="?")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--phase", required=True); parser.add_argument("--as", dest="lead")
@@ -36,12 +37,12 @@ def main(argv: list[str] | None = None) -> int:
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 0
         last = f" (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})" if isinstance(snapshot, Ok) else ""
-        print(f"atm-bd-console is not running for phase {args.phase}{last}; start it: atm-bd-console --phase {args.phase} --as <lead>")
+        print(f"{CONSOLE_NAME} is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} --phase {args.phase} --as <lead>")
         return 2
     if not args.lead:
         print(MISSING_AS); return 3
     loaded = config_source.load_config(Path.cwd(), args.phase, args.lead, github=args.github, interval_s=args.interval, dry_run=args.dry_run or args.command == "snapshot", no_fetch=args.no_fetch)
-    if isinstance(loaded, Err): print(f"atm-bd-console: {loaded.error.kind}: {loaded.error.fix}"); return 3
+    if isinstance(loaded, Err): print(f"{CONSOLE_NAME}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     saved = load_state(loaded.value.repo_root, root_id)
     state = saved.value if isinstance(saved, Ok) else EMPTY
     if args.once or args.headless or args.command == "snapshot":
