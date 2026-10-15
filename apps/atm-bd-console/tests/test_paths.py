@@ -13,6 +13,7 @@ def test_every_console_path_resolves_under_one_root(tmp_path) -> None:
 
 
 def test_config_state_dir_is_the_state_directory(tmp_path) -> None:
+    (tmp_path / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
     loaded = load_config(tmp_path, "atm-bh", "fenix")
     assert isinstance(loaded, Ok)
     assert loaded.value.state_dir == str(state_directory(tmp_path, "atm-phase-atm-bh"))

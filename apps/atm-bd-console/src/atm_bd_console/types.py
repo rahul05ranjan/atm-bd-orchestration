@@ -162,6 +162,7 @@ class RepoConfig:
 class Config:
     phase: str
     lead: str
+    team: str
     github: Literal["graphql", "rest", "off"]
     interval_s: int
     dry_run: bool

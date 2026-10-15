@@ -11,6 +11,21 @@ from .types import Config
 _GITHUB = frozenset(("graphql", "rest", "off"))
 
 
+def _team(root: Path) -> Result[str]:
+    path = root / ".atm.toml"
+    try:
+        values = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as error:
+        return Err(IoFailed("io_failed", str(path), str(error), "restore the repository .atm.toml"))
+    except tomllib.TOMLDecodeError as error:
+        return Err(ConfigInvalid("config_invalid", str(path), str(error), "correct the repository .atm.toml syntax"))
+    atm = values.get("atm") if isinstance(values, dict) else None
+    team = atm.get("default_team") if isinstance(atm, dict) else None
+    if not isinstance(team, str) or not team:
+        return Err(ConfigInvalid("config_invalid", "atm.default_team", repr(team), "set atm.default_team in .atm.toml to a nonempty team name"))
+    return Ok(team)
+
+
 def load_config(
     repo_root: str | Path,
     phase: str,
@@ -27,6 +42,9 @@ def load_config(
     usable with its documented graphql/60 defaults.
     """
     root = Path(repo_root)
+    team = _team(root)
+    if isinstance(team, Err):
+        return team
     config_path = console_config_path(root)
     values: object = {}
     if config_path.exists():
@@ -53,4 +71,4 @@ def load_config(
         return Err(ConfigInvalid("config_invalid", "interval", repr(chosen_interval), "use an integer of at least 10 seconds"))
 
     state_dir = state_directory(root, f"atm-phase-{phase}")
-    return Ok(Config(phase, lead, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))
+    return Ok(Config(phase, lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))

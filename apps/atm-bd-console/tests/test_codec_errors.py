@@ -20,7 +20,7 @@ def _parse_failed(result: Any) -> ParseFailed:
 
 
 def _config() -> Config:
-    return Config("bh", "fenix", "rest", 60, False, False, "/repo", "/state")
+    return Config("bh", "fenix", "atm-dev", "rest", 60, False, False, "/repo", "/state")
 
 
 def test_unknown_field_is_rejected_with_its_path() -> None:

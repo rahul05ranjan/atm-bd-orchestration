@@ -33,7 +33,7 @@ TEST_REVIEWER = "test-reviewer"
 
 
 def test_config_round_trip_and_literal_rejection() -> None:
-    value = Config("bh", TEST_LEAD, "rest", 60, False, False, "/repo", "/state")
+    value = Config("bh", TEST_LEAD, "atm-dev", "rest", 60, False, False, "/repo", "/state")
     decoded = from_json(Config, to_json(value))
     assert decoded == Ok(value)
     invalid = from_json(Config, to_json(value).replace('"rest"', '"wrong"'))

@@ -57,11 +57,12 @@ def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, 
     result = _run(["atm", "members", "--team", team, "--json"], timeout_s=timeout_s)
     if isinstance(result, Err):
         return result
-    fix = f"rerun `atm members --team {team} --json` and check it prints a JSON list of member objects"
+    fix = f"rerun `atm members --team {team} --json` and check it prints a JSON object with a members list"
     try:
-        items = json.loads(result.value)
+        body = json.loads(result.value)
+        items = body.get("members") if isinstance(body, dict) else None
         if not isinstance(items, list):
-            return Err(ParseFailed("parse_failed", "atm members", "atm members must be a list", fix))
+            return Err(ParseFailed("parse_failed", "atm members", "atm members must contain a members list", fix))
         times = tuple(_time(item["state_changed_at"]) for item in items)
         if None in times:
             return Err(ParseFailed("parse_failed", "atm members", "atm member timestamps must be ISO-8601 with a UTC offset", fix))

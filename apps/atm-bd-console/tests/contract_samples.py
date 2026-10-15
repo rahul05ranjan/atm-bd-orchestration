@@ -100,7 +100,7 @@ REPO_CONFIG = RepoConfig(
     "atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", ".claude/project/quality-policy.md",
     ("req-qa", "arch-qa"), "docs/plans",
 )
-CONFIG = Config("bh", "fenix", "rest", 60, True, True, "/repo", ".atm-bd/atm-bd-console")
+CONFIG = Config("bh", "fenix", "atm-dev", "rest", 60, True, True, "/repo", ".atm-bd/atm-bd-console")
 DISPATCH_CONTEXT = DispatchContext(
     STEP, SPRINT, "bh", "atm-bd-console", "fenix", "0123456789abcdef", "integrate/phase-bh",
     "/worktrees/sprint/bh-6-tick-rules", PULL_REQUEST, (PULL_REQUEST,), REPO_CONFIG,

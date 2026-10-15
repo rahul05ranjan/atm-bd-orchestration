@@ -65,9 +65,9 @@ def test_tasks_rejects_a_complete_state_as_unknown(fake_bin, monkeypatch) -> Non
 @pytest.mark.parametrize(
     ("command", "body", "source"),
     [
-        ("members", '[{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00"}]', "atm members"),
-        ("members", '[{"name": "aria", "state": "active", "state_changed_at": null}]', "atm members"),
-        ("members", '{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"}', "atm members"),
+        ("members", '{"members": [{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00"}]}', "atm members"),
+        ("members", '{"members": [{"name": "aria", "state": "active", "state_changed_at": null}]}', "atm members"),
+        ("members", '[{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"}]', "atm members"),
         ("tasks", '[{"task_id": "t", "assignee": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]', "atm task list"),
         ("tasks", '[{"task_id": "t", "assignee": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": null, "description": ""}]', "atm task list"),
     ],
