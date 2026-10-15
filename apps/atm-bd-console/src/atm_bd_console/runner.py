@@ -26,9 +26,9 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore,
             if isinstance(logged, Err): errors.append(logged.error)
             continue
         if action.kind == "assign" and action.spec is not None and bead:
-            result = atm_source.assign(action.to, bead, action.spec, config.lead)
+            result = atm_source.assign(action.to, bead, action.spec, config.lead, config.team)
         else:
-            result = atm_source.send(action.to, action.text, config.lead)
+            result = atm_source.send(action.to, action.text, config.lead, config.team)
         logged = store.append_action(ActionLine(now, action.kind, action.to, bead, action.text))
         if isinstance(logged, Err): errors.append(logged.error)
         if isinstance(result, Err):

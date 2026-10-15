@@ -112,18 +112,18 @@ def test_send_and_assign_use_exact_argv_stdin_and_temporary_vars_file(fake_bin, 
         'if [ "$1" = "task" ]; then for last; do :; done; cp "$last" "$FAKE_VARS_LOG"; fi\n',
     )
 
-    sent = atm_source.send("fenix", "hello from stdin", "trinity")
+    sent = atm_source.send("fenix", "hello from stdin", "trinity", "atm-dev")
     assigned = atm_source.assign(
-        "aria", "atm-bh-3.group-dev", DispatchSpec("dev.md.j2", {"sprint": "bh-3", "layer": 2}), "trinity"
+        "aria", "atm-bh-3.group-dev", DispatchSpec("dev.md.j2", {"sprint": "bh-3", "layer": 2}), "trinity", "atm-dev"
     )
 
     assert isinstance(sent, Ok) and isinstance(assigned, Ok)
     assert stdin_log.read_text() == "hello from stdin"
     assert json.loads(vars_log.read_text()) == {"sprint": "bh-3", "layer": 2}
     assert fake_bin.argv() == [
-        ("atm", "send", "fenix", "--as", "trinity", "--stdin"),
+        ("atm", "send", "fenix", "--as", "trinity", "--team", "atm-dev", "--stdin"),
         (
-            "atm", "task", "assign", "aria", "--as", "trinity", "--task-id", "atm-bh-3.group-dev",
+            "atm", "task", "assign", "aria", "--as", "trinity", "--team", "atm-dev", "--task-id", "atm-bh-3.group-dev",
             "--template", "dev.md.j2", "--vars", fake_bin.argv()[1][-1],
         ),
     ]
@@ -168,7 +168,7 @@ def test_decode_error_is_a_typed_error(monkeypatch) -> None:
 def test_assign_with_non_serializable_vars_returns_error_and_removes_tempfile(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(atm_source.tempfile, "tempdir", str(tmp_path))
 
-    result = atm_source.assign("aria", "atm-bh-3.group-dev", DispatchSpec("dev.md.j2", {"bad": object()}), "trinity")
+    result = atm_source.assign("aria", "atm-bh-3.group-dev", DispatchSpec("dev.md.j2", {"bad": object()}), "trinity", "atm-dev")
 
     assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
     assert result.error.fix == "use JSON-serializable template variables"
@@ -182,8 +182,8 @@ def test_public_operations_accept_an_injected_timeout(fake_bin) -> None:
     results = (
         atm_source.members("atm-dev", timeout_s=1),
         atm_source.tasks("atm-dev", timeout_s=1),
-        atm_source.send("fenix", "hello", "trinity", timeout_s=1),
-        atm_source.assign("aria", "atm-bh-3.group-dev", spec, "trinity", timeout_s=1),
+        atm_source.send("fenix", "hello", "trinity", "atm-dev", timeout_s=1),
+        atm_source.assign("aria", "atm-bh-3.group-dev", spec, "trinity", "atm-dev", timeout_s=1),
     )
 
     assert all(isinstance(result, Err) and isinstance(result.error, Timeout) for result in results)

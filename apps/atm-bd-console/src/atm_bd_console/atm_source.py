@@ -9,10 +9,8 @@ from pathlib import Path
 from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeout, Unreachable
 from .types import DispatchSpec, Member, Task
 
-# Team resolution: `members` and `task list` read a named roster, so they pass
-# `--team` explicitly. `send` takes no team here and resolves it from the invoking
-# shell's ATM_TEAM when `--team` is absent (docs/requirements.md §4.1). `task assign`
-# also takes no team; §4.1 has no row for it, so that resolution is unconfirmed.
+# Team resolution: every command passes `--team` from Config.team, so no command reads
+# the team from the ambient shell. `atm send` and `atm task assign` both accept `--team`.
 TIMEOUT_S = 20
 TASK_KEYS = frozenset({"task_id", "assignee", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
@@ -93,18 +91,18 @@ def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]
         return Err(ParseFailed("parse_failed", "atm task list", str(error), fix))
 
 
-def send(to: str, text: str, as_: str, *, timeout_s: int | None = None) -> Result[None]:
-    result = _run(["atm", "send", to, "--as", as_, "--stdin"], text, timeout_s)
+def send(to: str, text: str, as_: str, team: str, *, timeout_s: int | None = None) -> Result[None]:
+    result = _run(["atm", "send", to, "--as", as_, "--team", team, "--stdin"], text, timeout_s)
     return result if isinstance(result, Err) else Ok(None)
 
 
-def assign(agent: str, task_id: str, spec: DispatchSpec, as_: str, *, timeout_s: int | None = None) -> Result[None]:
+def assign(agent: str, task_id: str, spec: DispatchSpec, as_: str, team: str, *, timeout_s: int | None = None) -> Result[None]:
     vars_file: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
             vars_file = Path(handle.name)
             json.dump(spec.vars, handle)
-        result = _run(["atm", "task", "assign", agent, "--as", as_, "--task-id", task_id, "--template", spec.template, "--vars", str(vars_file)], timeout_s=timeout_s)
+        result = _run(["atm", "task", "assign", agent, "--as", as_, "--team", team, "--task-id", task_id, "--template", spec.template, "--vars", str(vars_file)], timeout_s=timeout_s)
         return result if isinstance(result, Err) else Ok(None)
     except (TypeError, ValueError) as error:
         return Err(ParseFailed("parse_failed", "dispatch vars", str(error), "use JSON-serializable template variables"))
