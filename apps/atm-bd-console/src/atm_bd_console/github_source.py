@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
-GRAPHQL = """query { repository(owner: \"randlee\", name: \"atm-bd-orchestration\") { pullRequests(states: OPEN, first: 100) { totalCount nodes { number url headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion status } } } } } } } } } } }"""
+GRAPHQL = """query { repository(owner: \"randlee\", name: \"atm-bd-orchestration\") { pullRequests(states: OPEN, first: 100) { totalCount nodes { number url headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
 FAILURES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}
 REQUEST_TIMEOUT_S = 20
 
@@ -43,7 +43,9 @@ def _ci(value: str | None) -> str:
 def _from_graphql(node: dict) -> PullRequest:
     rollup = (((node.get("commits") or {}).get("nodes") or [{}])[-1].get("commit") or {}).get("statusCheckRollup") or {}
     contexts = (rollup.get("contexts") or {}).get("nodes") or []
-    failed = tuple(str(row.get("name")) for row in contexts if row.get("conclusion") in FAILURES or row.get("status") in FAILURES)
+    # CheckRun reports name/conclusion, StatusContext (commit statuses) context/state.
+    failed = tuple(str(row.get("name") or row.get("context")) for row in contexts
+                   if row.get("conclusion") in FAILURES or row.get("state") in FAILURES)
     return PullRequest(node["number"], node["url"], node["headRefName"], node["baseRefName"], node["headRefOid"], _ci(rollup.get("state")), failed)
 
 

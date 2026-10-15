@@ -28,7 +28,7 @@ def fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, *, ex
 def graphql(state: str | None = "SUCCESS", total: int = 1) -> dict:
     rollup = None if state is None else {
         "state": state,
-        "contexts": {"nodes": [{"name": "bad", "conclusion": "FAILURE", "status": "COMPLETED"}]},
+        "contexts": {"nodes": [{"name": "bad", "conclusion": "FAILURE"}]},
     }
     node = {
         "number": 7, "url": "https://x/7", "headRefName": "head", "baseRefName": "base", "headRefOid": "abc",
@@ -46,6 +46,24 @@ def test_graphql_is_one_call_and_maps_rollups(tmp_path, monkeypatch, state, expe
     assert status.ok is True and len(calls.read_text().splitlines()) == 4
 
 
+
+
+def test_failed_check_runs_and_commit_statuses_are_both_named(tmp_path, monkeypatch) -> None:
+    body = graphql("FAILURE")
+    rollup = body["data"]["repository"]["pullRequests"]["nodes"][0]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
+    rollup["contexts"]["nodes"] = [
+        {"name": "pytest", "conclusion": "FAILURE"},
+        {"name": "ruff", "conclusion": "SUCCESS"},
+        {"name": "slow", "conclusion": "TIMED_OUT"},
+        {"context": "ci/jenkins", "state": "ERROR"},
+        {"context": "deploy", "state": "SUCCESS"},
+        {"context": "legacy", "state": "FAILURE"},
+    ]
+    fake_gh(tmp_path, monkeypatch, body)
+    result, _ = github_source.open_prs("graphql")
+    assert result.value[0].failed_checks == ("pytest", "slow", "ci/jenkins", "legacy")
+    assert "... on StatusContext { context state }" in github_source.GRAPHQL
+    assert "status }" not in github_source.GRAPHQL
 
 @pytest.mark.parametrize(("total", "truncated"), [(101, True), (100, False)])
 def test_graphql_total_count_over_100_sets_truncated(tmp_path, monkeypatch, total, truncated) -> None:
