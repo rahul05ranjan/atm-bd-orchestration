@@ -37,8 +37,22 @@ def no_mmdflux(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def settle(pilot) -> None:
-    await pilot.app.workers.wait_for_complete()
+    try:
+        await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
+    except TimeoutError as error:
+        raise AssertionError("Textual workers did not complete within 5 seconds") from error
     await pilot.pause()
+
+
+async def _bounded(coro):
+    try:
+        return await asyncio.wait_for(coro, timeout=5)
+    except TimeoutError as error:
+        raise AssertionError("Textual test scenario did not complete within 5 seconds") from error
+
+
+def run_scenario(coro):
+    return asyncio.run(_bounded(coro))
 
 
 def test_error_snapshot_keeps_the_app_running_and_shows_the_error() -> None:
@@ -55,7 +69,7 @@ def test_error_snapshot_keeps_the_app_running_and_shows_the_error() -> None:
             await settle(pilot)
             assert app.is_running
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
 
 
 def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
@@ -67,7 +81,7 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
             shown = str(app.query_one("#dashboard").render())
             assert "== Errors (1)" in shown and "step exploded" in shown
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
 
 
 def test_q_quits_and_restores_the_terminal() -> None:
@@ -80,7 +94,7 @@ def test_q_quits_and_restores_the_terminal() -> None:
         assert not app.is_running
         assert app.return_code == 0
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
 
 
 def test_stopped_snapshot_stops_step_calls_until_r() -> None:
@@ -101,7 +115,7 @@ def test_stopped_snapshot_stops_step_calls_until_r() -> None:
             await settle(pilot)
             assert step.calls == [False, True, False]
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
 
 
 def test_tick_that_lands_after_quit_is_ignored() -> None:
@@ -114,7 +128,7 @@ def test_tick_that_lands_after_quit_is_ignored() -> None:
             await pilot.pause()
         return app
 
-    app = asyncio.run(scenario())
+    app = run_scenario(scenario())
     assert not app.is_running
     app._show(RUNNING, "", None)
 
@@ -169,4 +183,4 @@ def test_opening_prs_then_r_forces_github_exactly_twice() -> None:
             assert step.calls.count(True) == 2
             assert step.calls[0] is False
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
