@@ -218,3 +218,26 @@ def test_interactive_launch_passes_the_cli_loaded_state_to_the_app(monkeypatch) 
     assert cli.main(["--phase", "bh", "--as", "fenix"]) == 0
     assert seen == [(CONFIG, None, INITIAL_STATE, TIMEOUT)]
     assert kwargs == [{"runner_step": cli.runner.step}]
+
+
+def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> None:
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / "atm-phase-bh"))
+    seen: list[object] = []
+
+    class FakeApp:
+        def __init__(self, _config, step, state, _startup_error):
+            self.step = step
+            self.state = state
+
+        def run(self):
+            self.step(config, self.state, False)
+            return 0
+
+    def runner_step(current, current_state, force, store):
+        seen.extend((current, current_state, force, store))
+        return SNAPSHOT, current_state
+
+    monkeypatch.setattr(app, "ConsoleApp", FakeApp)
+    assert app.run(config, None, INITIAL_STATE, runner_step=runner_step) == 0
+    assert seen[:3] == [config, INITIAL_STATE, False]
+    assert seen[3] is not None
