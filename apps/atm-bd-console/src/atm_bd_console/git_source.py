@@ -56,15 +56,35 @@ def worktrees(repo: str | Path) -> Result[tuple[Worktree, ...]]:
     return Ok(tuple(rows))
 
 
+def _conflict_output(stdout: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split merge-tree -z --name-only output: tree oid NUL, files NUL... NUL NUL, then one record per message:
+    <path count> NUL <path>... NUL <conflict type> NUL <message> NUL."""
+    head, _, informational = stdout.partition("\0\0")
+    files = tuple(head.split("\0")[1:])
+    tokens = informational.split("\0")
+    messages: list[str] = []
+    index = 0
+    while index < len(tokens) and tokens[index]:
+        index += 1 + int(tokens[index]) + 1  # path count, the paths, the conflict type
+        messages.append(tokens[index].rstrip("\n"))
+        index += 1
+    return files, tuple(messages)
+
+
 def merge(repo: str | Path, branch: str, target: str) -> Result[Merge]:
+    for ref in (f"origin/{target}", f"origin/{branch}"):
+        verify = ("git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        found = _run(repo, *verify[1:])
+        if found.returncode == 1:
+            return Err(NotFound("not_found", ref, "fetch the named branch and retry"))
+        if found.returncode:
+            return _failed(verify, found)
     command = ("git", "merge-tree", "--write-tree", "--name-only", "-z", f"origin/{target}", f"origin/{branch}")
     result = _run(repo, *command[1:])
     if result.returncode not in (0, 1):
         return _failed(command, result)
-    tokens = tuple(token for token in result.stdout.split("\0") if token and len(token) != 40)
     checked_at = datetime.now(UTC)
     if result.returncode == 0:
         return Ok(Merge(branch, target, "clean", (), (), checked_at))
-    if not tokens and "unknown revision" in result.stderr:
-        return Err(NotFound("branch", "fetch the named branch and retry"))
-    return Ok(Merge(branch, target, "conflict", tokens, tuple(line for line in result.stderr.splitlines() if line), checked_at))
+    files, messages = _conflict_output(result.stdout)
+    return Ok(Merge(branch, target, "conflict", files, messages, checked_at))
