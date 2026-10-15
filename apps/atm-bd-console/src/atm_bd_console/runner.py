@@ -96,7 +96,9 @@ def step(config: Config, state: State, force_github: bool, store=None):
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
                 if isinstance(written, Err): errors.append(written.error)
             persisted = replace(snapshot, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
-            store.write_snapshot(persisted)
+            snapshot_written = store.write_snapshot(persisted)
+            if isinstance(snapshot_written, Err):
+                persisted = replace(persisted, errors=(*persisted.errors, snapshot_written.error))
             return persisted
         if store is not None:
             snapshot = persist(active_store)
