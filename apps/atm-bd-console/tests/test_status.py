@@ -41,6 +41,23 @@ def test_missing_binary_uses_dependency_depth_fallback(monkeypatch) -> None:
     assert rendered == (FIXTURES / "render" / "status-fallback.txt").read_text().rstrip("\n")
 
 
+def test_fallback_is_one_row_per_sprint_in_dependency_depth_order(monkeypatch) -> None:
+    sprints = (
+        SprintView("atm-bh-3", "later", "not_ready", ("atm-bh-2",), ()),
+        SprintView("atm-bh-2", "source", "in_progress", ("atm-bh-1",),
+                   (StepView("atm-bh-2.group-dev", "dev", "in_progress", "fenix"),)),
+        SprintView("atm-bh-1", "contract", "closed", (), ()),
+        SprintView("atm-bh-4", "other", "ready", (),
+                   (StepView("atm-bh-4.group-dev", "dev", "open", None),)),
+    )
+    value = replace(snapshot(), sprints=sprints)
+    monkeypatch.setenv("PATH", "")
+    rendered, error = status_text(value)
+    assert isinstance(error, NotFound)
+    # Depth 0 first (bh-1 before bh-4 by declared order), then depth 1, then depth 2.
+    assert rendered == "✅ bh-1\n📥 bh-4  dev: unassigned\n🌀 bh-2  dev: fenix\n⏳ bh-3  ← bh-2"
+
+
 def test_nonzero_and_timeout_return_error_and_fallback(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "bad"))
     rendered, error = status_text(snapshot())

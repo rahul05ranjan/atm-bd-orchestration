@@ -41,6 +41,15 @@ def test_lower_red_and_green_top_are_display_only() -> None:
     assert any("link https://example/pr/11" in str(span.style) for span in rendered.spans)
 
 
+def test_merge_error_uses_the_failure_glyph_without_a_file_list() -> None:
+    # Same ⛔ as the status bar's error segment: the merge check failed, so it is not clean and it names no conflicted files.
+    lower = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", "success", ())
+    failed = PrRow(lower, 1, "atm-bh-1.group-dev", False,
+                   Merge("branch-1", "base", "error", (), ("merge-tree failed",), NOW))
+    line = render_prs(replace(snapshot(), prs=(failed,)), 120).plain
+    assert "merge ⛔  CI ✅" in line
+
+
 def test_rest_mode_and_width() -> None:
     value = replace(snapshot(), gh=GhStatus("rest", True, None, NOW, False))
     assert all("CI —" in line for line in render_prs(value, 120).plain.splitlines())
