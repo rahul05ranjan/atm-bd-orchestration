@@ -59,7 +59,7 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
     run_scenario(scenario())
 
 
-def test_q_quits_and_restores_the_terminal() -> None:
+def test_q_quits_the_app() -> None:
     async def scenario() -> None:
         app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
         async with app.run_test() as pilot:
@@ -155,7 +155,6 @@ def test_opening_prs_then_r_forces_github_exactly_twice() -> None:
             await settle(pilot)
             app.query_one("TabbedContent").active = "dispatch"
             await settle(pilot)
-            assert step.calls.count(True) == 2
-            assert step.calls[0] is False
+            assert step.calls == [False, True, True]
 
     run_scenario(scenario())
