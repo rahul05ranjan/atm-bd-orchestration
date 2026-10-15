@@ -21,7 +21,7 @@ class Bead: id: str; title: str; status: Literal["open", "in_progress", "blocked
 @dataclass(frozen=True)
 class Step: bead_id: str; sprint: str | None; kind: StepKind; quick_fix: bool; anchor: bool; status: Literal["open", "in_progress", "blocked", "closed"]; ready: bool; assignee: str | None; branch: str | None; target: str | None; worktree: str | None; layer: int | None; difficulty: Literal["hard", "normal", "fast"] | None; tag: str; top_epic: str | None; claimed_at: datetime | None; closed_at: datetime | None; title: str; checked_bead: str | None; sprint_bead: str | None; qa_round: int | None; carry_forward: str | None
 @dataclass(frozen=True)
-class Sprint: id: str; title: str; layer: int; branch: str; target: str; depends_on: tuple[str, ...]; closed: bool; findings: int
+class Sprint: id: str; title: str; layer: int; branch: str; target: str; stack: str; depends_on: tuple[str, ...]; closed: bool; findings: int
 @dataclass(frozen=True)
 class Phase: root_id: str; label: str; title: str; closed: bool; sprints: tuple[Sprint, ...]; steps: tuple[Step, ...]; step_errors: tuple[tuple[str, Error], ...]
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ class Config: phase: str; lead: str; github: Literal["graphql", "rest", "off"]; 
 @dataclass(frozen=True)
 class DispatchContext: step: Step; sprint: Sprint; phase_id: str; phase_title: str; stack: str; lead: str; commit: str; base: str; worktree_path: str; pr: PullRequest | None; layer_prs: tuple[PullRequest, ...]; repo: RepoConfig
 @dataclass(frozen=True)
-class Inputs: now: datetime; lead: str; phase: Result[Phase]; members: Result[tuple[Member, ...]]; tasks: Result[tuple[Task, ...]]; worktrees: Result[tuple[Worktree, ...]]; remotes: Result[tuple[RemoteRef, ...]] | None; merges: tuple[Result[Merge], ...] | None; prs: Result[tuple[PullRequest, ...]] | None; gh: GhStatus
+class Inputs: now: datetime; lead: str; repo: RepoConfig; interval_s: int; phase: Result[Phase]; members: Result[tuple[Member, ...]]; tasks: Result[tuple[Task, ...]]; worktrees: Result[tuple[Worktree, ...]]; remotes: Result[tuple[RemoteRef, ...]] | None; merges: tuple[Result[Merge], ...] | None; prs: Result[tuple[PullRequest, ...]] | None; gh: GhStatus
 @dataclass(frozen=True)
 class Row: task_id: str; state: Literal["running", "queued"]; kind: Literal["dev", "fix", "sprint_qa", "fix_qa", "other"]; difficulty: Literal["hard", "normal", "fast"] | None; tag: str; marker: Literal["red", "yellow"] | None; age_s: int; description: str
 @dataclass(frozen=True)
