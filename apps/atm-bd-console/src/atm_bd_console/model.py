@@ -36,6 +36,11 @@ def _cycle_due(state: State, now: datetime) -> bool:
     return state.last_cycle is None or now - state.last_cycle >= CYCLE
 
 
+def idle_stop_due(state: State, now: datetime) -> bool:
+    """Whether persisted inactivity permits a read-free stopped tick."""
+    return state.idle_since is not None and now - state.idle_since >= IDLE_STOP
+
+
 def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime, tasks: tuple[Task, ...] = ()) -> Due:
     cycle_due = _cycle_due(state, now)
     ready = tuple(step for step in candidates(phase, tasks) if step.ready)
@@ -86,7 +91,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     elif phase is not None:
         active = any(step.ready or step.status == "in_progress" for step in phase.steps)
         idle_since = None if active else (idle_since or now)
-        if idle_since is not None and now - idle_since >= IDLE_STOP:
+        if idle_stop_due(replace(state, idle_since=idle_since), now):
             stopped = "idle"
 
     held = ()

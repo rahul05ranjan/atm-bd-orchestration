@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,8 @@ from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot
 from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem
+
+RUNNING_STATE = replace(STATE, idle_since=None)
 
 
 class Store:
@@ -106,6 +109,107 @@ def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_source, "members", forbidden)
     snapshot, _ = runner.step(CONFIG, STATE, False, Store())
     assert snapshot.root_closed and snapshot.stopped == "closed"
+
+
+def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> None:
+    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="open")
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, steps=())))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("idle-stop must not poll this boundary")
+
+    for source, name in (
+        (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
+        (runner.atm_source, "members"), (runner.atm_source, "tasks"),
+        (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
+        (runner.git_source, "remote_refs"), (runner.git_source, "merge"),
+        (runner.github_source, "open_prs"),
+    ):
+        monkeypatch.setattr(source, name, forbidden)
+
+    snapshot, _ = runner.step(CONFIG, replace(STATE, idle_since=ACTION.at - timedelta(minutes=60)), False, Store())
+
+    assert snapshot.stopped == "idle"
+
+
+def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -> None:
+    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="open")
+    active = replace(PHASE, closed=False)
+    calls: list[str] = []
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
+    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(active))
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(False, (), True))
+    monkeypatch.setattr(
+        runner.github_source,
+        "open_prs",
+        lambda mode: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
+    )
+
+    class Store:
+        directory = tmp_path
+
+        def write_merges(self, _value): return Ok(None)
+        def write_prs(self, _value): return Ok(None)
+        def write_state(self, _value): return Ok(None)
+        def write_snapshot(self, _value): return Ok(None)
+
+    snapshot, next_state = runner.step(
+        replace(CONFIG, dry_run=False),
+        replace(STATE, idle_since=ACTION.at - timedelta(minutes=60)),
+        True,
+        Store(),
+    )
+
+    assert calls == ["rest"]
+    assert snapshot.stopped is None and next_state.idle_since is None
+
+
+def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -> None:
+    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="open")
+    calls: list[str] = []
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
+    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, steps=())))
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(False, (), True))
+    monkeypatch.setattr(
+        runner.github_source,
+        "open_prs",
+        lambda mode: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
+    )
+
+    class Store:
+        directory = tmp_path
+
+        def write_merges(self, _value): return Ok(None)
+        def write_prs(self, _value): return Ok(None)
+        def write_state(self, _value): return Ok(None)
+        def write_snapshot(self, _value): return Ok(None)
+
+    snapshot, _ = runner.step(
+        replace(CONFIG, dry_run=False),
+        replace(STATE, idle_since=ACTION.at - timedelta(minutes=60)),
+        True,
+        Store(),
+    )
+
+    assert calls == ["rest"]
+    assert snapshot.stopped == "idle"
 
 
 def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
@@ -239,13 +343,13 @@ def test_dry_run_reports_actions_without_advancing_durable_state(github_runtime,
     store, _, _, _ = github_runtime
     writes = []
     store.write_state = lambda value: writes.append(value) or Ok(None)
-    candidate = replace(STATE, last_cycle=ACTION.at, sent=(ACTION,))
+    candidate = replace(RUNNING_STATE, last_cycle=ACTION.at, sent=(ACTION,))
     monkeypatch.setattr(runner.model, "tick", lambda _inputs, _state, _now, _spec: (SNAPSHOT, (ACTION,), candidate))
 
-    snapshot, next_state = runner.step(CONFIG, STATE, False, store)
+    snapshot, next_state = runner.step(CONFIG, RUNNING_STATE, False, store)
 
-    assert next_state == STATE and writes == [STATE]
-    assert snapshot.sent == (*STATE.sent, replace(ACTION, outcome="dry_run"))
+    assert next_state == RUNNING_STATE and writes == [RUNNING_STATE]
+    assert snapshot.sent == (*RUNNING_STATE.sent, replace(ACTION, outcome="dry_run"))
     sent = []
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: sent.append(ACTION) or Ok(None))
     _, live_state = runner.step(replace(CONFIG, dry_run=False), next_state, False, store)
@@ -279,7 +383,7 @@ def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> 
     monkeypatch.setattr(runner.model, "tick", lambda _inputs, state, _now, _spec: (SNAPSHOT, (ACTION, ACTION), state))
     outcomes = iter((Ok(None), Err(COMMAND_FAILED)))
     monkeypatch.setattr(runner.atm_source, "send", lambda *_: next(outcomes))
-    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    snapshot, _ = runner.step(CONFIG, RUNNING_STATE, False, store)
     assert COMMAND_FAILED in snapshot.errors
     assert snapshots[-1].errors == snapshot.errors
 
@@ -287,7 +391,7 @@ def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> 
 def test_stubbed_write_snapshot_failure_is_visible(github_runtime) -> None:
     store, _, _, _ = github_runtime
     store.write_snapshot = lambda _value: Err(IO_FAILED)
-    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    snapshot, _ = runner.step(CONFIG, RUNNING_STATE, False, store)
     assert IO_FAILED in snapshot.errors
 
 
@@ -299,7 +403,7 @@ def test_runner_reports_real_read_only_store_write_failure(github_runtime, tmp_p
     with acquired.value as store:
         directory.chmod(0o500)
         try:
-            snapshot, _ = runner.step(replace(CONFIG, repo_root=str(tmp_path)), STATE, False, store)
+            snapshot, _ = runner.step(replace(CONFIG, repo_root=str(tmp_path)), RUNNING_STATE, False, store)
         finally:
             directory.chmod(0o700)
     assert any(error.kind == "io_failed" for error in snapshot.errors)

@@ -84,6 +84,22 @@ def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], r
     )
 
 
+def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger):
+    phase = atm_bd.phase(file, root_bead, (), (), ())
+    empty = Ok(())
+    snapshot, _, next_state = model.tick(
+        Inputs(now, config.lead, repo, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty),
+        state,
+        now,
+        atm_bd.dispatch_spec,
+    )
+    persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+    writes = (store.write_state(next_state), store.write_snapshot(persisted))
+    snapshot = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
+    if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
+    return snapshot, next_state
+
+
 def step(config: Config, state: State, force_github: bool, store: StateStore):
     """Run one best-effort tick using the caller-owned lock-backed store."""
     now = datetime.now(UTC)
@@ -104,14 +120,9 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
     if root_bead is not None and root_bead.status == "closed":
-        phase = atm_bd.phase(file.value, root_bead, (), (), ())
-        empty = Ok(())
-        snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
-        persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
-        writes = (store.write_state(next_state), store.write_snapshot(persisted))
-        snapshot = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
-        if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
-        return snapshot, next_state
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
+    if not force_github and model.idle_stop_due(state, now):
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
     opened, ready = beads_source.open_beads(file.value.label), beads_source.ready(file.value.label)
     known = opened.value if isinstance(opened, Ok) else ()
     shown = beads_source.show(atm_bd.closed_show_ids(file.value, known))
