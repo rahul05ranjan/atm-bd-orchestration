@@ -32,8 +32,11 @@ def load_config(
     if config_path.exists():
         try:
             values = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        except (OSError, UnicodeDecodeError) as error:
             return Err(IoFailed("io_failed", str(config_path), str(error), "correct or restore console.toml"))
+        except tomllib.TOMLDecodeError as error:
+            return Err(ConfigInvalid("config_invalid", str(config_path), str(error),
+                                     "correct the TOML syntax; console.github is graphql, rest, or off and console.interval is an integer of at least 10 seconds"))
     if not isinstance(values, dict):
         return Err(ConfigInvalid("config_invalid", "console", repr(values), "use a [console] table"))
     console = values.get("console", {})
