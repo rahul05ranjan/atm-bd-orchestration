@@ -52,5 +52,5 @@ def load_config(
     if not isinstance(chosen_interval, int) or isinstance(chosen_interval, bool) or chosen_interval < 10:
         return Err(ConfigInvalid("config_invalid", "interval", repr(chosen_interval), "use an integer of at least 10 seconds"))
 
-    state_dir = state_directory(root, phase)
+    state_dir = state_directory(root, f"atm-phase-{phase}")
     return Ok(Config(phase, lead, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))
