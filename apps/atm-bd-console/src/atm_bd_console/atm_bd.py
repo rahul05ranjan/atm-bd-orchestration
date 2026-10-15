@@ -61,7 +61,7 @@ def phase(file: PhaseFile, root: Bead, open_beads: tuple[Bead, ...], ready: tupl
     for sprint_id in file.sprints:
         bead = by_id.get(sprint_id)
         if bead is None: return _missing(sprint_id)
-        meta = bead.metadata; sprints.append(Sprint(bead.id, bead.title, meta["layer"], meta["branch"], meta["pr_target"], file.depends_on.get(bead.id, ()), bead.status == "closed", sum(1 for item in by_id.values() if item.parent == bead.id and "stage:finding" in item.labels)))
+        meta = bead.metadata; sprints.append(Sprint(bead.id, bead.title, meta["layer"], meta["branch"], meta["pr_target"], meta["stack"], file.depends_on.get(bead.id, ()), bead.status == "closed", sum(1 for item in by_id.values() if item.parent == bead.id and "stage:finding" in item.labels)))
     steps, errors = [], []
     for bead in by_id.values():
         if bead.id in file.sprints or bead.id == root.id: continue
