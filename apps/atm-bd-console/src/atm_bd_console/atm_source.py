@@ -16,6 +16,7 @@ from .types import DispatchSpec, Member, Task
 TIMEOUT_S = 20
 TASK_KEYS = frozenset({"id", "agent", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
+MEMBER_STATES = frozenset({"active", "idle", "offline", "blocked"})
 
 
 def _run(argv: list[str], stdin: str | None = None, timeout_s: int | None = None) -> Result[str]:
@@ -33,15 +34,28 @@ def _run(argv: list[str], stdin: str | None = None, timeout_s: int | None = None
 
 def _time(value: object) -> datetime | None:
     # ATM stamps are ISO-8601 with an offset; a naive or null stamp is rejected, never read as local time.
-    if not isinstance(value, str): return None
-    try: parsed = datetime.fromisoformat(value)
-    except ValueError: return None
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
     return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
+
+
+def _member(item: dict, time: datetime) -> Member:
+    state = item.get("state")
+    return Member(item["name"], state if state in MEMBER_STATES else "unknown", time)
+
+
+def _task(index: int, item: dict, assigned: datetime, updated: datetime) -> Task:
+    return Task(item["id"], item["agent"], item["state"], index, assigned, updated, item["description"])
 
 
 def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, ...]]:
     result = _run(["atm", "members", "--team", team, "--json"], timeout_s=timeout_s)
-    if isinstance(result, Err): return result
+    if isinstance(result, Err):
+        return result
     fix = f"rerun `atm members --team {team} --json` and check it prints a JSON list of member objects"
     try:
         items = json.loads(result.value)
@@ -50,14 +64,15 @@ def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, 
         times = tuple(_time(item["state_changed_at"]) for item in items)
         if None in times:
             return Err(ParseFailed("parse_failed", "atm members", "atm member timestamps must be ISO-8601 with a UTC offset", fix))
-        return Ok(tuple(Member(item["name"], item.get("state") if item.get("state") in {"active", "idle", "offline", "blocked"} else "unknown", time) for item, time in zip(items, times)))
+        return Ok(tuple(_member(item, time) for item, time in zip(items, times)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "atm members", str(error), fix))
 
 
 def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]]:
     result = _run(["atm", "task", "list", "--all", "--json", "--team", team], timeout_s=timeout_s)
-    if isinstance(result, Err): return result
+    if isinstance(result, Err):
+        return result
     fix = f"rerun `atm task list --all --json --team {team}` and check it prints a JSON list of task objects"
     try:
         items = json.loads(result.value)
@@ -70,7 +85,7 @@ def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]
         times = tuple((_time(item["assigned_at"]), _time(item["updated_at"])) for item in items)
         if any(None in pair for pair in times):
             return Err(ParseFailed("parse_failed", "atm task list", "atm task timestamps must be ISO-8601 with a UTC offset", fix))
-        return Ok(tuple(Task(item["id"], item["agent"], item["state"], index, assigned, updated, item["description"]) for index, (item, (assigned, updated)) in enumerate(zip(items, times))))
+        return Ok(tuple(_task(index, item, *pair) for index, (item, pair) in enumerate(zip(items, times))))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "atm task list", str(error), fix))
 
