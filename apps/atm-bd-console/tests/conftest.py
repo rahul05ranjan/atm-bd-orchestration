@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from contract_fixtures import RUNNING
+from textual.worker import WorkerCancelled
 
 from atm_bd_console import app as console
 from atm_bd_console.types import Config, Snapshot, State
@@ -34,6 +35,8 @@ def no_mmdflux(monkeypatch: pytest.MonkeyPatch) -> None:
 async def settle(pilot) -> None:
     try:
         await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
+    except WorkerCancelled:
+        pass
     except TimeoutError as error:
         raise AssertionError("Textual workers did not complete within 5 seconds") from error
     await pilot.pause()

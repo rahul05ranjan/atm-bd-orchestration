@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import replace
 
 from conftest import FakeStep, run_scenario, settle
@@ -10,12 +12,25 @@ from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
-from atm_bd_console.types import Snapshot, State
+from atm_bd_console.types import Config, Snapshot, State
 
 
 class RaisingStep:
     def __call__(self, *_args) -> tuple[Snapshot, State]:
         raise RuntimeError("step exploded")
+
+
+class BlockingStep(FakeStep):
+    def __init__(self) -> None:
+        super().__init__(RUNNING)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+        self.calls.append(force_github)
+        self.started.set()
+        assert self.release.wait(2), "test must release the blocked step"
+        return self.snapshot, state
 
 
 def test_error_snapshot_keeps_the_app_running_and_shows_the_error() -> None:
@@ -77,6 +92,22 @@ def test_stopped_snapshot_stops_step_calls_until_r() -> None:
             app._on_interval()
             await settle(pilot)
             assert step.calls == [False, True, False]
+
+    run_scenario(scenario())
+
+
+def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
+    step = BlockingStep()
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
+        async with app.run_test() as pilot:
+            await asyncio.wait_for(asyncio.to_thread(step.started.wait), timeout=1)
+            app._on_interval()
+            app._on_interval()
+            step.release.set()
+            await settle(pilot)
+            assert len(step.calls) <= 2
 
     run_scenario(scenario())
 
