@@ -8,8 +8,21 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "bead-queues"
+
+
+def rendered_script(tmp_path: Path) -> Path:
+    path = tmp_path / "bead-queues"
+    # Installed packages have this placeholder rendered by install.py. The
+    # source-tree suite substitutes a harmless command for direct execution;
+    # installer tests verify the real value comes from install.CONSOLE_INSTALL.
+    placeholder = "{{" + " console_install }}"
+    text = SCRIPT.read_text().replace(
+        placeholder,
+        "uv tool install test-console#subdirectory=apps/atm-bd-console",
+    )
+    path.write_text(text)
+    return path
 
 
 def run_viewer(
@@ -38,7 +51,7 @@ def run_viewer(
     monkeypatch.setenv("FAKE_CONSOLE_STATUS", str(status))
     monkeypatch.setenv("FAKE_CONSOLE_VERSION", version)
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--phase", "bh"],
+        [sys.executable, str(rendered_script(tmp_path)), "--phase", "bh"],
         text=True,
         capture_output=True,
         check=False,
@@ -61,7 +74,7 @@ def test_viewer_explains_how_to_install_the_console_when_absent(tmp_path: Path, 
     monkeypatch.setenv("PATH", str(tmp_path))
 
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--phase", "bh"],
+        [sys.executable, str(rendered_script(tmp_path)), "--phase", "bh"],
         text=True,
         capture_output=True,
         check=False,

@@ -97,6 +97,7 @@ RENDER_VARIABLES = (
     "repo_slug",
     "repo_name",
     "worktree_base",
+    "console_install",
 )
 PLACEHOLDER_RE = re.compile(r"\{\{ (" + "|".join(RENDER_VARIABLES) + r") \}\}")
 
@@ -326,6 +327,7 @@ def derived_values(repo_root: Path, config: Dict[str, Any]) -> Dict[str, str]:
         "repo_slug": slug,
         "repo_name": slug.rsplit("/", 1)[-1],
         "workflow_issues_root": f"{config['bead_prefix']}-workflow-issues",
+        "console_install": CONSOLE_INSTALL,
     }
 
 

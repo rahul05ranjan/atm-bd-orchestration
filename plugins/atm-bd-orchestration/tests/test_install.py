@@ -41,6 +41,18 @@ def test_generated_blocks_are_current():
     assert gen_manifest.main(["--check"]) == 0
 
 
+def test_bead_queues_install_command_is_rendered_from_installer_constant():
+    source = (PKG / "skills/atm-bd-orchestration/scripts/bead-queues").read_text()
+    values = {name: f"test-{name}" for name in install.RENDER_VARIABLES}
+    values["console_install"] = install.CONSOLE_INSTALL
+
+    rendered = install.render_text(source, values)
+
+    assert "{{ console_install }}" not in rendered
+    assert rendered.count(install.CONSOLE_INSTALL) == 1
+    assert "CONSOLE_INSTALL = \"uv tool install " in rendered
+
+
 def test_manifest_lists_every_skill_and_agent_file():
     assert install.load_manifest_artifacts(PKG) == gen_manifest.tree_artifacts()
 
