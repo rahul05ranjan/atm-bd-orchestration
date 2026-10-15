@@ -60,6 +60,8 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     prs = inputs.prs.value if isinstance(inputs.prs, Ok) else ()
     if phase is not None:
         errors.extend(error for _, error in phase.step_errors)
+        rejected = {bead_id for bead_id, _ in phase.step_errors}
+        phase = replace(phase, steps=tuple(step for step in phase.steps if step.bead_id not in rejected))
 
     root_closed = phase.closed if phase else False
     idle_since = state.idle_since
@@ -74,7 +76,8 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
 
     held = ()
     assigned: tuple[Action, ...] = ()
-    if phase is not None and stopped is None:
+    if (phase is not None and stopped is None and isinstance(inputs.tasks, Ok)
+            and isinstance(inputs.worktrees, Ok)):
         outcome = dispatch(phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec)
         held = outcome.held
         assigned = outcome.actions
@@ -292,15 +295,16 @@ def _problems(
                 f"conflict:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
                 f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
             ))
-    fresh_gh = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
+    fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
-    if fresh_gh:
+    if fresh_github:
         heads = {pr.head for pr in prs}
         remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
         pushed = {remote.branch for remote in remotes}
         for step in phase.steps:
-            if step.branch in pushed and step.branch not in heads and step.kind in ("dev", "fix", "sanity", "qa"):
+            if (step.status != "closed" and step.branch in pushed and step.branch not in heads
+                    and step.kind in ("dev", "fix", "sanity", "qa")):
                 problems.append(Problem(
                     f"missing_pr:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
                     f"pushed branch {step.branch} has no open PR", now,
@@ -320,8 +324,12 @@ def _reconcile_problems(
     if stopped:
         return (), (), {}, state.cycle_first_send, state.last_batch
     previous = {problem.key: problem for problem in state.problems}
-    problems = tuple(replace(problem, first_seen=previous[problem.key].first_seen) if problem.key in previous else problem for problem in proposed)
-    new = tuple(problem for problem in problems if problem.key not in previous)
+    problems = tuple(
+        replace(problem, first_seen=previous[problem.key].first_seen)
+        if problem.key in previous and previous[problem.key].to == problem.to else problem
+        for problem in proposed
+    )
+    new = tuple(problem for problem in problems if problem.key not in previous or previous[problem.key].to != problem.to)
     actions = [Action(now, "send", problem.to, (problem.bead_id,) if problem.bead_id else (), problem.text, None) for problem in new]
     by_recipient: dict[str, list[Problem]] = {}
     for problem in problems:
@@ -340,5 +348,5 @@ def _reconcile_problems(
                 due_at += CYCLE
             batch_due[recipient] = due_at
             last_batch = now
-    first_send = state.cycle_first_send or (now if new else None)
+    first_send = (state.cycle_first_send or min(problem.first_seen for problem in problems)) if problems else None
     return problems, tuple(actions), batch_due, first_send, last_batch

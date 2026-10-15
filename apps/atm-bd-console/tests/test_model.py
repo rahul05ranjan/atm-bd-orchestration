@@ -11,6 +11,7 @@ from atm_bd_console.types import (
     GhStatus,
     Inputs,
     Member,
+    Merge,
     Phase,
     Problem,
     PullRequest,
@@ -20,6 +21,7 @@ from atm_bd_console.types import (
     State,
     Step,
     Task,
+    Worktree,
 )
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
@@ -165,6 +167,10 @@ def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     for gh in (GhStatus("off", None, None, None, False), GhStatus("graphql", False, NotFound("not_found", "gh", "retry"), NOW, False)):
         snapshot, _, _ = tick(replace(base, gh=gh), STATE, NOW, render)
         assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
+    closed = inputs(phase(step("dev", "atm-bh-1", branch="pushed", status="closed")),
+                    remotes=Ok((RemoteRef("pushed", "sha"),)), gh=success.gh)
+    snapshot, _, _ = tick(closed, STATE, NOW, render)
+    assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
 
 
 def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
@@ -204,3 +210,66 @@ def test_all_input_and_step_errors_reach_snapshot_without_exception() -> None:
     snapshot, actions, _ = tick(base, STATE, NOW, lambda context: Err(error))
     assert error in snapshot.errors
     assert actions == ()
+
+
+def test_task_read_error_never_causes_duplicate_assignment() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="sprint/bh-1",
+                     worktree="/worktrees/atm-bh-1")
+    base = inputs(phase(candidate), tasks=Err(NotFound("not_found", "tasks", "retry")),
+                  remotes=Ok((RemoteRef("sprint/bh-1", "sha"),)),
+                  worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
+    snapshot, actions, _ = tick(base, STATE, NOW, render)
+    assert actions == ()
+    assert any(isinstance(error, NotFound) and error.what == "tasks" for error in snapshot.errors)
+
+
+def test_rejected_step_is_not_dispatched_even_if_source_retains_it() -> None:
+    error = NotFound("not_found", "checked_bead", "repair metadata")
+    candidate = step("bad-qa", "atm-bh-1", kind="qa", ready=True, branch="sprint/bh-1",
+                     worktree="/worktrees/atm-bh-1")
+    value = phase(candidate, step_errors=((candidate.bead_id, error),))
+    supplied = inputs(value, remotes=Ok((RemoteRef("sprint/bh-1", "sha"),)),
+                      worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
+    snapshot, actions, _ = tick(supplied, STATE, NOW, render)
+    assert actions == ()
+    assert error in snapshot.errors
+    assert all(view.bead_id != candidate.bead_id for sprint_view in snapshot.sprints for view in sprint_view.steps)
+
+
+def test_hold_is_shown_and_sent_once_then_batched() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="missing")
+    supplied = inputs(phase(candidate))
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+    assert snapshot.sections[0].label == "Held"
+    assert snapshot.sections[0].rows[0].bead_id == "qa"
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    _, actions, state = tick(supplied, state, NOW + timedelta(minutes=5), render)
+    assert actions == ()
+    _, actions, _ = tick(supplied, state, NOW + timedelta(minutes=10), render)
+    assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
+
+
+def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="sprint/bh-1",
+                     worktree="/worktrees/atm-bh-1")
+    common = inputs(phase(candidate), remotes=Ok((RemoteRef("sprint/bh-1", "sha"),)),
+                    worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
+    conflict = Merge("sprint/bh-1", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
+    snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert "model.py" in snapshot.problems[0].text
+
+    error = NotFound("not_found", "checked_bead", "repair metadata")
+    snapshot, actions, _ = tick(common, STATE, NOW, lambda context: Err(error))
+    assert actions == ()
+    assert error in snapshot.errors
+
+
+def test_pure_modules_contain_no_source_calls_or_imports() -> None:
+    source_dir = Path(__file__).parents[1] / "src" / "atm_bd_console"
+    forbidden = ("subprocess", "open(", "bd ", "atm ", "gh ", "stage:", "metadata", "headRefName")
+    for name in ("model.py", "dispatch.py"):
+        source = (source_dir / name).read_text()
+        assert all(token not in source for token in forbidden)
+        assert "_source import" not in source
+        assert "import atm_bd" not in source

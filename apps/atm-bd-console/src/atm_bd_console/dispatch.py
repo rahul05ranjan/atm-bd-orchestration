@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .result import Err, Error
+from .result import Err, Error, NotFound
 from .types import (
     Action,
     DispatchContext,
@@ -61,7 +61,7 @@ def dispatch(
         target = step.target or (sprint.target if sprint else None)
         reason: str | None = None
         if not step.ready:
-            reason = "not in bd ready"
+            reason = "not ready"
         elif not step.branch or step.branch not in remote_by_branch:
             reason = f"branch not on origin: {step.branch or '<missing>'}"
         elif not step.worktree or not any(
@@ -76,7 +76,13 @@ def dispatch(
             age_s = max(0, int((now - (step.claimed_at or now)).total_seconds()))
             held.append(SectionRow(step.bead_id, age_s, reason, pr.number if pr else None))
             continue
-        if sprint is None or target is None or step.worktree is None or step.branch is None:
+        if sprint is None:
+            errors.append(NotFound("not_found", f"sprint for {step.bead_id}", "repair the phase step's sprint mapping"))
+            continue
+        if target is None:
+            errors.append(NotFound("not_found", f"target for {step.bead_id}", "set the step or sprint PR target"))
+            continue
+        if step.worktree is None or step.branch is None:
             continue
 
         layer_prs = tuple(

@@ -61,7 +61,7 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
 def test_each_hold_is_flat_and_does_not_assign() -> None:
     conflict = Merge("sprint/bh-6", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
     cases = (
-        (run(step(ready=False)), "not in bd ready"),
+        (run(step(ready=False)), "not ready"),
         (run(step(), remotes=()), "branch not on origin"),
         (run(step(), worktrees=()), "no worktree"),
         (run(step(), merges=(conflict,)), "merge conflict with sprint/bh-1: model.py"),
@@ -97,3 +97,10 @@ def test_spec_error_is_reported_without_assignment() -> None:
     outcome = run(step(), spec=lambda context: Err(error))
     assert outcome.actions == ()
     assert outcome.errors == (error,)
+
+
+def test_missing_sprint_is_an_error_not_a_silent_drop() -> None:
+    outcome = run(step(sprint="missing", sprint_bead="missing"))
+    assert outcome.actions == ()
+    assert isinstance(outcome.errors[0], NotFound)
+    assert "sprint" in outcome.errors[0].what
