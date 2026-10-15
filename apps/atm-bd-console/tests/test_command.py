@@ -33,7 +33,7 @@ def test_ok_codes_accept_a_nonzero_exit(fake_bin) -> None:
 
 
 def test_timeout_is_typed_with_the_callers_seconds(fake_bin) -> None:
-    fake_bin.make("tool", "exec sleep 30\n")
+    fake_bin.make("tool", "exec sleep 3600\n")
     assert command.run(("tool",), "fix it", timeout_s=1) == Err(Timeout("timeout", ("tool",), 1, "fix it"))
 
 

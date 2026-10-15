@@ -10,13 +10,12 @@ from atm_bd_console import github_source
 from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 
 
-def fake_gh(fake_bin, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_code: int = 0, stderr: str = "", sleep: int = 0):
+def fake_gh(fake_bin, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_code: int = 0, stderr: str = ""):
     """A fake gh on the conftest PATH; `fake_bin.argv()` holds one entry per invocation."""
-    fake_bin.make("gh", 'sleep "$FAKE_SLEEP"\nprintf \'%s\' "$FAKE_BODY"\nprintf \'%s\' "$FAKE_ERR" >&2\nexit "$FAKE_EXIT"\n')
+    fake_bin.make("gh", 'printf \'%s\' "$FAKE_BODY"\nprintf \'%s\' "$FAKE_ERR" >&2\nexit "$FAKE_EXIT"\n')
     monkeypatch.setenv("FAKE_BODY", json.dumps(body))
     monkeypatch.setenv("FAKE_EXIT", str(exit_code))
     monkeypatch.setenv("FAKE_ERR", stderr)
-    monkeypatch.setenv("FAKE_SLEEP", str(sleep))
     return fake_bin
 
 
@@ -160,10 +159,13 @@ def test_unparseable_body_is_parse_failed_and_never_raises(fake_bin, monkeypatch
 
 
 def test_gh_timeout_is_typed(fake_bin, monkeypatch) -> None:
-    fake_gh(fake_bin, monkeypatch, {}, sleep=2)
+    # gh blocks until the runner kills it: the timeout always expires, whatever the host load.
+    fake_bin.make("gh", "exec sleep 3600\n")
     monkeypatch.setattr(github_source, "REQUEST_TIMEOUT_S", 1)
     result, status = github_source.open_prs("graphql")
-    assert isinstance(result, Err) and isinstance(result.error, Timeout) and status.ok is False
+    assert isinstance(result, Err) and result.error == Timeout(
+        "timeout", github_source.GRAPHQL_ARGV, 1, "check GitHub connectivity and retry")
+    assert (status.ok, status.error) == (False, result.error)
 
 
 def test_gh_reported_timeout_carries_the_request_timeout(fake_bin, monkeypatch) -> None:
