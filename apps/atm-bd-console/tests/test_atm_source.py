@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from atm_bd_console import atm_source
-from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed, Timeout
+from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed, Timeout, Unreachable
 from atm_bd_console.types import DispatchSpec
 
 FIXTURES = Path(__file__).parent / "fixtures" / "atm"
@@ -91,3 +91,22 @@ def test_command_failures_invalid_json_and_timeouts_are_typed_without_raising(fa
     timed_out = atm_source._run(["atm", "wait"], timeout_s=1)
     assert isinstance(timed_out, Err) and isinstance(timed_out.error, Timeout)
     assert "raise" not in Path(atm_source.__file__).read_text()
+
+
+def test_missing_atm_binary_is_a_typed_error(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    result = atm_source.members("atm-dev")
+
+    assert isinstance(result, Err) and isinstance(result.error, Unreachable)
+    assert result.error.argv == ("atm", "members", "--team", "atm-dev", "--json")
+    assert result.error.fix == "install atm and check PATH"
+
+
+def test_decode_error_is_a_typed_error(monkeypatch) -> None:
+    error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(atm_source.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+
+    result = atm_source._run(["atm", "members", "--json"])
+
+    assert isinstance(result, Err) and isinstance(result.error, Unreachable)

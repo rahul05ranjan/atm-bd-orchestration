@@ -6,7 +6,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .result import CommandFailed, Err, Ok, ParseFailed, Result, Timeout
+from .result import CommandFailed, Err, Ok, ParseFailed, Result, Timeout, Unreachable
 from .types import DispatchSpec, Member, Task
 
 TIMEOUT_S = 20
@@ -17,6 +17,8 @@ def _run(argv: list[str], stdin: str | None = None, timeout_s: int = TIMEOUT_S) 
         done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False, timeout=timeout_s)
     except subprocess.TimeoutExpired:
         return Err(Timeout("timeout", tuple(argv), timeout_s, "retry the ATM command"))
+    except (OSError, UnicodeDecodeError) as error:
+        return Err(Unreachable("unreachable", tuple(argv), str(error), "install atm and check PATH"))
     if done.returncode:
         return Err(CommandFailed("command_failed", tuple(argv), done.returncode, done.stderr, "inspect ATM output"))
     return Ok(done.stdout)
