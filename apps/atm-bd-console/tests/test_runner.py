@@ -10,6 +10,7 @@ from contract_samples import (
     BEAD,
     COMMAND_FAILED,
     CONFIG,
+    EARLIER,
     IO_FAILED,
     PHASE,
     PHASE_FILE,
@@ -82,8 +83,10 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     def tick(value, state, _now, _spec):
         inputs.append(value)
-        errors = (value.prs.error,) if isinstance(value.prs, Err) else ()
-        return replace(SNAPSHOT, gh=value.gh, errors=errors), (), state
+        errors = [value.prs.error] if isinstance(value.prs, Err) else []
+        if value.gh.error is not None and value.gh.error not in errors:
+            errors.append(value.gh.error)
+        return replace(SNAPSHOT, gh=value.gh, errors=tuple(errors)), (), state
 
     monkeypatch.setattr(runner.model, "tick", tick)
 
@@ -292,6 +295,20 @@ def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> Non
     assert inputs[0].prs == Err(TIMEOUT)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
     assert [event for event in events if event[0] == "github_read"] == [("github_read", {"forced": True})]
+
+
+def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkeypatch) -> None:
+    store, _, _, inputs = github_runtime
+    writes = []
+    cached = replace(PRS_FILE, read_at=EARLIER)
+    monkeypatch.setattr(runner, "load_prs", lambda *_: Ok(cached))
+    store.write_prs = lambda value: writes.append(value) or Ok(None)
+
+    snapshot, _ = runner.step(CONFIG, STATE, True, store)
+
+    assert inputs[0].prs == Ok(cached.prs)
+    assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
+    assert writes == [replace(cached, gh=snapshot.gh)]
 
 
 def test_github_off_skips_forced_read_and_event(github_runtime) -> None:

@@ -157,10 +157,16 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     cached_prs = saved_prs.value if config.github != "off" and isinstance(saved_prs, Ok) else None
     gh = cached_prs.gh if cached_prs is not None else _gh(config.github)
     prs = cached_prs.prs if cached_prs is not None else ()
+    prs_read_at = cached_prs.read_at if cached_prs is not None else now
     prs_input = Ok(prs) if cached_prs is not None else None
     if config.github != "off" and (force_github or (due and due.github)):
-        prs_input, gh = github_source.open_prs(config.github)
-        prs = prs_input.value if isinstance(prs_input, Ok) else ()
+        refreshed_prs, gh = github_source.open_prs(config.github)
+        if isinstance(refreshed_prs, Ok):
+            prs_input = refreshed_prs
+            prs = refreshed_prs.value
+            prs_read_at = now
+        elif cached_prs is None:
+            prs_input = refreshed_prs
         if isinstance(logger, Ok): logger.value.event("github_read", forced=force_github)
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
@@ -169,7 +175,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
             errors = list(action_errors)
             durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
             reported_sent = (*state.sent, *reported)[-5:]
-            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(durable)):
+            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs)),), store.write_state(durable)):
                 if isinstance(written, Err): errors.append(written.error)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             snapshot_written = store.write_snapshot(persisted)
