@@ -31,6 +31,9 @@ import pytest
 from atm_bd_console import beads_source
 from atm_bd_console.atm_bd import (
     DISPATCH_KEYS,
+    OTHER_KIND,
+    QA_KIND,
+    _kind,
     closed_show_ids,
     dispatch_spec,
     group_ids,
@@ -637,6 +640,11 @@ def test_planted_steps_map_to_each_step_kind(d4) -> None:
             kinds["atm-bh-7.qa1-f1-r1-qa"], kinds["atm-bh-7.group-qa-f10"], kinds["atm-bh-7.plan-review"],
             kinds["zz-other-1"], kinds["zz-phase-other"]) == (
         "dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other")
+
+
+def test_qa_and_unknown_stage_classification_use_named_kinds() -> None:
+    assert _kind(bead("atm-bh-7.qa1-f1-r1-qa", "qa", "atm-bh-7")) == QA_KIND
+    assert _kind(bead("atm-bh-7.unrecognized", "unrecognized", "atm-bh-7")) == OTHER_KIND
 
 
 def test_foreign_top_epic_is_kept_and_a_broken_chain_is_none(d4) -> None:

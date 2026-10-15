@@ -27,6 +27,7 @@ FIX_LABEL = f"{STAGE_PREFIX}fix"
 ANCHOR_LABEL = "anchor"
 SANITY_KIND: StepKind = "sanity"
 QA_KIND: StepKind = "qa"
+OTHER_KIND: StepKind = "other"
 # stage:<stage> label -> StepKind; a bead without a stage label takes the stage of its group suffix.
 STAGE_KINDS: Mapping[str, StepKind] = {
     "dev": "dev", "fix": "fix", "finding": "finding", "dev-sanity": SANITY_KIND, "qa": QA_KIND,
@@ -234,7 +235,7 @@ def _kind(bead: Bead) -> StepKind:
     if stage is None:
         suffix = group_suffix(bead.id)
         stage = SUFFIX_STAGES[suffix] if suffix else None
-    return STAGE_KINDS.get(stage, "other") if stage else "other"
+    return STAGE_KINDS.get(stage, OTHER_KIND) if stage else OTHER_KIND
 
 
 def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
@@ -243,16 +244,16 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     checked = metadata.get(CHECKED_KEYS[kind]) if kind in CHECKED_KEYS else None
     if kind in CHECKED_KEYS and not checked:
         return _missing(f"{bead.id}.metadata.{CHECKED_KEYS[kind]}")
-    if kind == "qa" and metadata.get(ROUND_KEY) is None:
+    if kind == QA_KIND and metadata.get(ROUND_KEY) is None:
         return _missing(f"{bead.id}.metadata.{ROUND_KEY}")
     checked_bead = parents.get(checked) if checked else None
     sprint_bead = metadata.get(SPRINT_BEAD_KEY)
-    if kind == "qa" and not sprint_bead and checked_bead is not None:
+    if kind == QA_KIND and not sprint_bead and checked_bead is not None:
         sprint_bead = checked_bead.metadata.get(SPRINT_BEAD_KEY)
-    if kind == "qa" and not sprint_bead:
+    if kind == QA_KIND and not sprint_bead:
         return _missing(f"{bead.id}.metadata.{SPRINT_BEAD_KEY}")
     # Fix verification: a QA of a fix or finding bead carries it forward (never read from metadata).
-    verifies = kind == "qa" and checked_bead is not None and (
+    verifies = kind == QA_KIND and checked_bead is not None and (
         FIX_LABEL in checked_bead.labels or FINDING_LABEL in checked_bead.labels)
     carry = checked if verifies else None
     qa_round = metadata.get(ROUND_KEY)
