@@ -5,7 +5,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from contract_samples import SNAPSHOT
+from contract_samples import CONFIG, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
 
 from atm_bd_console import cli
 from atm_bd_console.result import Err, NotFound, Ok
@@ -51,3 +51,22 @@ def test_show_stale_and_missing_snapshot_report_not_running(monkeypatch, capsys)
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run a console tick")))
     assert cli.main(["show", "--phase", "bh"]) == 2
     assert "is not running" in capsys.readouterr().out
+
+
+def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
+    class Lock:
+        def __enter__(self): return self
+        def __exit__(self, *_): return None
+
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli, "load_state", lambda *_: Err(NotFound("not_found", "state", "run")))
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="idle"), None))
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), None))
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert '"kind": "error"' in capsys.readouterr().out
