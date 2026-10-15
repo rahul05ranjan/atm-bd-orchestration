@@ -24,10 +24,13 @@ def snapshot() -> Snapshot:
     return replace(decoded.value, mermaid="graph TD\n    a --> b", sprints=sprints)
 
 
-def test_mmdflux_output_is_returned_verbatim(fake_bin) -> None:
-    fake_bin.make("mmdflux", "cat >/dev/null\nprintf 'rendered\\n'\n")
+def test_mmdflux_output_is_returned_verbatim(fake_bin, monkeypatch, tmp_path) -> None:
+    stdin_log = tmp_path / "mmdflux-stdin"
+    monkeypatch.setenv("FAKE_STDIN_LOG", str(stdin_log))
+    fake_bin.make("mmdflux", "cat > \"$FAKE_STDIN_LOG\"\nprintf 'rendered\\n'\n")
     rendered, error = status_text(snapshot())
     assert rendered == "rendered\n" and error is None
+    assert stdin_log.read_text() == "graph TD\n    a --> b"
     assert fake_bin.argv() == [("mmdflux", "--format", "text")]
 
 
