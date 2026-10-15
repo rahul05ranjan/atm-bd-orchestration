@@ -91,6 +91,23 @@ def test_roster_statuses_and_markers() -> None:
     assert snapshot.agents[0].rows[0].age_s == 20
 
 
+def test_agent_status_uses_task_state_when_presence_disagrees() -> None:
+    members = (
+        Member("presence-idle", "idle", NOW - timedelta(minutes=5)),
+        Member("presence-active", "active", NOW - timedelta(minutes=5)),
+    )
+    tasks = (
+        Task("running", "presence-idle", "active", 1, NOW, NOW - timedelta(seconds=20), "running"),
+        Task("queued", "presence-active", "assigned", 1, NOW, NOW, "queued"),
+    )
+    value = phase(step("running", "atm-bh-1"), step("queued", "atm-bh-1"))
+    snapshot, actions, _ = tick(inputs(value, members=Ok(members), tasks=Ok(tasks)), STATE, NOW, render)
+
+    assert actions == ()
+    assert tuple(agent.status for agent in snapshot.agents) == ("busy", "stalling")
+    assert tuple(agent.rows[0].state for agent in snapshot.agents) == ("running", "queued")
+
+
 def test_due_cycle_fetch_missing_ref_and_merge_pairs() -> None:
     qa = step("qa", "atm-bh-1", kind="qa", ready=True, branch="missing", target="base")
     pushed = step("dev", "atm-bh-1", branch="present", target="base")
