@@ -14,6 +14,7 @@ from atm_bd_console.app import ConsoleApp, status_header
 from atm_bd_console.types import SprintView, StepView
 
 WIDE = "x" * 200
+TEST_ASSIGNEE = "test-dev"
 SPRINTS = (
     SPRINT_VIEW,
     SprintView("atm-bh-1", "contract", "closed", (), ()),
@@ -22,10 +23,15 @@ SPRINTS = (
         StepView("atm-bh-8.group-dev", "dev", "in_progress", "solar"),
         StepView("atm-bh-8.group-sanity", "sanity", "open", None),
         StepView("atm-bh-8.group-qa", "qa", "open", "quality-mgr"),
-        StepView("atm-bh-8.group-qa-f1", "fix", "open", "arch-ctm"),
+        StepView("atm-bh-8.group-qa-f1", "fix", "open", TEST_ASSIGNEE),
     )),
 )
-SNAPSHOT = replace(RUNNING, sprints=SPRINTS, mermaid=f"graph TD\n  {WIDE}")
+SNAPSHOT = replace(
+    RUNNING,
+    agents=(replace(RUNNING.agents[0], name=TEST_ASSIGNEE),),
+    sprints=SPRINTS,
+    mermaid=f"graph TD\n  {WIDE}",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -55,7 +61,7 @@ def test_three_tabs_render_the_running_snapshot_with_the_status_bar() -> None:
                 assert bar.display and bar.region.height == 1 and bar.region.y == 39
                 assert "tick " in str(bar.render())
             assert lines(app, "#dashboard")[0].startswith("phase-bh")
-            assert "arch-ctm" in str(app.query_one("#dashboard").render())
+            assert TEST_ASSIGNEE in str(app.query_one("#dashboard").render())
             assert "#1850" in str(app.query_one("#prs-text").render())
             assert lines(app, "#status-header") == ["sprints 1/4 · ✅ 1 · 🌀 1 · ⏳ 2"]
             assert WIDE in str(app.query_one("#status-text").render())
@@ -81,7 +87,7 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
                 ["dev", "atm-bh-8.group-dev", "solar"],
                 ["sanity", "atm-bh-8.group-sanity", "unassigned"],
                 ["qa", "atm-bh-8.group-qa", "quality-mgr"],
-                ["fix", "atm-bh-8.group-qa-f1", "arch-ctm"],
+                ["fix", "atm-bh-8.group-qa-f1", TEST_ASSIGNEE],
             ]
             sprints.highlighted = 0
             await settle(pilot)
