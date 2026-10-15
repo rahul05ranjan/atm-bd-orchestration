@@ -109,6 +109,27 @@ def test_missing_field_and_datetime_errors_are_results() -> None:
     assert isinstance(invalid, Err)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        '"2026-1-4T1:02:03Z"',
+        '"2026-10-14T11:30:00.123456Z"',
+    ],
+)
+def test_datetime_decoder_rejects_noncanonical_format(text: str) -> None:
+    invalid = from_json(datetime, text)
+    assert isinstance(invalid, Err)
+    assert isinstance(invalid.error, ParseFailed)
+    assert invalid.error.source == "$"
+
+
+def test_datetime_encoder_documents_precision_and_rejects_naive_values() -> None:
+    with pytest.raises(ValueError, match="naive datetime"):
+        to_json(datetime(2026, 10, 14, 11, 30, 0))
+    value = datetime(2026, 10, 14, 11, 30, 0, 1, tzinfo=UTC)
+    assert to_json(value) == '"2026-10-14T11:30:00Z"'
+
+
 def test_datetime_encodes_utc_and_snapshot_staleness_is_strict() -> None:
     now = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
     assert to_json(now) == '"2026-10-14T12:00:00Z"'

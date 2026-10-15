@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,7 +25,10 @@ _ERRORS: dict[str, type[Any]] = {
 
 
 def to_json(obj: Any) -> str:
-    """Encode contract values with UTC timestamps and explicit Result envelopes."""
+    """Encode contract values with UTC second-precision timestamps and Result envelopes.
+
+    Datetime microseconds are discarded; naive datetimes raise ValueError.
+    """
     return json.dumps(_encode(obj), sort_keys=True, separators=(",", ":"))
 
 
@@ -75,7 +79,7 @@ def _decode(cls: Any, value: Any, path: str) -> Any:
         return value
     origin, args = get_origin(cls), get_args(cls)
     if cls is datetime:
-        if not isinstance(value, str) or not value.endswith("Z"):
+        if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
             raise _DecodeError(path, "expected UTC datetime YYYY-MM-DDTHH:MM:SSZ")
         try:
             parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
