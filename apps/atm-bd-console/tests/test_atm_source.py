@@ -120,3 +120,18 @@ def test_assign_with_non_serializable_vars_returns_error_and_removes_tempfile(tm
     assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
     assert result.error.fix == "use JSON-serializable template variables"
     assert list(tmp_path.iterdir()) == []
+
+
+def test_public_operations_accept_an_injected_timeout(fake_bin) -> None:
+    fake_bin.make("atm", "sleep 2")
+    spec = DispatchSpec("dev.md.j2", {"sprint": "bh-3"})
+
+    results = (
+        atm_source.members("atm-dev", timeout_s=1),
+        atm_source.tasks("atm-dev", timeout_s=1),
+        atm_source.send("fenix", "hello", "trinity", timeout_s=1),
+        atm_source.assign("aria", "atm-bh-3.group-dev", spec, "trinity", timeout_s=1),
+    )
+
+    assert all(isinstance(result, Err) and isinstance(result.error, Timeout) for result in results)
+    assert all(result.error.seconds == 1 for result in results if isinstance(result, Err))
