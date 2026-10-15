@@ -63,12 +63,13 @@ class ConsoleApp(App[int]):
         Binding("ctrl+q", "noop", show=False, priority=True),
     ]
 
-    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> None:
+    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None, store=None) -> None:
         super().__init__()
         self.config = config
         self.step = step
         self.state = state
         self.startup_error = startup_error
+        self.store = store
         self.snapshot: Snapshot | None = None
         self.status_text = ""
         self.status_error: Error | None = None
@@ -110,7 +111,7 @@ class ConsoleApp(App[int]):
     @work(thread=True, group="tick")
     def tick(self, force_github: bool) -> None:
         with self._step_lock:
-            snapshot, state = self.step(self.config, self.state, force_github)
+            snapshot, state = self.step(self.config, self.state, force_github, self.store)
             self.state = state
             text, error = status.status_text(snapshot)
         self.call_from_thread(self._show, snapshot, text, error)
@@ -177,5 +178,5 @@ def run(config: Config, step: StepFn) -> int:
     # A missing state file is a first run; any other read failure starts empty and stays shown in == Errors.
     startup_error = loaded.error if isinstance(loaded, Err) and not isinstance(loaded.error, NotFound) else None
     with lock.value:
-        result = ConsoleApp(config, step, state, startup_error).run()
+        result = ConsoleApp(config, step, state, startup_error, lock.value).run()
     return result or 0

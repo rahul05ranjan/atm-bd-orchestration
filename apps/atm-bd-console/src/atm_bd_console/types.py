@@ -370,4 +370,4 @@ class ActionLine:
 
 
 SpecFn: TypeAlias = Callable[[DispatchContext], Result[DispatchSpec]]
-StepFn: TypeAlias = Callable[[Config, State, bool], tuple[Snapshot, State]]
+StepFn: TypeAlias = Callable[[Config, State, bool, object | None], tuple[Snapshot, State]]
