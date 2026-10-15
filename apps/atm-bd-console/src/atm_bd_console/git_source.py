@@ -44,7 +44,8 @@ def worktrees(repo: str | Path) -> Result[tuple[Worktree, ...]]:
     rows, current = [], {}
     for line in [*result.stdout.splitlines(), ""]:
         if not line:
-            if current:
+            # A bare repository's record has no HEAD line: it has no working tree, so it is not a worktree row.
+            if "head" in current:
                 rows.append(Worktree(current["path"], current.get("branch"), current["head"]))
                 current = {}
         elif line.startswith("worktree "):

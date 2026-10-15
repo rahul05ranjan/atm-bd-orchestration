@@ -95,3 +95,16 @@ def test_missing_branch_is_an_error(repo: Path, branch: str, target: str, missin
     result = git_source.merge(repo, branch, target)
     assert isinstance(result, Err) and isinstance(result.error, NotFound)
     assert result.error.what == missing
+
+
+def test_bare_repository_record_without_head_is_skipped(repo: Path, tmp_path: Path) -> None:
+    origin = tmp_path / "origin.git"
+    linked = tmp_path / "linked"
+    git(origin, "worktree", "add", "-q", str(linked), "clean")
+    listing = git(origin, "worktree", "list", "--porcelain")
+    assert listing.splitlines()[:2] == [f"worktree {origin.resolve()}", "bare"]
+    result = git_source.worktrees(origin)
+    assert isinstance(result, Ok), result
+    assert [(Path(row.path).resolve(), row.branch, row.head) for row in result.value] == [
+        (linked.resolve(), "clean", git(origin, "rev-parse", "clean")),
+    ]
