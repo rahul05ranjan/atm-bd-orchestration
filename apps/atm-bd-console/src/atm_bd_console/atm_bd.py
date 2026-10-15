@@ -41,6 +41,9 @@ def repo_config(repo_root: str) -> Result[RepoConfig]:
 def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     metadata = bead.metadata
     stage = next((label.removeprefix("stage:") for label in bead.labels if label.startswith("stage:")), "other")
+    suffix = bead.id.rsplit(".group-", 1)[-1] if ".group-" in bead.id else ""
+    if stage == "other" and suffix in {"dev", "sanity", "qa"}:
+        stage = {"sanity": "dev-sanity", "qa": "qa"}.get(suffix, suffix)
     kind = {"dev-sanity": "sanity", "qa": "qa", "plan-review": "plan_review"}.get(stage, stage if stage in {"dev", "fix", "finding"} else "other")
     checked = metadata.get("dev_bead") if kind == "sanity" else metadata.get("checked_bead") if kind == "qa" else None
     if kind in {"sanity", "qa"} and not checked: return _missing(f"{bead.id}.metadata.checked_bead")
@@ -50,9 +53,13 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     if kind == "qa" and not sprint_bead and checked in parents: sprint_bead = parents[checked].metadata.get("sprint_bead")
     if kind == "qa" and not sprint_bead: return _missing(f"{bead.id}.metadata.sprint_bead")
     parent = parents.get(bead.parent or "")
-    top = parent.id if parent and parent.parent is None else None
+    top = None
+    while parent:
+        top = parent.id
+        parent = parents.get(parent.parent or "")
     carry = checked if kind == "qa" and stage == "qa" and ("stage:fix" in parents.get(checked, bead).labels or "stage:finding" in parents.get(checked, bead).labels) else None
-    return Ok(Step(bead.id, sprint, kind, bool(metadata.get("quick_fix")), "anchor" in bead.labels, bead.status, False, bead.assignee, metadata.get("branch"), metadata.get("pr_target"), metadata.get("worktree"), metadata.get("layer"), metadata.get("difficulty"), (top or bead.id).removeprefix(metadata.get("bead_prefix", "")), top, bead.claimed_at, bead.closed_at, bead.title, checked, sprint_bead, metadata.get("round"), carry))
+    prefix = (top or bead.id).split("-", 1)[0] + "-"
+    return Ok(Step(bead.id, sprint, kind, bool(metadata.get("quick_fix")), "anchor" in bead.labels, bead.status, False, bead.assignee, metadata.get("branch"), metadata.get("pr_target"), metadata.get("worktree"), metadata.get("layer"), metadata.get("difficulty"), (top or bead.id).removeprefix(prefix), top, bead.claimed_at, bead.closed_at, bead.title, checked, sprint_bead, metadata.get("round"), carry))
 
 
 def phase(file: PhaseFile, root: Bead, open_beads: tuple[Bead, ...], ready: tuple[Bead, ...], shown: tuple[Bead, ...]) -> Result[Phase]:
@@ -60,7 +67,7 @@ def phase(file: PhaseFile, root: Bead, open_beads: tuple[Bead, ...], ready: tupl
     sprints = []
     for sprint_id in file.sprints:
         bead = by_id.get(sprint_id)
-        if bead is None: return _missing(sprint_id)
+        if bead is None: continue
         meta = bead.metadata; sprints.append(Sprint(bead.id, bead.title, meta["layer"], meta["branch"], meta["pr_target"], meta["stack"], file.depends_on.get(bead.id, ()), bead.status == "closed", sum(1 for item in by_id.values() if item.parent == bead.id and "stage:finding" in item.labels)))
     steps, errors = [], []
     for bead in by_id.values():
