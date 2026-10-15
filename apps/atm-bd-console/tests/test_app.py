@@ -107,13 +107,68 @@ def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
             await asyncio.wait_for(asyncio.to_thread(step.started.wait), timeout=1)
             app._on_interval()
             app._on_interval()
-            app.action_refresh()
-            await settle(pilot)
+            await pilot.pause()
             assert step.calls == [False]
             step.release.set()
             await asyncio.wait_for(asyncio.to_thread(step.completed.wait), timeout=1)
             await settle(pilot)
             assert step.calls == [False]
+
+    run_scenario(scenario())
+
+
+def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypatch) -> None:
+    first = RUNNING
+    second = replace(RUNNING, phase="second")
+    render_started = threading.Event()
+    release_render = threading.Event()
+    second_step_done = threading.Event()
+    second_shown = threading.Event()
+    calls: list[bool] = []
+    rendered: list[str] = []
+    shown: list[str] = []
+
+    def step(_config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+        calls.append(force_github)
+        if len(calls) == 2:
+            second_step_done.set()
+            return second, state
+        return first, state
+
+    original_show = ConsoleApp._show
+
+    def show(app: ConsoleApp, snapshot: Snapshot, text: str, error) -> None:
+        shown.append(snapshot.phase)
+        original_show(app, snapshot, text, error)
+        if snapshot is second:
+            second_shown.set()
+
+    def slow_render(snapshot: Snapshot) -> tuple[str, None]:
+        rendered.append(snapshot.phase)
+        if len(rendered) == 1:
+            render_started.set()
+            assert release_render.wait(2), "test must release the blocked renderer"
+        return snapshot.phase, None
+
+    monkeypatch.setattr(console.status, "status_text", slow_render)
+    monkeypatch.setattr(ConsoleApp, "_show", show)
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
+        async with app.run_test() as pilot:
+            await asyncio.wait_for(asyncio.to_thread(render_started.wait), timeout=1)
+            assert app._step_lock.acquire(blocking=False)
+            app._step_lock.release()
+            app.action_refresh()
+            app._on_interval()
+            release_render.set()
+            await asyncio.wait_for(asyncio.to_thread(second_step_done.wait), timeout=1)
+            await asyncio.wait_for(asyncio.to_thread(second_shown.wait), timeout=1)
+            await settle(pilot)
+            assert calls == [False, True]
+            assert rendered == [first.phase, "second"]
+            assert shown == [first.phase, "second"]
+            assert app.snapshot is second
 
     run_scenario(scenario())
 

@@ -75,6 +75,8 @@ class ConsoleApp(App[int]):
         self.status_error: Error | None = None
         self.tick_error: Error | None = None
         self._step_lock = threading.Lock()
+        self._tick_running = False
+        self._pending_forced_refresh = False
 
     def compose(self) -> ComposeResult:
         with TabbedContent(initial="dispatch"):
@@ -109,20 +111,45 @@ class ConsoleApp(App[int]):
         if event.pane.id == "prs":
             self.tick(True)
 
-    @work(thread=True, group="tick", exclusive=True, exit_on_error=False)
     def tick(self, force_github: bool) -> None:
-        if not self._step_lock.acquire(blocking=False):
+        # Interval ticks are intentionally dropped while work is in flight. Forced
+        # refreshes are coalesced into one follow-up after this result is displayed.
+        if self._tick_running:
+            self._pending_forced_refresh |= force_github
             return
+        self._tick_running = True
+        self._run_tick(force_github)
+
+    @work(thread=True, group="tick", exclusive=True, exit_on_error=False)
+    def _run_tick(self, force_github: bool) -> None:
+        snapshot: Snapshot | None = None
+        text = ""
+        error: Error | None = None
+        tick_error: Error | None = None
+        self._step_lock.acquire()
         try:
             snapshot, state = self.step(self.config, self.state, force_github)
             self.state = state
-            text, error = status.status_text(snapshot)
-        except Exception as error:  # noqa: BLE001
-            self.call_from_thread(self._show_tick_error, IoFailed("io_failed", "console tick", str(error), "retry the console tick"))
-            return
+        except Exception as step_error:  # noqa: BLE001
+            tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
         finally:
             self._step_lock.release()
-        self.call_from_thread(self._show, snapshot, text, error)
+        if snapshot is not None:
+            try:
+                text, error = status.status_text(snapshot)
+            except Exception as render_error:  # noqa: BLE001
+                tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error)
+
+    def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None) -> None:
+        if tick_error is not None:
+            self._show_tick_error(tick_error)
+        elif snapshot is not None:
+            self._show(snapshot, text, error)
+        self._tick_running = False
+        if self._pending_forced_refresh:
+            self._pending_forced_refresh = False
+            self.tick(True)
 
     def _show_tick_error(self, error: Error) -> None:
         if not self.is_running:
