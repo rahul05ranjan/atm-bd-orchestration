@@ -61,6 +61,7 @@ class StateStore:
 
     def _write(self, name: str, value: object) -> Result[None]:
         path = self.directory / name
+        temporary: str | None = None
         try:
             payload = to_json(value)
             descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.", dir=self.directory)
@@ -71,6 +72,8 @@ class StateStore:
             os.replace(temporary, path)
             return Ok(None)
         except (OSError, ValueError) as error:
+            if temporary is not None:
+                _discard(temporary)
             return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
 
 
@@ -115,6 +118,14 @@ def load_prs(repo_root: str | Path, root_id: str) -> Result[PrsFile]:
 
 def _load(repo_root: str | Path, root_id: str, name: str, cls: type[Any]) -> Result[Any]:
     return _read(state_directory(repo_root, root_id) / name, cls)
+
+
+def _discard(path: str) -> None:
+    """Best-effort removal of a temporary file a failed write left behind."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _read(path: Path, cls: type[Any]) -> Result[Any]:

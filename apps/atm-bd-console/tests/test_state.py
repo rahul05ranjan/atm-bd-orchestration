@@ -137,6 +137,21 @@ def test_missing_data_and_live_process_lock_are_typed(tmp_path: Path) -> None:
     released.value.close()
 
 
+def test_failed_write_removes_its_temporary_file(tmp_path: Path, monkeypatch) -> None:
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+
+        def fail(*_args, **_kwargs):
+            raise OSError("disk full mid-write")
+
+        monkeypatch.setattr(state.os, "replace", fail)
+        result = store.write_snapshot(fixture("snapshot-running.json", Snapshot))
+        leftovers = list(store.directory.glob(".snapshot.json.*"))
+    assert isinstance(result, Err) and isinstance(result.error, IoFailed)
+    assert leftovers == []
+
+
 def test_undecodable_snapshot_is_a_typed_error_not_an_exception(tmp_path: Path) -> None:
     directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
     directory.mkdir(parents=True)
