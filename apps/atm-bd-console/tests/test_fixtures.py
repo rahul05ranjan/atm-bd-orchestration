@@ -64,7 +64,7 @@ def test_cache_fixtures_are_populated() -> None:
     assert all(key == item.branch for key, item in merge.merges.items())
     prs = _load("prs.json", PrsFile)
     assert [pr.ci for pr in prs.prs] == ["failure", "success"]
-    assert prs.prs[0].failed_checks and prs.gh.ok is True
+    assert prs.prs[0].failed_checks == ("pytest", "ruff") and prs.gh.ok is True
 
 
 def test_actions_jsonl_has_one_line_per_kind_parsed_line_by_line() -> None:

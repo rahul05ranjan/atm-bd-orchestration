@@ -1,0 +1,83 @@
+# source_sha: d22382d7670a91255922e5f7c19ee06c02e73df8
+# installed_version: 0.1.0
+# captured_on: 2026-10-15 (PDT)
+ Dispatch  Status  PRs
+╸━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+phase-bh · 08:54 · next 60s
+
+● team-lead  1
+ 🌀 phase-bh-anchor-review   2m phase-bh: /private/tmp/claude-501/-Users-randlee-github-atm-core/48324f08-3c24-4d63-8574-a78f4d2d167d/scratchpad/anchor-review-brief.txt
+· arch-ctm  0
+· atm-sanity  0
+● cipher  3
+ 🌀 phase-bh.rdy-f6         2m phase-bh: <atm-task id="atm-phase-bh.rdy-f6" sprint="bh-rdy" mode="fix">
+  <description><![CDATA[Fix `atm-phase-bh.rdy-f6` (found in sprint bh-rdy). `bd show atm-phase-bh.rdy-f6` is the assignment: a poured fix bead carries the finding in its description and `metadata.…
+ 📥 phase-bh.rdy-f7        12m phase-bh: <atm-task id="atm-phase-bh.rdy-f7" sprint="bh-rdy" mode="fix">
+  <description><![CDATA[Fix `atm-phase-bh.rdy-f7` (found in sprint bh-rdy). `bd show atm-phase-bh.rdy-f7` is the assignment: a poured fix bead carries the finding in its description and `metadata.…
+ 📥 phase-bh.rdy-f10       12m phase-bh: <atm-task id="atm-phase-bh.rdy-f10" sprint="bh-rdy" mode="fix">
+  <description><![CDATA[Fix `atm-phase-bh.rdy-f10` (found in sprint bh-rdy). `bd show atm-phase-bh.rdy-f10` is the assignment: a poured fix bead carries the finding in its description and `metada…
+· cipher2  0
+· dev-fast  0
+· dev-opus  0
+· fenix  0
+● lumen  1
+ 🌀 phase-bh.rdy-f11        5m phase-bh: <atm-task id="atm-phase-bh.rdy-f11" sprint="bh-rdy" mode="fix">
+  <description><![CDATA[Fix `atm-phase-bh.rdy-f11` (found in sprint bh-rdy). `bd show atm-phase-bh.rdy-f11` is the assignment: a poured fix bead carries the finding in its description and `metada…
+· publisher  0
+· quality-mgr  0
+■ solar  0
+· teammate  0
+◐ trinity  2
+ 📥 phase-bh.rdy-f4         8s phase-bh: <atm-task id="atm-phase-bh.rdy-f4" sprint="bh-rdy" mode="fix">
+  <description><![CDATA[Fix `atm-phase-bh.rdy-f4` (found in sprint bh-rdy). `bd show atm-phase-bh.rdy-f4` is the assignment: a poured fix bead carries the finding in its description and `metadata.…
+ 📥 phase-bh.rdy-f5        12m phase-bh: <atm-task id="atm-phase-bh.rdy-f5" sprint="bh-rdy" mode="fix">
+  <description><![CDATA[Fix `atm-phase-bh.rdy-f5` (found in sprint bh-rdy). `bd show atm-phase-bh.rdy-f5` is the assignment: a poured fix bead carries the finding in its description and `metadata.…
+
+== Errors (5)
+ 08:54 parse_failed: $.sent[0].outcome: $.sent[0].outcome: missing field; correct the JSON contract value
+ 08:54 not_found: atm-phase-bh.rdy-f9-qa.metadata.sprint_bead; add the required ATM BD value
+ 08:54 not_found: atm-phase-bh.rdy-f8-qa.metadata.sprint_bead; add the required ATM BD value
+ 08:54 not_found: atm-phase-bh.rdy-f2-qa.metadata.sprint_bead; add the required ATM BD value
+ 08:54 not_found: atm-phase-bh.rdy-f1-qa.metadata.sprint_bead; add the required ATM BD value
+
+== Held (50)
+  phase-bh.rdy-f9-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f9-sanity   0s  no worktree for None
+  phase-bh.rdy-f8-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f8-sanity   0s  no worktree for None
+  phase-bh.rdy-f10-qa      0s  not ready
+  phase-bh.rdy-f10-qa      0s  branch not on origin: <missing>
+  phase-bh.rdy-f10-qa      0s  no worktree for None
+  phase-bh.rdy-f10-sanity   0s  not ready
+  phase-bh.rdy-f10-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f10-sanity   0s  no worktree for None
+  phase-bh.rdy-f7-qa       0s  not ready
+  phase-bh.rdy-f7-qa       0s  branch not on origin: <missing>
+  phase-bh.rdy-f7-qa       0s  no worktree for None
+  phase-bh.rdy-f7-sanity   0s  not ready
+  phase-bh.rdy-f7-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f7-sanity   0s  no worktree for None
+  phase-bh.rdy-f6-qa       0s  not ready
+  phase-bh.rdy-f6-qa       0s  branch not on origin: <missing>
+  phase-bh.rdy-f6-qa       0s  no worktree for None
+  phase-bh.rdy-f6-sanity   0s  not ready
+  phase-bh.rdy-f6-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f6-sanity   0s  no worktree for None
+  phase-bh.rdy-f5-qa       0s  not ready
+  phase-bh.rdy-f5-qa       0s  branch not on origin: <missing>
+  phase-bh.rdy-f5-qa       0s  no worktree for None
+  phase-bh.rdy-f5-sanity   0s  not ready
+  phase-bh.rdy-f5-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f5-sanity   0s  no worktree for None
+  phase-bh.rdy-f4-qa       0s  not ready
+  phase-bh.rdy-f4-qa       0s  branch not on origin: <missing>
+  phase-bh.rdy-f4-qa       0s  no worktree for None
+  phase-bh.rdy-f4-sanity   0s  not ready
+  phase-bh.rdy-f4-sanity   0s  branch not on origin: <missing>
+  phase-bh.rdy-f4-sanity   0s  no worktree for None
+  phase-bh.rdy-f3-qa       0s  not ready
+  phase-bh.rdy-f3-qa       0s  branch not on origin: <missing>
+  phase-bh.rdy-f3-qa       0s  no worktree for None
+  phase-bh.rdy-f3-sanity   0s  not ready
+  phase-bh.rdy-f3-sanity   0s  branch not on origin: <missing>
+gh: graphql ✅ 08:54 | 10/10 [█████████] 100% | active 0h00m | tick 08:54:29

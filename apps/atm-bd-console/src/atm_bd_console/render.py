@@ -48,6 +48,17 @@ def _fit(line: Text, width: int) -> Text:
     return result
 
 
+def tick_error(error: Error, width: int) -> tuple[Text, Text]:
+    """Render a tick error as single-line, width-fitted dashboard and header text."""
+    message = " ".join(error.message.split())
+    dashboard = Text("\n").join((
+        _fit(Text("== Errors (1)", style="red"), width),
+        _fit(Text(f" {error.kind}: {message}", style="red"), width),
+    ))
+    header = _fit(Text(f"{error.kind}: {error.fix}", style="red"), width)
+    return dashboard, header
+
+
 def _tag(row: Row) -> Text:
     result = Text()
     if row.marker == "red":
@@ -94,7 +105,7 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
         if tag.plain:
             line.append_text(tag)
             line.append(": ")
-        line.append(row.description)
+        line.append(" ".join(row.description.split()))
         lines.append(line)
     if len(rows) > 3:
         lines.append(Text(f" … +{len(rows) - 3} more"))

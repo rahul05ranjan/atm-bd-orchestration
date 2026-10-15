@@ -4,12 +4,15 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
 from atm_bd_console.model import _reconcile_problems, _sprint_views, due, tick
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.result import CommandFailed, Err, NotFound, Ok, Timeout
 from atm_bd_console.types import (
     Bead,
+    DispatchSpec,
     GhStatus,
     Inputs,
     Member,
@@ -93,7 +96,7 @@ def test_roster_statuses_and_markers() -> None:
     assert snapshot.agents[0].rows[0].age_s == 20
 
 
-def test_agent_status_uses_task_state_when_presence_disagrees() -> None:
+def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
     members = (
         Member("presence-idle", "idle", NOW - timedelta(minutes=5)),
         Member("presence-active", "active", NOW - timedelta(minutes=5)),
@@ -106,7 +109,7 @@ def test_agent_status_uses_task_state_when_presence_disagrees() -> None:
     snapshot, actions, _ = tick(inputs(value, members=Ok(members), tasks=Ok(tasks)), STATE, NOW, render)
 
     assert actions == ()
-    assert tuple(agent.status for agent in snapshot.agents) == ("busy", "stalling")
+    assert tuple(agent.status for agent in snapshot.agents) == ("stalling", "busy")
     assert tuple(agent.rows[0].state for agent in snapshot.agents) == ("running", "queued")
 
 
@@ -430,6 +433,39 @@ def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
     assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
 
 
+def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="topic", target="base")
+    conflict = Merge("topic", "base", "conflict", ("model.py", "dispatch.py"), (), NOW)
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok(()), merges=(Ok(conflict),))
+
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+
+    conflict_text = "merge conflict with base: model.py, dispatch.py"
+    assert snapshot.sections[0].label == "Held"
+    assert [row.reason for row in snapshot.sections[0].rows] == ["no worktree for topic", conflict_text]
+    assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:topic"]
+    assert [problem.text for problem in snapshot.problems] == ["no worktree for topic", conflict_text]
+    assert [(action.kind, action.to, action.text) for action in actions] == [
+        ("send", "solar", "no worktree for topic"), ("send", "solar", conflict_text),
+    ]
+
+    refreshed = replace(supplied, merges=(Ok(replace(conflict, checked_at=NOW + timedelta(minutes=5))),))
+    snapshot, actions, _ = tick(refreshed, state, NOW + timedelta(minutes=5), render)
+
+    assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:topic"]
+    assert all(problem.first_seen == NOW for problem in snapshot.problems)
+    assert actions == ()
+
+    recovered_worktree = replace(refreshed, worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)))
+    snapshot, actions, _ = tick(recovered_worktree, state, NOW + timedelta(minutes=6), render)
+
+    assert [problem.key for problem in snapshot.problems] == ["conflict:topic"]
+    assert snapshot.problems[0].text == conflict_text
+    assert snapshot.problems[0].first_seen == NOW
+    assert actions == ()
+
+
 def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="sprint/bh-1",
                      worktree="/worktrees/atm-bh-1")
@@ -438,12 +474,46 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
     conflict = Merge("sprint/bh-1", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
     snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)
     assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert [problem.key for problem in snapshot.problems] == ["conflict:sprint/bh-1"]
     assert "model.py" in snapshot.problems[0].text
 
     error = NotFound("not_found", "checked_bead", "repair metadata")
-    snapshot, actions, _ = tick(common, STATE, NOW, lambda context: Err(error))
+    verified = replace(common, merges=(Ok(replace(conflict, state="clean", files=())),))
+    snapshot, actions, _ = tick(verified, STATE, NOW, lambda context: Err(error))
     assert actions == ()
     assert error in snapshot.errors
+
+
+@pytest.mark.parametrize("error", (
+    NotFound("not_found", "origin/base", "fetch the named branch and retry"),
+    Timeout("timeout", ("git", "merge-tree"), 30, "retry the merge check"),
+    CommandFailed("command_failed", ("git", "merge-tree"), 129, "unknown option write-tree", "upgrade git"),
+))
+def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base")
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)), merges=(Err(error),))
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+    assert error in snapshot.errors
+    assert not any(action.kind == "assign" for action in actions)
+    assert error.kind in snapshot.sections[0].rows[0].reason
+    assert error.fix in snapshot.problems[0].text
+    if isinstance(error, NotFound):
+        assert error.what in snapshot.problems[0].text
+    elif isinstance(error, CommandFailed):
+        assert error.stderr in snapshot.problems[0].text
+    elif isinstance(error, Timeout):
+        assert "timed out after 30s" in snapshot.problems[0].text
+    verified = replace(supplied, merges=(Ok(Merge("topic", "base", "clean", (), (), NOW)),))
+    recovered, actions, _ = tick(verified, state, NOW, lambda context: Ok(DispatchSpec("qa", {})))
+    assert [action.kind for action in actions] == ["assign"]
+    assert recovered.sections == () and recovered.problems == ()
+
+
+def test_ready_candidate_refreshes_even_when_origin_ref_is_cached() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base")
+    state = replace(STATE, last_cycle=NOW, remotes=(RemoteRef("topic", "cached"),))
+    assert due(state, phase(candidate), "atm", "off", NOW).fetch
 
 
 def test_pure_modules_contain_no_source_calls_or_imports() -> None:

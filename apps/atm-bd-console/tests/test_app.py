@@ -7,6 +7,7 @@ from dataclasses import replace
 from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
+from rich.cells import cell_len
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
@@ -25,11 +26,13 @@ class BlockingStep(FakeStep):
         super().__init__(RUNNING)
         self.started = threading.Event()
         self.release = threading.Event()
+        self.completed = threading.Event()
 
     def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
         self.calls.append(force_github)
         self.started.set()
         assert self.release.wait(2), "test must release the blocked step"
+        self.completed.set()
         return self.snapshot, state
 
 
@@ -58,6 +61,35 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
             assert app.is_running
             shown = str(app.query_one("#dashboard").render())
             assert "== Errors (1)" in shown and "step exploded" in shown
+
+    run_scenario(scenario())
+
+
+def test_raised_multiline_error_fits_dashboard_and_header_after_resize() -> None:
+    class LongRaisingStep:
+        def __call__(self, *_args) -> tuple[Snapshot, State]:
+            raise RuntimeError("first error detail is far too long for a narrow terminal\nsecond line should be normalized")
+
+    async def scenario() -> None:
+        app = ConsoleApp(CONFIG, LongRaisingStep(), STATE)
+        async with app.run_test(size=(120, 24)) as pilot:
+            await settle(pilot)
+            dashboard = app.query_one("#dashboard")
+            shown = dashboard.render().plain.splitlines()
+            assert len(shown) == 2
+            assert "first error detail" in shown[1]
+            assert "second line should be normalized" in shown[1]
+            assert max(cell_len(line) for line in shown) <= app.size.width
+
+            await pilot.resize_terminal(18, 10)
+            app.query_one("TabbedContent").active = "status"
+            await pilot.pause()
+            dashboard = app.query_one("#dashboard")
+            shown = dashboard.render().plain.splitlines()
+            assert max(cell_len(line) for line in shown) <= app.size.width
+            header = app.query_one("#status-header")
+            assert max(cell_len(line) for line in header.render().plain.splitlines()) <= app.size.width
+            assert "…" in shown[1]
 
     run_scenario(scenario())
 
@@ -105,11 +137,68 @@ def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
             await asyncio.wait_for(asyncio.to_thread(step.started.wait), timeout=1)
             app._on_interval()
             app._on_interval()
-            app.action_refresh()
-            await settle(pilot)
+            await pilot.pause()
             assert step.calls == [False]
             step.release.set()
+            await asyncio.wait_for(asyncio.to_thread(step.completed.wait), timeout=1)
             await settle(pilot)
+            assert step.calls == [False]
+
+    run_scenario(scenario())
+
+
+def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypatch) -> None:
+    first = RUNNING
+    second = replace(RUNNING, phase="second")
+    render_started = threading.Event()
+    release_render = threading.Event()
+    second_step_done = threading.Event()
+    second_shown = threading.Event()
+    calls: list[bool] = []
+    rendered: list[str] = []
+    shown: list[str] = []
+
+    def step(_config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+        calls.append(force_github)
+        if len(calls) == 2:
+            second_step_done.set()
+            return second, state
+        return first, state
+
+    original_show = ConsoleApp._show
+
+    def show(app: ConsoleApp, snapshot: Snapshot, text: str, error) -> None:
+        shown.append(snapshot.phase)
+        original_show(app, snapshot, text, error)
+        if snapshot is second:
+            second_shown.set()
+
+    def slow_render(snapshot: Snapshot) -> tuple[str, None]:
+        rendered.append(snapshot.phase)
+        if len(rendered) == 1:
+            render_started.set()
+            assert release_render.wait(2), "test must release the blocked renderer"
+        return snapshot.phase, None
+
+    monkeypatch.setattr(console.status, "status_text", slow_render)
+    monkeypatch.setattr(ConsoleApp, "_show", show)
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
+        async with app.run_test() as pilot:
+            await asyncio.wait_for(asyncio.to_thread(render_started.wait), timeout=1)
+            assert app._step_lock.acquire(blocking=False)
+            app._step_lock.release()
+            app.action_refresh()
+            app._on_interval()
+            release_render.set()
+            await asyncio.wait_for(asyncio.to_thread(second_step_done.wait), timeout=1)
+            await asyncio.wait_for(asyncio.to_thread(second_shown.wait), timeout=1)
+            await settle(pilot)
+            assert calls == [False, True]
+            assert rendered == [first.phase, "second"]
+            assert shown == [first.phase, "second"]
+            assert app.snapshot is second
 
     run_scenario(scenario())
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from .dispatch import candidates, dispatch, sprint_of
+from .dispatch import candidates, dispatch, sprint_of, verification_reason
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -36,11 +36,16 @@ def _cycle_due(state: State, now: datetime) -> bool:
     return state.last_cycle is None or now - state.last_cycle >= CYCLE
 
 
+def idle_stop_due(state: State, now: datetime) -> bool:
+    """Whether persisted inactivity permits a read-free stopped tick."""
+    return state.idle_since is not None and now - state.idle_since >= IDLE_STOP
+
+
 def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime, tasks: tuple[Task, ...] = ()) -> Due:
     cycle_due = _cycle_due(state, now)
     ready = tuple(step for step in candidates(phase, tasks) if step.ready)
     pushed = {remote.branch for remote in state.remotes}
-    fetch = cycle_due or any(step.branch not in pushed for step in ready)
+    fetch = cycle_due or bool(ready)
     pairs: list[tuple[str, str]] = []
     for step in phase.steps:
         target = _target(step, phase, bead_prefix)
@@ -71,7 +76,21 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     tasks = inputs.tasks.value if isinstance(inputs.tasks, Ok) else ()
     worktrees = inputs.worktrees.value if isinstance(inputs.worktrees, Ok) else ()
     remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
+    if isinstance(inputs.remotes, Err):
+        remotes = ()
     merges = tuple(result.value for result in inputs.merges or () if isinstance(result, Ok))
+    merge_errors = tuple(result.error for result in inputs.merges or () if isinstance(result, Err))
+    if phase is not None and merge_errors:
+        checked_pairs = {(merge.branch, merge.target) for merge in merges}
+        unavailable = {
+            (step.branch, target)
+            for step in candidates(phase, tasks)
+            if step.branch and (target := _target(step, phase, inputs.repo.bead_prefix))
+            and (step.branch, target) not in checked_pairs
+        }
+        merges += tuple(Merge(branch, target, "error", (), tuple(
+            verification_reason(error) for error in merge_errors
+        ), now) for branch, target in sorted(unavailable))
     prs = inputs.prs.value if isinstance(inputs.prs, Ok) else ()
     if phase is not None:
         errors.extend(error for _, error in phase.step_errors)
@@ -86,14 +105,17 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     elif phase is not None:
         active = any(step.ready or step.status == "in_progress" for step in phase.steps)
         idle_since = None if active else (idle_since or now)
-        if idle_since is not None and now - idle_since >= IDLE_STOP:
+        if idle_stop_due(replace(state, idle_since=idle_since), now):
             stopped = "idle"
 
     held = ()
     assigned: tuple[Action, ...] = ()
     if (phase is not None and stopped is None and isinstance(inputs.tasks, Ok)
             and isinstance(inputs.worktrees, Ok)):
-        outcome = dispatch(phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec)
+        outcome = dispatch(
+            phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec,
+            inputs.remotes.error if isinstance(inputs.remotes, Err) else None,
+        )
         held = outcome.held
         assigned = outcome.actions
         errors.extend(outcome.errors)
@@ -170,10 +192,8 @@ def _agent_views(
             status = "blocked"
         elif member.presence in ("offline", "unknown") and mine:
             status = "offline"
-        elif any(task.state == "active" for task in mine):
-            status = "busy"
         elif mine:
-            status = "stalling"
+            status = "busy" if member.presence == "active" else "stalling"
         else:
             status = "idle"
         rows: list[Row] = []
@@ -318,19 +338,24 @@ def _problems(
         )
     by_branch = _branch_owners(phase)
     by_id = {step.bead_id: step for step in phase.steps}
+    conflicts = {
+        f"conflict:{merge.branch}": Problem(
+            f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
+            f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
+        )
+        for merge in merges
+        if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
+    }
     problems: list[Problem] = []
     for row in held:
         if row.reason == "not ready":
             continue
         step = by_id[row.bead_id]
+        conflict = conflicts.get(f"conflict:{step.branch}")
+        if conflict is not None and row.reason == conflict.text:
+            continue
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
-    for merge in merges:
-        if (merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
-                and not any(problem.key == f"hold:{step.bead_id}" for problem in problems)):
-            problems.append(Problem(
-                f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
-                f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
-            ))
+    problems.extend(conflicts.values())
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
@@ -355,7 +380,7 @@ def _problems(
             inputs.lead, f"top PR #{top_pr.number} CI failed: {checks}", now,
         ))
     current_keys = {problem.key for problem in problems}
-    refreshed_merges = {merge.branch for merge in merges}
+    refreshed_merges = {merge.branch for merge in merges if merge.state != "error"}
     for previous in state.problems:
         if previous.key in current_keys:
             continue

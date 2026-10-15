@@ -8,6 +8,53 @@ permissions:
   contents: read
 
 jobs:
+  console-tests:
+    name: console (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    env:
+      SC_COMPOSE_VERSION: "1.7.0"
+      SC_COMPOSE_SHA256: 5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84
+      UV_TOOL_DIR: ${{ github.workspace }}/../console-tools
+      UV_TOOL_BIN_DIR: ${{ github.workspace }}/../console-bin
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Install sc-compose ${{ env.SC_COMPOSE_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="sc-compose_${SC_COMPOSE_VERSION}_x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/randlee/sc-compose/releases/download/v${SC_COMPOSE_VERSION}/$asset"
+          echo "${SC_COMPOSE_SHA256}  $RUNNER_TEMP/$asset" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sc-compose"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/sc-compose"
+          bin="$(find "$RUNNER_TEMP/sc-compose" -type f -name sc-compose | head -n 1)"
+          test -n "$bin"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$bin" "$HOME/.local/bin/sc-compose"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install console in isolation
+        run: uv tool install --python '${{ steps.python.outputs.python-path }}' ./apps/atm-bd-console
+      - name: Console tests
+        working-directory: apps/atm-bd-console
+        run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q
+      - name: Console CLI smoke tests
+        working-directory: apps/atm-bd-console
+        env:
+          ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd-console
+        run: |
+          "$ATM_BD_CONSOLE_BIN" --help
+          uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick
+
   package-tests:
     strategy:
       fail-fast: false

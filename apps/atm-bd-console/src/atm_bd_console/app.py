@@ -17,9 +17,9 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import prs, render, status
-from .result import Err, Error, IoFailed
+from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
-from .types import Config, Snapshot, SprintView, State, StepFn
+from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 
@@ -75,6 +75,8 @@ class ConsoleApp(App[int]):
         self.status_error: Error | None = None
         self.tick_error: Error | None = None
         self._step_lock = threading.Lock()
+        self._tick_running = False
+        self._pending_forced_refresh = False
 
     def compose(self) -> ComposeResult:
         with TabbedContent(initial="dispatch"):
@@ -109,27 +111,51 @@ class ConsoleApp(App[int]):
         if event.pane.id == "prs":
             self.tick(True)
 
-    @work(thread=True, group="tick", exclusive=True, exit_on_error=False)
     def tick(self, force_github: bool) -> None:
-        if not self._step_lock.acquire(blocking=False):
+        # Interval ticks are intentionally dropped while work is in flight. Forced
+        # refreshes are coalesced into one follow-up after this result is displayed.
+        if self._tick_running:
+            self._pending_forced_refresh |= force_github
             return
+        self._tick_running = True
+        self._run_tick(force_github)
+
+    @work(thread=True, group="tick", exclusive=True, exit_on_error=False)
+    def _run_tick(self, force_github: bool) -> None:
+        snapshot: Snapshot | None = None
+        text = ""
+        error: Error | None = None
+        tick_error: Error | None = None
+        self._step_lock.acquire()
         try:
             snapshot, state = self.step(self.config, self.state, force_github)
             self.state = state
-            text, error = status.status_text(snapshot)
-        except Exception as error:  # noqa: BLE001
-            self.call_from_thread(self._show_tick_error, IoFailed("io_failed", "console tick", str(error), "retry the console tick"))
-            return
+        except Exception as step_error:  # noqa: BLE001
+            tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
         finally:
             self._step_lock.release()
-        self.call_from_thread(self._show, snapshot, text, error)
+        if snapshot is not None:
+            try:
+                text, error = status.status_text(snapshot)
+            except Exception as render_error:  # noqa: BLE001
+                tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error)
+
+    def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None) -> None:
+        if tick_error is not None:
+            self._show_tick_error(tick_error)
+        elif snapshot is not None:
+            self._show(snapshot, text, error)
+        self._tick_running = False
+        if self._pending_forced_refresh:
+            self._pending_forced_refresh = False
+            self.tick(True)
 
     def _show_tick_error(self, error: Error) -> None:
         if not self.is_running:
             return
         self.tick_error = error
-        self.query_one("#dashboard", Static).update(Text(f"== Errors (1)\n {error.kind}: {error.message}", style="red"))
-        self.query_one("#status-header", Static).update(Text(f"{error.kind}: {error.fix}", style="red"))
+        self.refresh_views()
 
     def _show(self, snapshot: Snapshot, text: str, error: Error | None) -> None:
         # A tick can finish after q has begun shutdown; its screen is gone, so there is nothing to draw.
@@ -165,20 +191,26 @@ class ConsoleApp(App[int]):
 
     def refresh_views(self) -> None:
         snapshot = self.snapshot
-        if snapshot is None:
+        if snapshot is None and self.tick_error is None:
             return
         width = self.size.width
         panel = self.query_one("#dispatch-panel")
-        height = panel.size.height or self.size.height
-        self.query_one("#dashboard", Static).update(render.dashboard(snapshot, min(panel.size.width or width, width), height))
-        self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width))
-        self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
-        header = Text(status_header(snapshot), no_wrap=True, overflow="ellipsis")
-        if self.status_error is not None:
-            header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
-        header.truncate(width, overflow="ellipsis")
-        self.query_one("#status-header", Static).update(header)
-        self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
+        dashboard_width = min(panel.size.width or width, width)
+        if snapshot is not None:
+            height = panel.size.height or self.size.height
+            self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
+            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width))
+            self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
+            header = Text(status_header(snapshot), no_wrap=True, overflow="ellipsis")
+            if self.status_error is not None:
+                header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
+            header.truncate(width, overflow="ellipsis")
+            self.query_one("#status-header", Static).update(header)
+            self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
+        if self.tick_error is not None:
+            dashboard, header = render.tick_error(self.tick_error, dashboard_width)
+            self.query_one("#dashboard", Static).update(dashboard)
+            self.query_one("#status-header", Static).update(header)
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]
@@ -192,6 +224,9 @@ def run(config: Config, step: StepFn | None, state: State, startup_error: Error 
         print(_lock_message(lock.error), file=sys.stderr)
         return 1
     with lock.value:
+        if runner_step is not None:
+            saved = lock.value.load_state()
+            state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
         bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value)
         assert bound_step is not None
         result = ConsoleApp(config, bound_step, state, startup_error).run()

@@ -11,11 +11,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from atm_bd_console import state
 from atm_bd_console.codec import from_json
-from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
+from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok, ParseFailed
 from atm_bd_console.state import acquire_lock, load_merges, load_prs, load_snapshot, load_state
-from atm_bd_console.types import ActionLine, MergeFile, PrsFile, Snapshot, State
+from atm_bd_console.types import INITIAL_STATE, ActionLine, MergeFile, PrsFile, Snapshot, State
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
 READY_DEADLINE_S = 10
@@ -193,3 +195,82 @@ def test_interrupted_temp_file_does_not_replace_previous_snapshot(tmp_path: Path
         temporary = store.directory / ".snapshot.json.crashed"
         temporary.write_text("{not-json")
     assert load_snapshot(tmp_path, "atm-bh") == Ok(snapshot)
+
+
+@pytest.mark.parametrize("name,loader,writer,value", (
+    ("state.json", "load_state", "write_state", INITIAL_STATE),
+    ("merge.json", "load_merges", "write_merges", fixture("merge.json", MergeFile)),
+    ("prs.json", "load_prs", "write_prs", fixture("prs.json", PrsFile)),
+))
+@pytest.mark.parametrize("payload", (b"{", b"{}", b"\xff"))
+def test_failed_runtime_load_preserves_bytes_before_reset(tmp_path, name, loader, writer, value, payload):
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        path = store.directory / name
+        path.write_bytes(payload)
+        loaded = getattr(store, loader)()
+        assert isinstance(loaded, Err)
+        assert isinstance(loaded.error, (ParseFailed, IoFailed))
+        assert str(path) in str(loaded.error)
+        backups = list(store.directory.glob(f"{name}.corrupt-*"))
+        assert len(backups) == 1 and backups[0].read_bytes() == payload
+        assert not path.exists()
+        assert store.load_errors == [loaded.error]
+        assert getattr(store, writer)(value) == Ok(None)
+        assert getattr(store, loader)() == Ok(value)
+        assert backups[0].read_bytes() == payload
+
+
+@pytest.mark.parametrize("loader", ("load_state", "load_merges", "load_prs"))
+def test_absent_runtime_files_are_not_corruption(tmp_path, loader):
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        loaded = getattr(store, loader)()
+        assert isinstance(loaded, Err) and isinstance(loaded.error, NotFound)
+        assert store.load_errors == []
+        assert list(store.directory.glob("*.corrupt-*")) == []
+
+
+@pytest.mark.parametrize("name,loader,writer,value", (
+    ("state.json", "load_state", "write_state", INITIAL_STATE),
+    ("merge.json", "load_merges", "write_merges", fixture("merge.json", MergeFile)),
+    ("prs.json", "load_prs", "write_prs", fixture("prs.json", PrsFile)),
+))
+def test_failed_preservation_blocks_later_writes(tmp_path, name, loader, writer, value):
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        path = store.directory / name
+        path.write_bytes(b"{broken")
+        store.directory.chmod(0o500)
+        try:
+            loaded = getattr(store, loader)()
+        finally:
+            store.directory.chmod(0o700)
+        assert isinstance(loaded, Err) and isinstance(loaded.error, IoFailed)
+        assert "writes are blocked" in loaded.error.fix
+        assert len(store.load_errors) == 2
+        assert getattr(store, writer)(value) == loaded
+        assert getattr(store, loader)() == loaded
+        assert path.read_bytes() == b"{broken"
+        assert list(store.directory.glob(f"{name}.corrupt-*")) == []
+
+
+@pytest.mark.parametrize("kind", ("directory", "broken_symlink"))
+def test_existing_non_file_runtime_path_is_not_absent(tmp_path, kind):
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        path = store.directory / "state.json"
+        if kind == "directory":
+            path.mkdir()
+        else:
+            path.symlink_to(store.directory / "missing-target")
+        loaded = load_state(tmp_path, "atm-bh")
+        assert isinstance(loaded, Err) and isinstance(loaded.error, IoFailed)
+        recovered = store.load_state()
+        assert isinstance(recovered, Err) and isinstance(recovered.error, IoFailed)
+        assert len(list(store.directory.glob("state.json.corrupt-*"))) == 1
+        assert store.write_state(INITIAL_STATE) == Ok(None)

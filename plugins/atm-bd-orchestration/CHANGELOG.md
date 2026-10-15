@@ -3,7 +3,7 @@
 ## [0.16.0] - 2026-10-14
 
 ### Changed
-- `bead-queues` is now a thin `atm-bd-console show --phase <x>` snapshot viewer. It no longer reads beads, ATM tasks, or GitHub; it has no cron JSON/state-file mode. The phase cron is `atm-bd-console --once --headless --phase <x> --as <lead>`.
+- `bead-queues` is now a thin `atm-bd-console show --phase <x>` snapshot viewer. It no longer reads beads, ATM tasks, or GitHub; it has no cron JSON/state-file mode. The phase cron is `atm-bd-console --headless --phase <x> --as <lead>`; `--headless` runs one tick and exits.
 - Plugin installation requires `atm-bd-console >= 0.1.0`. The console owns its `mmdflux >= 2.6.1` status-rendering dependency and reports a typed fix when it is missing or too old.
 - The `bead-queues` install remediation is rendered from the installer's single `CONSOLE_INSTALL` definition.
 

@@ -53,7 +53,7 @@ FIELDS: dict[str, str] = {
     "StepView": "bead_id kind status assignee",
     "SprintView": "id title state depends_on steps",
     "Problem": "key bead_id to text first_seen",
-    "Action": "at kind to bead_ids text spec",
+    "Action": "at kind to bead_ids text spec outcome",
     "PrRow": "pr layer bead_id top merge",
     "Metrics": "done total pct active_s",
     "Due": "fetch merges github",

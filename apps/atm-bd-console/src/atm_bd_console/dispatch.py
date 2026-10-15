@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .ids import short_id
-from .result import Err, Error, NotFound
+from .result import CommandFailed, Err, Error, NotFound, Timeout
 from .types import (
     Action,
     DispatchContext,
@@ -27,6 +27,18 @@ class DispatchOutcome:
     actions: tuple[Action, ...]
     held: tuple[SectionRow, ...]
     errors: tuple[Error, ...]
+
+
+def verification_reason(error: Error) -> str:
+    if isinstance(error, NotFound):
+        detail = error.what
+    elif isinstance(error, Timeout):
+        detail = f"{' '.join(error.argv)} timed out after {error.seconds}s"
+    elif isinstance(error, CommandFailed):
+        detail = f"{' '.join(error.argv)} (exit {error.code}): {error.stderr.strip()}"
+    else:
+        detail = error.kind
+    return f"{error.kind}: {detail}; {error.fix}"
 
 
 def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:
@@ -58,6 +70,7 @@ def dispatch(
     lead: str,
     now: datetime,
     spec: SpecFn,
+    remote_error: Error | None = None,
 ) -> DispatchOutcome:
     remote_by_branch = {remote.branch: remote.sha for remote in remotes}
     merge_by_pair = {(merge.branch, merge.target): merge for merge in merges}
@@ -72,14 +85,25 @@ def dispatch(
         reasons: list[str] = []
         if not step.ready:
             reasons.append("not ready")
-        if not step.branch or step.branch not in remote_by_branch:
+        if remote_error is not None:
+            reasons.append(f"origin verification unavailable: {verification_reason(remote_error)}")
+        elif not step.branch or step.branch not in remote_by_branch:
             reasons.append(f"branch not on origin: {step.branch or '<missing>'}")
         if not step.worktree or not any(
             worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
         ):
-            reasons.append(f"no worktree for {step.branch}")
-        if target and (merge := merge_by_pair.get((step.branch, target))) and merge.state == "conflict":
+            reasons.append(f"no worktree for {step.branch or '<missing>'}")
+        merge = merge_by_pair.get((step.branch, target))
+        if merge is not None and merge.state == "conflict":
             reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
+        elif step.ready and step.branch in remote_by_branch and remote_error is None:
+            if target is None:
+                reasons.append("merge verification unavailable: set the step or sprint PR target")
+            elif merge is None:
+                reasons.append(f"merge verification unavailable for {target}: no current result; retry the merge check")
+            elif merge.state != "clean":
+                detail = "; ".join(merge.messages) or "retry the merge check"
+                reasons.append(f"merge verification unavailable for {target}: {detail}")
 
         pr = pr_by_branch.get(step.branch or "")
         if reasons:
