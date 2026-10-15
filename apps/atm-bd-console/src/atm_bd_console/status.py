@@ -53,4 +53,4 @@ def status_text(snapshot: Snapshot) -> tuple[str, Error | None]:
             "command_failed", _COMMAND, completed.returncode, completed.stderr,
             "correct the Mermaid source or mmdflux installation",
         )
-    return completed.stdout.rstrip("\n"), None
+    return completed.stdout, None

@@ -29,7 +29,7 @@ def test_mmdflux_output_is_returned_verbatim(fake_bin, monkeypatch, tmp_path) ->
     monkeypatch.setenv("FAKE_ARGV_LOG", str(log))
     fake_bin("mmdflux", "cat >/dev/null\nprintf 'rendered\\n'\n")
     rendered, error = status_text(snapshot())
-    assert rendered == "rendered" and error is None
+    assert rendered == "rendered\n" and error is None
     assert log.read_text().splitlines() == ["--format", "text"]
 
 
