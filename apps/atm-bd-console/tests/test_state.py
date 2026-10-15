@@ -112,19 +112,26 @@ def test_failed_write_leaves_the_previous_snapshot_intact(tmp_path: Path, monkey
 def test_missing_data_and_live_process_lock_are_typed(tmp_path: Path) -> None:
     missing = load_snapshot(tmp_path, "atm-bh")
     assert isinstance(missing, Err) and isinstance(missing.error, NotFound)
-    code = "from atm_bd_console.state import acquire_lock; import sys,time; held = acquire_lock(sys.argv[1], 'atm-bh'); print(type(held).__name__, flush=True); time.sleep(60)"
-    child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], text=True, stdout=subprocess.PIPE)
-    assert child.stdout is not None
-    ready, _, _ = select.select([child.stdout], [], [], READY_DEADLINE_S)
-    if not ready:
-        child.kill()
-        child.wait(timeout=5)
-        raise AssertionError(f"readiness stage: child printed no lock result within {READY_DEADLINE_S}s")
-    assert child.stdout.readline().strip() == "Ok"
-    held = acquire_lock(tmp_path, "atm-bh")
-    assert isinstance(held, Err) and isinstance(held.error, LockHeld) and held.error.snapshot_age_s is None
-    child.kill()
-    child.wait(timeout=5)
+    code = "from atm_bd_console.state import acquire_lock; import sys; held = acquire_lock(sys.argv[1], 'atm-bh'); print(type(held).__name__, flush=True); sys.stdin.read()"
+    child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        assert child.stdout is not None
+        ready, _, _ = select.select([child.stdout], [], [], READY_DEADLINE_S)
+        if not ready:
+            raise AssertionError(f"readiness stage: child printed no lock result within {READY_DEADLINE_S}s")
+        assert child.stdout.readline().strip() == "Ok"
+        held = acquire_lock(tmp_path, "atm-bh")
+        assert isinstance(held, Err) and isinstance(held.error, LockHeld) and held.error.snapshot_age_s is None
+    finally:
+        if child.stdin is not None:
+            child.stdin.close()  # EOF ends the child's stdin read, so it exits and releases its lock
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+        if child.stdout is not None:
+            child.stdout.close()
     released = acquire_lock(tmp_path, "atm-bh")
     assert isinstance(released, Ok)
     released.value.close()
