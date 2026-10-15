@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
+from typing import get_type_hints
 
 import pytest
 from contract_samples import ERRORS, NOT_FOUND, PLUS_TWO, SAMPLES, SNAPSHOT, TASK
@@ -111,10 +112,17 @@ def test_missing_field_and_datetime_errors_are_results() -> None:
 def test_datetime_encodes_utc_and_snapshot_staleness_is_strict() -> None:
     now = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
     assert to_json(now) == '"2026-10-14T12:00:00Z"'
-    snapshot = type("SnapshotLike", (), {"generated_at": now - timedelta(seconds=120), "interval_s": 60})()
-    assert not snapshot_stale(snapshot, now)
-    snapshot = type("SnapshotLike", (), {"generated_at": now - timedelta(seconds=121), "interval_s": 60})()
-    assert snapshot_stale(snapshot, now)
+    assert SNAPSHOT.interval_s == 60
+    at_limit = replace(SNAPSHOT, generated_at=now - timedelta(seconds=120))
+    assert not snapshot_stale(at_limit, now)
+    past_limit = replace(SNAPSHOT, generated_at=now - timedelta(seconds=121))
+    assert snapshot_stale(past_limit, now)
+    slower = replace(past_limit, interval_s=61)
+    assert not snapshot_stale(slower, now)
+
+
+def test_snapshot_stale_signature_is_snapshot() -> None:
+    assert get_type_hints(snapshot_stale)["snapshot"] is Snapshot
 
 
 def test_each_error_kind_round_trips_inside_result() -> None:

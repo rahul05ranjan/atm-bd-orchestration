@@ -22,6 +22,7 @@ from .result import (
     Timeout,
     Unreachable,
 )
+from .types import Snapshot
 
 _ERRORS: dict[str, type[Any]] = {
     "command_failed": CommandFailed, "timeout": Timeout, "rejected": Rejected, "unreachable": Unreachable,
@@ -176,5 +177,6 @@ def _decode_error(value: Any, path: str) -> Error:
     return _decode(error_type, value, path)
 
 
-def snapshot_stale(snapshot: Any, now: datetime) -> bool:
+def snapshot_stale(snapshot: Snapshot, now: datetime) -> bool:
+    """The one staleness rule: now - generated_at > 2 * interval_s."""
     return now - snapshot.generated_at > timedelta(seconds=snapshot.interval_s * 2)
