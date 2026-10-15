@@ -9,7 +9,7 @@ from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .log import create_console_logger
 from .result import Err, Ok
 from .state import StateStore, acquire_lock, load_merges, load_prs
-from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, PrsFile, State
+from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, Metrics, PrsFile, Snapshot, State
 
 
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
@@ -43,7 +43,15 @@ def step(config: Config, state: State, force_github: bool, store=None):
     now = datetime.now(UTC)
     file, repo = atm_bd.phase_file(config.repo_root, config.phase), atm_bd.repo_config(config.repo_root)
     if isinstance(file, Err) or isinstance(repo, Err):
-        raise TypeError("phase and repository configuration must be valid")
+        errors = tuple(item.error for item in (file, repo) if isinstance(item, Err))
+        snapshot = Snapshot(1, now, config.phase, False, None, (), (), (), errors, Metrics(0, 0, 0, 0),
+                            _gh(config.github), None, None, "graph TD", (), config.interval_s, config.lead,
+                            "", (), (), {})
+        logger = create_console_logger(config.repo_root)
+        if isinstance(logger, Ok):
+            logger.value.event("tick_start", phase=config.phase)
+            logger.value.event("tick_end", actions=0)
+        return snapshot, state
     logger = create_console_logger(config.repo_root)
     if isinstance(logger, Ok): logger.value.event("tick_start", phase=config.phase)
     root = beads_source.show((file.value.root_id,))
