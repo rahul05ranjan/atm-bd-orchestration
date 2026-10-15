@@ -7,7 +7,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import __version__, app, atm_bd, render, runner
+from . import __version__, atm_bd, render, runner
 from . import config as config_source
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
@@ -58,7 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     saved = load_state(loaded.value.repo_root, root_id)
     state = saved.value if isinstance(saved, Ok) else EMPTY
     if args.once and not args.headless and args.command != "snapshot":
-        return app.run(loaded.value, runner.step)
+        from .app import run
+
+        return run(loaded.value, runner.step)
     if args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
@@ -75,4 +77,6 @@ def main(argv: list[str] | None = None) -> int:
             for error in snapshot.errors:
                 print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
         return 0
-    return app.run(loaded.value, runner.step)
+    from .app import run
+
+    return run(loaded.value, runner.step)
