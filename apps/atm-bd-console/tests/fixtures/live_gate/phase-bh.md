@@ -41,13 +41,12 @@ The verbatim pane captures from this one `08:09` session are retained in
 
 ```text
  Dispatch  Status  PRs
-╸━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-phase-bh · 07:58 · next 60s
+╸━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+phase-bh · 08:09 · next 60s
 
 · team-lead  0
 ● arch-ctm  1
- 🌀 bh-10.qa1-f1-r1-fix.1   2m phase-bh: <atm-task id="atm-bh-10.qa1-f1-r1-fix.1" sprint="bh-10" mode="dev-fix">
-  <description><![CDATA[San…
+ 🌀 bh-10.qa1-f1-r3-fix.1  23s phase-bh: <atm-task id="atm-bh-10.qa1-f1-r3-fix.1" sprint="bh-10" mode="dev-fix">
 · atm-sanity  0
 · cipher  0
 · cipher2  0
@@ -59,19 +58,17 @@ phase-bh · 07:58 · next 60s
 · quality-mgr  0
 · solar  0
 · teammate  0
-● trinity  1
- 🌀 bh-10.group-qa-f8       1m phase-bh: <atm-task id="atm-bh-10.group-qa-f8" sprint="bh-10" mode="fix">
-  <description><![CDATA[Fix `atm-bh…
+· trinity  0
 
-== Held (12)
-  bh-10.qa1-f1-r1-qa       0s  not ready
-  bh-10.qa1-f1-r1-qa       0s  branch not on origin: <missing>
-  bh-10.qa1-f1-r1-qa       0s  no worktree for None
-  bh-10.qa1-f1-r1-sanity   0s  not ready
-  bh-10.qa1-f1-r1-sanity   0s  branch not on origin: <missing>
-  bh-10.qa1-f1-r1-sanity   0s  no worktree for None
+== Held (6)
+  bh-10.qa1-f1-r3-qa       0s  not ready
+  bh-10.qa1-f1-r3-qa       0s  branch not on origin: <missing>
+  bh-10.qa1-f1-r3-qa       0s  no worktree for None
+  bh-10.qa1-f1-r3-sanity   0s  not ready
+  bh-10.qa1-f1-r3-sanity   0s  branch not on origin: <missing>
+  bh-10.qa1-f1-r3-sanity   0s  no worktree for None
 
-gh: graphql ✅ 07:58 | 10/11 [████████░] 91% | active 0h00m | tick 07:58:41
+gh: graphql ✅ 08:09 | 10/11 [████████░] 91% | active 0h00m | tick 08:09:36
 ```
 
 ## Status tab and selected sprint
@@ -81,12 +78,12 @@ The tmux mouse interaction selected the Status tab and then selected
 
 This is a terminal viewport capture, not a claim of a complete graph dump:
 the right side of the rendered DAG is cropped at the tmux width. Likewise,
-the live Dispatch pane reports `Held (12)`, while its excerpt below shows the
-first six held rows only; the remaining rows were below the captured viewport.
+the live Dispatch pane reports `Held (6)`, and its complete six held rows are
+shown in the captured viewport.
 
 ```text
  Dispatch  Status  PRs
-━━━━━━━━━━╸━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━╸━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 sprints 9/10 · ✅ 9 · 🌀 1 · ⏳ 0
 ▊ atm-bh-1  bh-1: contract: Result, source and tick types, JSON codec
 ▊ atm-bh-2  bh-2: bead-queues as a snapshot viewer, install check
@@ -98,23 +95,12 @@ sprints 9/10 · ✅ 9 · 🌀 1 · ⏳ 0
 ▊ atm-bh-8  bh-8: renderers: dashboard, status bar, Status DAG, PRs
 ▊ atm-bh-9  bh-9: runner.py, cli.py (headless, show), MVP gates
 ▊ atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
-
 atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
   dev    atm-bh-10.group-dev  closed  arch-ctm
   qa     atm-bh-10.group-qa  closed  quality-mgr
-  fix    atm-bh-10.qa1-f1-r1-fix  open  arch-ctm
-  qa     atm-bh-10.qa1-f1-r1-qa  open  unassigned
-  qa     atm-bh-10.group-qa-f8-r2-qa  open  quality-mgr
-  sanity atm-bh-10.group-qa-f8-r2-sanity  open  unassigned
-
-                                                                       ┌──────────────────────────────────────────────────────────────────
-                                                                       │
-                                                                       ▼
-┌──────────────────────────────────────────────────────────────────────┐      ┌───────────────────────────────────────────────────────────
-│ ✅ atm-bh-3 bh-3: ATM source: members, tasks, presence, send, assign │      │ ✅ atm-bh-4 bh-4: beads source and the atm-bd phase and fo
-└──────────────────────────────────────────────────────────────────────┘      └───────────────────────────────────────────────────────────
-
-gh: graphql ✅ 07:58 | 10/11 [████████░] 91% | active 0h00m | tick 07:58:41
+  fix    atm-bh-10.qa1-f1-r3-fix  open  arch-ctm
+  qa     atm-bh-10.qa1-f1-r3-qa  open  unassigned
+gh: graphql ✅ 08:09 | 10/11 [████████░] 91% | active 0h00m | tick 08:09:36
 ```
 
 ## PRs tab after refresh
@@ -125,11 +111,11 @@ empty-state text between the tab divider and the status bar):
 
 ```text
  Dispatch  Status  PRs
-━━━━━━━━━━━━━━━━━━╸━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━╸━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
 
-gh: graphql ✅ 07:58 | 10/11 [████████░] 91% | active 0h00m | tick 07:58:57
+gh: graphql ✅ 08:09 | 10/11 [████████░] 91% | active 0h00m | tick 08:09:51
 ```
 
 ## Raw GitHub reads and interaction sequence
@@ -141,7 +127,7 @@ The initial tick is the sole non-forced read. The following two reads are,
 in order, the one PRs activation and the one `r`; the session then quit.
 
 ```text
-{"version":"v1","timestamp":"2026-10-15T14:58:41.261137Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":false,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
-{"version":"v1","timestamp":"2026-10-15T14:58:53.269933Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
-{"version":"v1","timestamp":"2026-10-15T14:58:57.465984Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
+{"version":"v1","timestamp":"2026-10-15T15:09:39.755027Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":false,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
+{"version":"v1","timestamp":"2026-10-15T15:09:50.537686Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
+{"version":"v1","timestamp":"2026-10-15T15:09:54.715871Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
 ```
