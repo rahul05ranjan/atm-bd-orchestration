@@ -21,6 +21,10 @@ Example: {CONSOLE_NAME} --phase <x> --as fenix"""
 EMPTY = State((), None, None, None, None, (), (), {})
 
 
+def now() -> datetime:
+    return datetime.now(UTC)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("command", choices=("show", "snapshot"), nargs="?")
@@ -37,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     root_id = f"atm-phase-{args.phase}"
     if args.command == "show":
         snapshot = load_snapshot(repo_root, root_id)
-        if isinstance(snapshot, Ok) and (snapshot.value.stopped is not None or not snapshot_stale(snapshot.value, datetime.now(UTC))):
+        if isinstance(snapshot, Ok) and (snapshot.value.stopped is not None or not snapshot_stale(snapshot.value, now())):
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 0
@@ -61,9 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
-            if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, datetime.now(UTC)):
+            if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
                 text = f"{CONSOLE_NAME} stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
-                print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
+                print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:
             snapshot, _ = runner.step(loaded.value, state, False, lock.value)
@@ -71,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             for action in (item for item in snapshot.sent if item.at == snapshot.generated_at):
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text}))
             for error in snapshot.errors:
-                print(json.dumps({"at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
+                print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
         return 0
     from .app import run
 

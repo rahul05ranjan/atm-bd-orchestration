@@ -5,9 +5,10 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
 from contract_samples import CONFIG, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
 
-from atm_bd_console import cli
+from atm_bd_console import __version__, cli
 from atm_bd_console.result import Err, NotFound, Ok
 
 
@@ -39,10 +40,34 @@ def test_headless_and_show_do_not_load_textual(tmp_path) -> None:
 
 
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(replace(SNAPSHOT, generated_at=datetime.now(UTC))))
+    clock = datetime(2026, 10, 15, tzinfo=UTC)
+    monkeypatch.setattr(cli, "now", lambda: clock)
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(replace(SNAPSHOT, generated_at=clock)))
     monkeypatch.setattr(cli.runner, "step", lambda *_: (_ for _ in ()).throw(AssertionError("step")))
     assert cli.main(["show", "--phase", "bh"]) == 0
     assert "stopped: phase closed" in capsys.readouterr().out
+
+
+def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["--version"])
+    assert exited.value.code == 0 and __version__ in capsys.readouterr().out
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr("atm_bd_console.app.run", lambda config, step: 17)
+    assert cli.main(["--phase", "bh", "--as", "fenix"]) == 17
+
+
+@pytest.mark.parametrize("failure", ("config", "phase", "repo", "tool"))
+def test_launch_checks_fail_before_running(monkeypatch, capsys, failure) -> None:
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Err(TIMEOUT) if failure == "config" else Ok(CONFIG))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Err(TIMEOUT) if failure == "phase" else Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Err(TIMEOUT) if failure == "repo" else Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None if failure == "tool" else "/fixture/bin")
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 3
+    assert "not_found" in capsys.readouterr().out if failure == "tool" else "timeout" in capsys.readouterr().out
 
 
 def test_show_uses_the_configured_repository_root(monkeypatch, capsys, tmp_path) -> None:
