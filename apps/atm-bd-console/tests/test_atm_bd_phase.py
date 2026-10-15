@@ -224,8 +224,9 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     got = step(qa, {}).value
     assert (got.kind, got.checked_bead, got.qa_round, got.sprint_bead, got.carry_forward) == ("qa", "atm-bh-4.group-dev", 1, "atm-bh-4", None)
     fix_qa = _bead("atm-bh-4.f1-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.f1", "round": 2, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
-    fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",))
-    assert step(fix_qa, {fix.id: fix}).value.carry_forward == "atm-bh-4.f1"
+    fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",), {"round": 1})
+    fixed = step(fix_qa, {fix.id: fix}).value
+    assert (fixed.carry_forward, fixed.qa_round) == ("atm-bh-4.f1", 2)
     no_checked = step(_bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",)), {})
     assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.checked_bead" in no_checked.error.what
     no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})

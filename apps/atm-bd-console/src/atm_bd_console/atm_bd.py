@@ -203,8 +203,14 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     if kind == "qa" and not sprint_bead: return _missing(f"{bead.id}.metadata.sprint_bead")
     top = _top_epic(bead, parents)
     carry = checked if kind == "qa" and stage == "qa" and ("stage:fix" in parents.get(checked, bead).labels or "stage:finding" in parents.get(checked, bead).labels) else None
+    qa_round = metadata.get("round")
+    fix_bead = parents.get(checked) if carry else None
+    if fix_bead is not None and "stage:fix" in fix_bead.labels:
+        # Fix verification is the round after the fix bead's own round (bh-4 D5).
+        if fix_bead.metadata.get("round") is None: return _missing(f"{fix_bead.id}.metadata.round")
+        qa_round = fix_bead.metadata["round"] + 1
     prefix = (top or bead.id).split("-", 1)[0] + "-"
-    return Ok(Step(bead.id, sprint, kind, bool(metadata.get("quick_fix")), "anchor" in bead.labels, bead.status, False, bead.assignee, metadata.get("branch"), metadata.get("pr_target"), metadata.get("worktree"), metadata.get("layer"), metadata.get("difficulty"), (top or bead.id).removeprefix(prefix), top, bead.claimed_at, bead.closed_at, bead.title, checked, sprint_bead, metadata.get("round"), carry))
+    return Ok(Step(bead.id, sprint, kind, bool(metadata.get("quick_fix")), "anchor" in bead.labels, bead.status, False, bead.assignee, metadata.get("branch"), metadata.get("pr_target"), metadata.get("worktree"), metadata.get("layer"), metadata.get("difficulty"), (top or bead.id).removeprefix(prefix), top, bead.claimed_at, bead.closed_at, bead.title, checked, sprint_bead, qa_round, carry))
 
 
 
@@ -279,11 +285,14 @@ def phase(
 
 def dispatch_spec(ctx: DispatchContext) -> Result[DispatchSpec]:
     step = ctx.step; pr = ctx.pr
+    # Template vars are JSON: layer PRs go as their numbers, the form `gh pr view <n>` takes.
+    layer_prs = [layer.number for layer in ctx.layer_prs]
     common = {"task_id": step.bead_id, "checked_bead": step.checked_bead or "", "sprint": step.sprint or "", "worktree_path": ctx.worktree_path, "branch": step.branch or "", "commit": ctx.commit, "base": ctx.base, "pr_number": str(pr.number) if pr else "", "pr_url": pr.url if pr else ""}
     if step.kind == "sanity":
-        return Ok(DispatchSpec("dev-sanity-template.xml.j2", common | {"primary_checkout": ctx.repo.primary_checkout, "lint_command": ctx.repo.lint_command, "layer_prs": ctx.layer_prs}))
+        return Ok(DispatchSpec("dev-sanity-template.xml.j2", common | {"primary_checkout": ctx.repo.primary_checkout, "lint_command": ctx.repo.lint_command, "layer_prs": layer_prs}))
     if step.kind == "qa":
-        values = common | {"phase": ctx.phase_id, "phase_feature": ctx.phase_title, "stack": ctx.sprint.stack, "layer": ctx.sprint.layer, "round": step.qa_round or 1, "policy_path": ctx.repo.policy_path, "reviewers_round1": ctx.repo.reviewers_round1, "layer_prs": ctx.layer_prs, "sprint_bead": step.sprint_bead or ""}
+        if step.qa_round is None: return _missing(f"{step.bead_id}.metadata.round")
+        values = common | {"phase": ctx.phase_id, "phase_feature": ctx.phase_title, "stack": ctx.sprint.stack, "layer": ctx.sprint.layer, "round": step.qa_round, "policy_path": ctx.repo.policy_path, "reviewers_round1": list(ctx.repo.reviewers_round1), "layer_prs": layer_prs, "sprint_bead": step.sprint_bead or ""}
         if step.carry_forward: values["carry_forward"] = step.carry_forward
         return Ok(DispatchSpec("qa-template.xml.j2", values))
     return _missing(f"dispatch template for {step.kind}")
