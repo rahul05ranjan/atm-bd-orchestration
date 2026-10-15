@@ -1,0 +1,87 @@
+# provenance: source SHA 6af2231085580d0bcba1c6234afcbc1840854062
+# provenance: installed version 0.1.0 (uv tool install of the worktree at that SHA, scratch tool dirs)
+# provenance: session tmux new-session -d -s bhrf3 -x 300 -y 80, then the console command below
+# provenance: command cd /Users/randlee/github/atm-core && GH_REPO=randlee/atm-bd-orchestration /private/tmp/claude-501/-Users-randlee-github-atm-core/9d403cde-f4fc-4a96-9889-e232f1fe0bc9/scratchpad/refresh-f3/bin/atm-bd-console --phase bh --as solar --interval 600 --dry-run
+# provenance: capture tmux capture-pane -p -t bhrf3 (status pane), taken 18:52:29Z, after the Enter that selected atm-bh-10 (18:52:23Z) and before the BTab key (18:52:33Z)
+# provenance: capture window 2026-10-15T18:51:45Z to 2026-10-15T18:53:03Z; full UTC times in the phase-bh.md transcript
+# ---- payload follows: verbatim tmux capture-pane -p output ----
+ Dispatch  Status  PRs
+━━━━━━━━━━╸━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+sprints 10/10 · ✅ 10 · 🌀 0 · ⏳ 0
+▊▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▎
+▊ atm-bh-1  bh-1: contract: Result, source and tick types, JSON codec                                                                                                                                                                                                                                      ▎
+▊ atm-bh-2  bh-2: bead-queues as a snapshot viewer, install check                                                                                                                                                                                                                                          ▎
+▊ atm-bh-3  bh-3: ATM source: members, tasks, presence, send, assign                                                                                                                                                                                                                                       ▎
+▊ atm-bh-4  bh-4: beads source and the atm-bd phase and formula mapping                                                                                                                                                                                                                                    ▎
+▊ atm-bh-5  bh-5: git and GitHub sources: refs, merge check, worktrees, open PRs                                                                                                                                                                                                                           ▎
+▊ atm-bh-6  bh-6: tick rules: snapshot, holds, problems, agent status, metrics, stops                                                                                                                                                                                                                      ▎
+▊ atm-bh-7  bh-7: runtime files: JSON state, lock, config, logging                                                                                                                                                                                                                                         ▎
+▊ atm-bh-8  bh-8: renderers: dashboard, status bar, Status DAG, PRs                                                                                                                                                                                                                                        ▎
+▊ atm-bh-9  bh-9: runner.py, cli.py (headless, show), MVP gates                                                                                                                                                                                                                                            ▎
+▊ atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs                                                                                                                                                                                                                                            ▎
+▊▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▎
+atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
+  dev    atm-bh-10.group-dev  closed  arch-ctm
+  qa     atm-bh-10.group-qa  closed  quality-mgr
+  qa     atm-phase-bh.refresh-f3-qa  open  arch-ctm
+  sanity atm-phase-bh.refresh-f3-sanity  open  unassigned
+                                                                                                                                                                                                                ┌───────────────────────────────────────────────────────────────────────┐       ┌───────────
+                                                                                                                                                                                                                │ ✅ atm-bh-1 bh-1: contract: Result, source and tick types, JSON codec │       │ ✅ atm-bh-
+                                                                                                                                                                                                                └───────────────────────────────────────────────────────────────────────┘       └───────────
+                                                                                                                                                                                                                 │             │             │             │             │             │
+                                                                       ┌───────────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────┼─────────────┴─────────────┘             └─────────────┴─────────────┼────────────────────
+                                                                       │                                                                       │                                                                 │                                                                     │
+                                                                       ▼                                                                       ▼                                                                 ▼                                                                     ▼
+┌──────────────────────────────────────────────────────────────────────┐       ┌─────────────────────────────────────────────────────────────────────────┐    ┌──────────────────────────────────────────────────────────────────────────────────┐    ┌─────────────────────────────────────────────────────
+│ ✅ atm-bh-3 bh-3: ATM source: members, tasks, presence, send, assign │       │ ✅ atm-bh-4 bh-4: beads source and the atm-bd phase and formula mapping │    │ ✅ atm-bh-5 bh-5: git and GitHub sources: refs, merge check, worktrees, open PRs │    │ ✅ atm-bh-6 bh-6: tick rules: snapshot, holds, probl
+└──────────────────────────────────────────────────────────────────────┘       └─────────────────────────────────────────────────────────────────────────┘    └──────────────────────────────────────────────────────────────────────────────────┘    └─────────────────────────────────────────────────────
+                                                                       │                                                                  │                                                              │                                                                 │
+                                                                       └──────────────────────────────────────────────────────────────────┴──────────────────┬──────────────────┐                  ┌─────┘            ┌──────────────────┬───────────────────┬─────────────┴────────────────────────────────
+                                                                                                                                                             ▼                  ▼                  ▼                  ▼                  ▼                   ▼
+                                                                                                                                                            ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+                                                                                                                                                            │ ✅ atm-bh-9 bh-9: runner.py, cli.py (headless, show), MVP gates atm-phase-bh.end-f18 unassigned │
+                                                                                                                                                            └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                                                                                                                                                                             │
+                                                                                                                                                                                                             │
+                                                                                                                                                                                                             ▼
+                                                                                                                                                            ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+                                                                                                                                                            │ ✅ atm-bh-10 bh-10: Textual app: Dispatch, Status DAG, PRs tabs atm-phase-bh.refresh-f3 cipher │
+                                                                                                                                                            └────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                                                         ▋
+gh: graphql ✅ 11:51 | 10/10 [█████████] 100% | active 0h00m | tick 11:51:46

@@ -1,0 +1,87 @@
+# provenance: source SHA 6af2231085580d0bcba1c6234afcbc1840854062
+# provenance: installed version 0.1.0 (uv tool install of the worktree at that SHA, scratch tool dirs)
+# provenance: session tmux new-session -d -s bhrf3 -x 300 -y 80, then the console command below
+# provenance: command cd /Users/randlee/github/atm-core && GH_REPO=randlee/atm-bd-orchestration /private/tmp/claude-501/-Users-randlee-github-atm-core/9d403cde-f4fc-4a96-9889-e232f1fe0bc9/scratchpad/refresh-f3/bin/atm-bd-console --phase bh --as solar --interval 600 --dry-run
+# provenance: capture tmux capture-pane -p -t bhrf3 (prs pane), taken between forced tick_end 18:52:50.740752Z and the q key sent at 18:53:00Z
+# provenance: capture window 2026-10-15T18:51:45Z to 2026-10-15T18:53:03Z; full UTC times in the phase-bh.md transcript
+# ---- payload follows: verbatim tmux capture-pane -p output ----
+ Dispatch  Status  PRs
+━━━━━━━━━━━━━━━━━━╸━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+gh: graphql ✅ 11:52 | 10/10 [█████████] 100% | active 0h00m | tick 11:52:48

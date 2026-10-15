@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import run_scenario
 from contract_samples import (
     ACTION,
     BEAD,
@@ -25,13 +26,30 @@ from contract_samples import (
     TIMEOUT,
     WORKTREE,
 )
+from rich.text import Text
 
 from atm_bd_console import __version__, app, cli, runner
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE
 
 PKG = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def cli_runtime(monkeypatch, tmp_path):
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console" / PHASE_FILE.root_id))
+    monkeypatch.setattr(cli.config_source, "repo_root", lambda: tmp_path)
+
+    def load_config(_root, _phase, _lead, **options):
+        return Ok(replace(config, **{key: value for key, value in options.items() if value is not None}))
+
+    monkeypatch.setattr(cli.config_source, "load_config", load_config)
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli, "now", lambda: datetime(2026, 10, 15, tzinfo=UTC))
+    return config
 
 
 def test_missing_as_uses_documented_message(capsys) -> None:
@@ -156,6 +174,40 @@ def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
     assert "stopped: phase closed" in capsys.readouterr().out
 
 
+def test_show_fresh_running_snapshot_reads_only_snapshot(cli_runtime, monkeypatch, capsys) -> None:
+    snapshot = replace(SNAPSHOT, generated_at=cli.now(), root_closed=False, stopped=None)
+    loaded, rendered = [], []
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("show must only read its saved snapshot")
+
+    def load_snapshot(root, root_id):
+        loaded.append((root, root_id))
+        return Ok(snapshot)
+
+    def dashboard(value, width, height):
+        rendered.append(("dashboard", value, width, height))
+        return Text("fresh dashboard")
+
+    def status_bar(value, width):
+        rendered.append(("status", value, width))
+        return Text("fresh status")
+
+    monkeypatch.setattr(cli, "load_snapshot", load_snapshot)
+    monkeypatch.setattr(cli, "acquire_lock", forbidden)
+    monkeypatch.setattr(cli.config_source, "load_config", forbidden)
+    monkeypatch.setattr(cli.atm_bd, "phase_file", forbidden)
+    monkeypatch.setattr(cli.atm_bd, "repo_config", forbidden)
+    monkeypatch.setattr(cli.runner, "step", forbidden)
+    monkeypatch.setattr(cli.render, "dashboard", dashboard)
+    monkeypatch.setattr(cli.render, "status_bar", status_bar)
+
+    assert cli.main(["show", "--phase", "bh"]) == 0
+    assert loaded == [(Path(cli_runtime.repo_root), PHASE_FILE.root_id)]
+    assert rendered == [("dashboard", snapshot, 120, 80), ("status", snapshot, 120)]
+    assert capsys.readouterr().out == "fresh dashboard\nfresh status\n"
+
+
 def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
     with pytest.raises(SystemExit) as exited:
         cli.main(["--version"])
@@ -257,6 +309,138 @@ def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
     assert json.loads(capsys.readouterr().out)["outcome"] == "failed command_failed"
 
 
+@pytest.mark.parametrize("stale", (False, True))
+def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monkeypatch, capsys, stale) -> None:
+    generated_at = cli.now() - timedelta(seconds=2 * cli_runtime.interval_s + 1 if stale else 0)
+    snapshot = replace(SNAPSHOT, generated_at=generated_at, root_closed=False, stopped=None, errors=())
+    acquired = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
+    assert isinstance(acquired, Ok)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("held lock must not run a tick or read a runtime source")
+
+    monkeypatch.setattr(cli.runner, "step", forbidden)
+    for source, name in (
+        (runner.beads_source, "show"), (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
+        (runner.atm_source, "members"), (runner.atm_source, "tasks"),
+        (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
+        (runner.github_source, "open_prs"),
+    ):
+        monkeypatch.setattr(source, name, forbidden)
+    with acquired.value as store:
+        assert store.write_snapshot(snapshot) == Ok(None)
+        assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(output) == (2 if stale else 1)
+    assert output[0]["kind"] == "error" and "lock_held" in output[0]["text"]
+    if stale:
+        last_tick = generated_at.astimezone().strftime("%H:%M")
+        assert output[1] == {
+            "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
+            "text": f"atm-bd-console stopped updating (last tick {last_tick})",
+        }
+
+
+def test_snapshot_subcommand_runs_one_dry_tick_without_actions(cli_runtime, monkeypatch, capsys) -> None:
+    calls = []
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("snapshot must not send or assign actions")
+
+    def step(config, state, force, store):
+        calls.append((config.dry_run, state, force, store))
+        assert config.dry_run
+        return replace(SNAPSHOT, generated_at=cli.now(), root_closed=False, stopped=None, errors=(), sent=(ACTION,)), state
+
+    monkeypatch.setattr(cli.runner, "step", step)
+    monkeypatch.setattr(runner.atm_source, "send", forbidden)
+    monkeypatch.setattr(runner.atm_source, "assign", forbidden)
+
+    assert cli.main(["snapshot", "--phase", "bh", "--as", "fenix"]) == 0
+    assert len(calls) == 1 and calls[0][:3] == (True, INITIAL_STATE, False)
+    assert calls[0][3].directory == Path(cli_runtime.state_dir)
+    assert capsys.readouterr().out == ""
+
+
+def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, capsys, tmp_path) -> None:
+    ready = tmp_path / "holder-ready"
+    code = (
+        "import sys; from pathlib import Path; from atm_bd_console.state import acquire_lock; "
+        "from atm_bd_console.result import Ok; "
+        "held = acquire_lock(sys.argv[1], sys.argv[2]); assert isinstance(held, Ok); "
+        "Path(sys.argv[3]).write_text('ready'); sys.stdin.read()"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", code, cli_runtime.repo_root, PHASE_FILE.root_id, str(ready)],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
+    calls = []
+
+    def step(config, state, force, store):
+        locked = acquire_lock(config.repo_root, PHASE_FILE.root_id)
+        assert isinstance(locked, Err) and isinstance(locked.error, LockHeld)
+        calls.append((config.repo_root, state, force, store.directory))
+        return replace(SNAPSHOT, root_closed=False, stopped=None, errors=(), sent=()), state
+
+    monkeypatch.setattr(cli.runner, "step", step)
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists():
+            assert child.poll() is None, "lock holder exited before signaling readiness"
+            assert time.monotonic() < deadline, "lock holder was not ready within 5 seconds"
+            time.sleep(0.01)
+        locked = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
+        assert isinstance(locked, Err) and isinstance(locked.error, LockHeld)
+        child.kill()
+        child.wait(timeout=5)
+        assert child.returncode is not None and child.returncode < 0
+
+        assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+        assert calls == [(cli_runtime.repo_root, INITIAL_STATE, False, Path(cli_runtime.state_dir))]
+        assert capsys.readouterr().out == ""
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=5)
+
+
+def test_headless_prints_only_actions_from_the_current_tick(cli_runtime, monkeypatch, capsys) -> None:
+    current = replace(ACTION, at=cli.now(), text="current action")
+    previous = replace(ACTION, at=cli.now() - timedelta(seconds=cli_runtime.interval_s), text="old action")
+    snapshot = replace(SNAPSHOT, generated_at=cli.now(), root_closed=False, stopped=None, errors=(), sent=(previous, current))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (snapshot, INITIAL_STATE))
+
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(output) == 1 and output[0]["text"] == "current action"
+
+
+@pytest.mark.parametrize("failure_stage", ("lock", "tick"))
+def test_headless_io_failures_keep_path_message_and_fix(cli_runtime, monkeypatch, capsys, failure_stage) -> None:
+    directory = Path(cli_runtime.state_dir)
+    if failure_stage == "lock":
+        (directory / "lock").mkdir(parents=True)
+        failed = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
+    else:
+        acquired = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
+        assert isinstance(acquired, Ok)
+        with acquired.value as store:
+            (directory / "snapshot.json").mkdir()
+            failed = store.write_snapshot(SNAPSHOT)
+        assert isinstance(failed, Err)
+        snapshot = replace(SNAPSHOT, root_closed=False, stopped=None, errors=(failed.error,), sent=())
+        monkeypatch.setattr(cli.runner, "step", lambda *_: (snapshot, INITIAL_STATE))
+    assert isinstance(failed, Err) and isinstance(failed.error, IoFailed)
+
+    assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output == [{
+        "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
+        "text": f"io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
+    }]
+
+
 def test_headless_lock_failure_is_a_json_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
@@ -298,6 +482,8 @@ def test_interactive_launch_defers_state_loading_to_the_locked_app(monkeypatch) 
 def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> None:
     config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / "atm-phase-bh"))
     seen: list[object] = []
+    acquired = acquire_lock(tmp_path, "atm-phase-bh")
+    assert isinstance(acquired, Ok)
 
     class FakeApp:
         def __init__(self, _config, step, state, _startup_error):
@@ -309,13 +495,16 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
             return 0
 
     def runner_step(current, current_state, force, store):
+        assert store is acquired.value and store._lock_file is not None
         seen.extend((current, current_state, force, store))
         return SNAPSHOT, current_state
 
     monkeypatch.setattr(app, "ConsoleApp", FakeApp)
+    monkeypatch.setattr(app, "acquire_lock", lambda *_: acquired)
     assert app.run(config, None, INITIAL_STATE, runner_step=runner_step) == 0
     assert seen[:3] == [config, INITIAL_STATE, False]
-    assert seen[3] is not None
+    assert seen[3] is acquired.value
+    assert acquired.value._lock_file is None
 
 
 def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch, tmp_path, capsys):
@@ -347,7 +536,13 @@ def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch,
 
 
 @pytest.mark.parametrize("member_read_fails", (False, True))
-@pytest.mark.parametrize("runtime_damage", (None, "corrupt", "unreadable"))
+@pytest.mark.parametrize("runtime_damage", (
+    None, "corrupt",
+    pytest.param("unreadable", marks=pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="chmod permissions require a non-root POSIX user",
+    )),
+))
 def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     monkeypatch, tmp_path, capsys, member_read_fails: bool, runtime_damage,
 ) -> None:
@@ -453,14 +648,14 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     def run_in_pilot(console_app):
         async def scenario():
             async with console_app.run_test() as pilot:
-                await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
+                await pilot.app.workers.wait_for_complete()
                 await pilot.pause()
                 if runtime_damage is not None:
                     assert console_app.is_running
                     assert "Errors" in str(console_app.query_one("#dashboard").render())
             app_result.append((console_app.snapshot, console_app.state))
 
-        asyncio.run(scenario())
+        run_scenario(scenario())
         return 0
 
     monkeypatch.setattr(app.ConsoleApp, "run", run_in_pilot)

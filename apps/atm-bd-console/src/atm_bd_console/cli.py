@@ -10,7 +10,7 @@ from . import __version__, atm_bd, render, runner
 from . import config as config_source
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
-from .result import Err, Ok
+from .result import Err, Error, IoFailed, Ok
 from .state import acquire_lock, load_snapshot
 from .types import INITIAL_STATE
 
@@ -20,6 +20,12 @@ The phase lead varies by phase, so it is never inferred from $ATM_IDENTITY or th
 Example: {CONSOLE_NAME} --phase <x> --as fenix"""
 def now() -> datetime:
     return datetime.now(UTC)
+
+
+def _error_text(error: Error) -> str:
+    if isinstance(error, IoFailed):
+        return f"{error.kind}: {error.path}: {error.message}: {error.fix}"
+    return f"{error.kind}: {error.fix}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
-            print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{lock.error.kind}: {lock.error.fix}"}))
+            print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": _error_text(lock.error)}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
                 text = f"{CONSOLE_NAME} stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
@@ -74,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))
         if args.headless:
             for error in snapshot.errors:
-                print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{error.kind}: {error.fix}"}))
+                print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": _error_text(error)}))
         return 0
     from .app import run
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,7 +27,7 @@ from contract_samples import (
 from atm_bd_console import log, runner
 from atm_bd_console.log import TickLog
 from atm_bd_console.model import tick as model_tick
-from atm_bd_console.result import ConfigInvalid, Err, NotFound, Ok
+from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Section, SectionRow, Task
 
@@ -126,18 +128,49 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
     closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
-    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
-    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
-    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    shown = []
+
+    def initial_read(value):
+        assert not shown
+        return Ok(value)
+
+    def show(ids):
+        assert not shown and ids == (PHASE_FILE.root_id,)
+        shown.append(ids)
+        return Ok((closed,))
+
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: initial_read(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: initial_read(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", show)
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("closed root must not read another source")
 
-    monkeypatch.setattr(runner.beads_source, "open_beads", forbidden)
-    monkeypatch.setattr(runner.atm_source, "members", forbidden)
-    snapshot, _ = runner.step(CONFIG, STATE, False, Store())
+    store = Store()
+    for source, name in (
+        (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
+        (runner.atm_source, "members"), (runner.atm_source, "tasks"),
+        (runner.atm_source, "send"), (runner.atm_source, "assign"),
+        (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
+        (runner.git_source, "remote_refs"), (runner.git_source, "merge"),
+        (runner.github_source, "open_prs"), (runner.atm_bd, "dispatch_spec"),
+        (store, "load_merges"), (store, "load_prs"),
+        (store, "append_action"), (store, "write_merges"), (store, "write_prs"),
+    ):
+        monkeypatch.setattr(source, name, forbidden)
+    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    assert shown == [(PHASE_FILE.root_id,)]
     assert snapshot.root_closed and snapshot.stopped == "closed"
     assert snapshot.errors == ()
+
+
+def test_runner_passes_the_configured_interval_to_inputs(github_runtime) -> None:
+    store, _, _, inputs = github_runtime
+    config = replace(CONFIG, interval_s=137)
+
+    runner.step(config, RUNNING_STATE, False, store)
+
+    assert len(inputs) == 1 and inputs[0].interval_s == config.interval_s
 
 
 def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> None:
@@ -712,6 +745,7 @@ def test_snapshot_write_failure_is_logged_and_flushed_once(github_runtime, monke
     assert snapshot.errors == (*writes[0].errors, snapshot_error, *((admission_error, flush_error) if logging_fails else ()))
 
 
+@pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0), reason="chmod permissions require a non-root POSIX user")
 def test_runner_reports_real_read_only_store_write_failure(github_runtime, tmp_path) -> None:
     _, _, _, _ = github_runtime
     acquired = acquire_lock(tmp_path, "atm-phase-bh")
@@ -723,7 +757,7 @@ def test_runner_reports_real_read_only_store_write_failure(github_runtime, tmp_p
             snapshot, _ = runner.step(replace(CONFIG, repo_root=str(tmp_path)), RUNNING_STATE, False, store)
         finally:
             directory.chmod(0o700)
-    assert any(error.kind == "io_failed" for error in snapshot.errors)
+    assert any(isinstance(error, IoFailed) and error.path == str(directory / "snapshot.json") for error in snapshot.errors)
 
 
 def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, monkeypatch, tmp_path) -> None:
