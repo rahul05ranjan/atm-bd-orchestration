@@ -193,6 +193,69 @@ def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
 
 
+def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -> None:
+    value = phase(step("dev", "atm-bh-1", branch="pushed", assignee="solar"))
+    remote = RemoteRef("pushed", "sha")
+    first = inputs(value, remotes=Ok((remote,)), prs=Ok(()),
+                   gh=GhStatus("graphql", True, None, NOW, False))
+    snapshot, actions, state = tick(first, STATE, NOW, render)
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert state.batch_due["solar"] == NOW + timedelta(minutes=10)
+
+    unread = replace(first, prs=None, gh=GhStatus("off", None, None, None, False))
+    snapshot, actions, state = tick(unread, state, NOW + timedelta(minutes=5), render)
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert snapshot.problems[0].first_seen == NOW
+    assert actions == ()
+    assert state.batch_due["solar"] == NOW + timedelta(minutes=10)
+
+    snapshot, actions, state = tick(replace(first, gh=GhStatus("graphql", True, None,
+                                                              NOW + timedelta(minutes=10), False)),
+                                    state, NOW + timedelta(minutes=10), render)
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert [action.kind for action in actions] == ["batch"]
+    assert state.batch_due["solar"] == NOW + timedelta(minutes=20)
+
+    found_pr = PullRequest(1, "url", "pushed", "base", "sha", "success", ())
+    snapshot, actions, state = tick(replace(first, prs=Ok((found_pr,)),
+                                            gh=GhStatus("graphql", True, None,
+                                                        NOW + timedelta(minutes=20), False)),
+                                    state, NOW + timedelta(minutes=20), render)
+    assert snapshot.problems == () and actions == () and state.batch_due == {}
+
+
+def test_ci_and_conflict_problems_survive_until_their_sources_are_refreshed() -> None:
+    value = phase(step("dev", "atm-bh-1", branch="pushed", assignee="solar"))
+    failed_pr = PullRequest(1, "url", "pushed", "base", "sha", "failure", ("lint",))
+    first = inputs(value, prs=Ok((failed_pr,)), gh=GhStatus("graphql", True, None, NOW, False))
+    snapshot, _, state = tick(first, STATE, NOW, render)
+    assert [problem.key for problem in snapshot.problems] == ["top_ci:sha"]
+    unread = replace(first, prs=Err(NotFound("not_found", "prs", "retry")),
+                     gh=GhStatus("graphql", False, None, NOW, False))
+    snapshot, actions, state = tick(unread, state, NOW + timedelta(minutes=5), render)
+    assert [problem.key for problem in snapshot.problems] == ["top_ci:sha"]
+    assert actions == ()
+    clean_pr = replace(failed_pr, ci="success", failed_checks=())
+    snapshot, _, _ = tick(replace(first, prs=Ok((clean_pr,)),
+                                  gh=GhStatus("graphql", True, None, NOW + timedelta(minutes=10), False)),
+                          state, NOW + timedelta(minutes=10), render)
+    assert snapshot.problems == ()
+
+    conflict = Merge("pushed", "base", "conflict", ("model.py",), (), NOW)
+    with_merge = replace(first, prs=None, gh=GhStatus("off", None, None, None, False), merges=(Ok(conflict),))
+    snapshot, _, state = tick(with_merge, STATE, NOW, render)
+    assert [problem.key for problem in snapshot.problems] == ["conflict:dev"]
+    snapshot, actions, state = tick(replace(with_merge, merges=(Err(NotFound("not_found", "merge", "retry")),)),
+                                    state, NOW + timedelta(minutes=5), render)
+    assert [problem.key for problem in snapshot.problems] == ["conflict:dev"]
+    assert actions == ()
+    clean_merge = replace(conflict, state="clean", files=())
+    snapshot, _, _ = tick(replace(with_merge, merges=(Ok(clean_merge),)), state,
+                          NOW + timedelta(minutes=10), render)
+    assert snapshot.problems == ()
+
+
 def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
     steps = (
         step("dev-1", "atm-bh-1", status="closed", claimed_at=NOW - timedelta(seconds=100), closed_at=NOW - timedelta(seconds=50)),

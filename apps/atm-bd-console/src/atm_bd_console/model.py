@@ -292,7 +292,10 @@ def _problems(
     now: datetime,
 ) -> tuple[Problem, ...]:
     if phase is None:
-        return ()
+        return tuple(
+            problem for problem in state.problems
+            if problem.key.startswith(("missing_pr:", "top_ci:", "conflict:"))
+        )
     by_branch = {step.branch: step for step in phase.steps if step.branch}
     by_id = {step.bead_id: step for step in phase.steps}
     problems: list[Problem] = []
@@ -320,12 +323,23 @@ def _problems(
                     f"missing_pr:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
                     f"pushed branch {step.branch} has no open PR", now,
                 ))
-    if top_pr is not None and top_pr.ci == "failure":
+    if fresh_github and top_pr is not None and top_pr.ci == "failure":
         checks = ", ".join(top_pr.failed_checks)
         problems.append(Problem(
             f"top_ci:{top_pr.head_sha}", by_branch.get(top_pr.head).bead_id if by_branch.get(top_pr.head) else None,
             inputs.lead, f"top PR #{top_pr.number} CI failed: {checks}", now,
         ))
+    current_keys = {problem.key for problem in problems}
+    refreshed_merges = {merge.branch for merge in merges}
+    for previous in state.problems:
+        if previous.key in current_keys:
+            continue
+        if previous.key.startswith(("missing_pr:", "top_ci:")) and not fresh_github:
+            problems.append(previous)
+        elif previous.key.startswith("conflict:"):
+            step = by_id.get(previous.bead_id)
+            if step is None or step.branch not in refreshed_merges:
+                problems.append(previous)
     return tuple(problems)
 
 
