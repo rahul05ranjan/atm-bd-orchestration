@@ -60,6 +60,11 @@ gh: graphql ✅ 07:24 | 10/11 [████████░] 91% | active 0h00m |
 The tmux mouse interaction selected the Status tab and then selected
 `atm-bh-10` in the live sprint list:
 
+This is a terminal viewport capture, not a claim of a complete graph dump:
+the right side of the rendered DAG is cropped at the tmux width. Likewise,
+the live Dispatch pane reports `Held (12)`, while its excerpt below shows the
+first six held rows only; the remaining rows were below the captured viewport.
+
 ```text
  Dispatch  Status  PRs
 ━━━━━━━━━━╸━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
