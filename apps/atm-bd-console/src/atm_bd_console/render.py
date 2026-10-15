@@ -121,6 +121,9 @@ def _error_text(error: Error) -> str:
         detail = f"snapshot age {age}"
     elif isinstance(error, IoFailed):
         detail = f"{error.path}: {error.message}"
+    else:
+        # A new Error variant must get its own branch here; never fall through to an unset detail.
+        raise TypeError(f"unknown error variant {type(error).__name__}; add it to _error_text")
     return f"{error.kind}: {detail}; {error.fix}"
 
 

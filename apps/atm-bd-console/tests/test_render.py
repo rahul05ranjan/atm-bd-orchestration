@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
@@ -179,6 +180,17 @@ def test_error_details_preserve_variant_fields() -> None:
     for error, detail in cases:
         rendered = _error_text(error)
         assert rendered == f"{error.kind}: {detail}; {error.fix}"
+
+
+@dataclass(frozen=True)
+class NewVariant:
+    kind: str = "new_variant"
+    fix: str = "add a branch"
+
+
+def test_unknown_error_variant_fails_loudly_instead_of_falling_through() -> None:
+    with pytest.raises(TypeError, match="unknown error variant NewVariant"):
+        _error_text(NewVariant())
 
 
 def test_stopped_lines_and_age_boundaries() -> None:
