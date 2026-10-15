@@ -10,6 +10,7 @@ wrapper simply preserves the console's output and status.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -17,10 +18,34 @@ import sys
 
 FAILED = 2
 CONSOLE = "atm-bd-console"
+REQUIRED_CONSOLE_VERSION = (0, 1, 0)
+REQUIRED_CONSOLE_VERSION_TEXT = ".".join(map(str, REQUIRED_CONSOLE_VERSION))
 CONSOLE_INSTALL = (
     "uv tool install "
     "git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console"
 )
+VERSION_PATTERN = re.compile(r"\b([0-9]+)\.([0-9]+)\.([0-9]+)\b")
+
+
+def _console_version_error(console: str) -> str | None:
+    probe = subprocess.run([console, "--version"], capture_output=True, text=True, check=False)
+    reported = (probe.stdout or probe.stderr).strip()
+    match = VERSION_PATTERN.search(reported)
+    fix = f"install or upgrade it with: {CONSOLE_INSTALL}"
+    if probe.returncode != 0 or match is None:
+        return (
+            f"CONSOLE_VERSION_UNAVAILABLE: bead-queues requires {CONSOLE} >= "
+            f"{REQUIRED_CONSOLE_VERSION_TEXT}; {CONSOLE} --version reported "
+            f"{reported or 'no semantic version'}; {fix}"
+        )
+    actual = tuple(int(part) for part in match.groups())
+    if actual < REQUIRED_CONSOLE_VERSION:
+        found = ".".join(map(str, actual))
+        return (
+            f"CONSOLE_VERSION_TOO_OLD: bead-queues requires {CONSOLE} >= "
+            f"{REQUIRED_CONSOLE_VERSION_TEXT}, found {found}; {fix}"
+        )
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -31,6 +56,11 @@ def main(argv: list[str]) -> int:
     console = shutil.which(CONSOLE)
     if console is None:
         print(f"bead-queues: {CONSOLE} is not on PATH; install it with: {CONSOLE_INSTALL}", file=sys.stderr)
+        return FAILED
+
+    version_error = _console_version_error(console)
+    if version_error is not None:
+        print(f"bead-queues: {version_error}", file=sys.stderr)
         return FAILED
 
     completed = subprocess.run([console, "show", "--phase", args.phase])

@@ -12,13 +12,21 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "bead-queues"
 
 
-def run_viewer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, output: str, status: int) -> subprocess.CompletedProcess[str]:
+def run_viewer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    output: str,
+    status: int,
+    version: str = "atm-bd-console 0.1.0",
+) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     argv = tmp_path / "argv"
     console = fake_bin / "atm-bd-console"
     console.write_text(
         "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then printf "%s\\n" "$FAKE_CONSOLE_VERSION"; exit 0; fi\n'
         'printf "%s\\n" "$@" > "$FAKE_CONSOLE_ARGV"\n'
         'printf "%s" "$FAKE_CONSOLE_OUTPUT"\n'
         'exit "$FAKE_CONSOLE_STATUS"\n'
@@ -28,13 +36,14 @@ def run_viewer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, output: str, 
     monkeypatch.setenv("FAKE_CONSOLE_ARGV", str(argv))
     monkeypatch.setenv("FAKE_CONSOLE_OUTPUT", output)
     monkeypatch.setenv("FAKE_CONSOLE_STATUS", str(status))
+    monkeypatch.setenv("FAKE_CONSOLE_VERSION", version)
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--phase", "bh"],
         text=True,
         capture_output=True,
         check=False,
     )
-    result.console_argv = argv.read_text().splitlines()  # type: ignore[attr-defined]
+    result.console_argv = argv.read_text().splitlines() if argv.exists() else []  # type: ignore[attr-defined]
     return result
 
 
@@ -63,6 +72,27 @@ def test_viewer_explains_how_to_install_the_console_when_absent(tmp_path: Path, 
     assert "atm-bd-console is not on PATH" in result.stderr
     assert "uv tool install" in result.stderr
     assert "apps/atm-bd-console" in result.stderr
+
+
+def test_viewer_rejects_unsupported_console_version_with_typed_fix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = run_viewer(tmp_path, monkeypatch, output="unused", status=0, version="atm-bd-console 0.0.9")
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.console_argv == []  # type: ignore[attr-defined]
+    assert "CONSOLE_VERSION_TOO_OLD" in result.stderr
+    assert "requires atm-bd-console >= 0.1.0" in result.stderr
+    assert "uv tool install" in result.stderr
+
+
+def test_viewer_rejects_unversioned_console_until_cli_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = run_viewer(tmp_path, monkeypatch, output="unused", status=0, version="")
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.console_argv == []  # type: ignore[attr-defined]
+    assert "CONSOLE_VERSION_UNAVAILABLE" in result.stderr
+    assert "install or upgrade it with:" in result.stderr
 
 
 def test_viewer_contains_no_beads_queue_queries() -> None:

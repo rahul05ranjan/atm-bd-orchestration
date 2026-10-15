@@ -343,7 +343,7 @@ Then, on each task close:
 
 Re-run `bd ready` after every close. Never cache the ready list. The open
 phase root also appears in it; it is never dispatched.
-While phase work is under way, a cron must run `atm-bd-console --once --headless --phase <x> --as <lead>` every 15 minutes; it owns the snapshot and dispatch work. Use `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` only as the read-only viewer. Disable the cron when phase work is paused or complete.
+While phase work is under way, a cron must run `atm-bd-console --once --headless --phase <x> --as <lead>` every 15 minutes; it owns the snapshot and dispatch work. The plugin requires `atm-bd-console >= 0.1.0`; install and upgrade enforce this minimum, and the viewer reports `CONSOLE_VERSION_UNAVAILABLE` or `CONSOLE_VERSION_TOO_OLD` with the install fix until the CLI is available. Use `.claude/skills/atm-bd-orchestration/scripts/bead-queues --phase <x>` only as the read-only viewer. Disable the cron when phase work is paused or complete.
 
 Close a sprint container when every child is closed (`bd children <sprint>
 --json | jq -e 'all(.[]; .status == "closed")'`): `bd close <sprint> --reason
