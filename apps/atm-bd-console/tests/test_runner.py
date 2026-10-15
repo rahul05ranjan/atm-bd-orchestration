@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from contract_samples import BEAD, CONFIG, PHASE_FILE, REPO_CONFIG, STATE
+from contract_samples import ACTION, BEAD, COMMAND_FAILED, CONFIG, PHASE_FILE, REPO_CONFIG, STATE
 
 from atm_bd_console import runner
-from atm_bd_console.result import Ok
+from atm_bd_console.result import Err, Ok
 
 
 def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
@@ -36,3 +36,13 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
     runner.step(replace(CONFIG, github="off"), STATE, True)
+
+
+def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
+    class Store:
+        def append_action(self, _line):
+            return Ok(None)
+
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: Err(COMMAND_FAILED))
+    errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at)
+    assert errors == (COMMAND_FAILED,)
