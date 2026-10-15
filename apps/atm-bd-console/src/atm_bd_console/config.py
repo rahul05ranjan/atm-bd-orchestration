@@ -4,6 +4,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from .atm_bd import PHASE_DIR
 from .result import ConfigInvalid, Err, IoFailed, Ok, Result
 from .types import Config
 
@@ -26,7 +27,7 @@ def load_config(
     usable with its documented graphql/60 defaults.
     """
     root = Path(repo_root)
-    config_path = root / ".atm-bd" / "console.toml"
+    config_path = root / PHASE_DIR / "console.toml"
     values: object = {}
     if config_path.exists():
         try:
@@ -48,5 +49,5 @@ def load_config(
     if not isinstance(chosen_interval, int) or isinstance(chosen_interval, bool) or chosen_interval < 10:
         return Err(ConfigInvalid("config_invalid", "interval", repr(chosen_interval), "use an integer of at least 10 seconds"))
 
-    state_dir = root / ".atm-bd" / "atm-bd-console" / phase
+    state_dir = root / PHASE_DIR / "atm-bd-console" / phase
     return Ok(Config(phase, lead, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))

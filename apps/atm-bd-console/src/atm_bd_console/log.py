@@ -7,6 +7,7 @@ from typing import Literal
 from sc_observability import Err as ObservabilityErr
 from sc_observability import LogEvent, Logger, LoggerConfig, create_logger
 
+from .atm_bd import PHASE_DIR
 from .result import Err, IoFailed, Ok, Result
 
 EventAction = Literal["tick_start", "tick_end", "read", "github_read", "action", "hold", "error"]
@@ -28,7 +29,7 @@ class ConsoleLogger:
 
 
 def create_console_logger(repo_root: str | Path) -> Result[ConsoleLogger]:
-    log_root = Path(repo_root) / ".atm-bd" / "atm-bd-console" / "logs"
+    log_root = Path(repo_root) / PHASE_DIR / "atm-bd-console" / "logs"
     try:
         log_root.mkdir(parents=True, exist_ok=True)
     except OSError as error:

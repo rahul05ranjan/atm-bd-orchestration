@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 
+from .atm_bd import PHASE_DIR
 from .codec import from_json, to_json
 from .result import Err, IoFailed, LockHeld, NotFound, Ok, Result
 from .types import ActionLine, MergeFile, PrsFile, Snapshot, State
@@ -74,7 +75,7 @@ class StateStore:
 
 
 def state_directory(repo_root: str | Path, root_id: str) -> Path:
-    return Path(repo_root) / ".atm-bd" / "atm-bd-console" / root_id
+    return Path(repo_root) / PHASE_DIR / "atm-bd-console" / root_id
 
 
 def acquire_lock(repo_root: str | Path, root_id: str) -> Result[StateStore]:
