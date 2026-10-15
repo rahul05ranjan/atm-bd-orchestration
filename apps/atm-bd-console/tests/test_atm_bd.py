@@ -6,12 +6,24 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
-from atm_bd_console.atm_bd import dispatch_spec, step
+from atm_bd_console import beads_source
+from atm_bd_console.atm_bd import dispatch_spec, phase, phase_file, step
 from atm_bd_console.result import Err, NotFound, Ok
-from atm_bd_console.types import Bead, DispatchContext, PullRequest, RepoConfig, Sprint, Step
+from atm_bd_console.types import (
+    Bead,
+    DispatchContext,
+    Phase,
+    PhaseFile,
+    PullRequest,
+    RepoConfig,
+    Sprint,
+    Step,
+    StepKind,
+)
 
 TEMPLATES = Path(__file__).resolve().parents[3] / "plugins/atm-bd-orchestration/skills/atm-bd-orchestration/templates"
 NOW = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
@@ -129,3 +141,93 @@ def test_qa_step_without_round_is_not_found_not_round_one() -> None:
     result = dispatch_spec(context(replace(mapped(SPRINT_QA), qa_round=None), PR))
     assert isinstance(result, Err) and isinstance(result.error, NotFound)
     assert result.error.what == "atm-bh-5.group-qa.metadata.round"
+
+
+# D4 over recorded and planted beads, read through beads_source from a fake bd.
+# show-findings.json: `bd show` of the real atm-bh-7 finding group qa1-f1-r1 (fix, sanity, QA) and the important
+# finding atm-bh-7.group-qa-f10 with its sanity and qa-bead.json.j2 QA (no sprint_bead), atm-core 2026-10-15.
+# planted.json: a foreign epic with a container and a quick-fix anchor dev step, a plan review, a dev whose
+# parent is not shown, and two QA beads missing round or checked_bead.
+BEADS = Path(__file__).parent / "fixtures" / "beads"
+
+
+def recorded(fake_bin, monkeypatch: pytest.MonkeyPatch, *names: str) -> tuple[Bead, ...]:
+    """Each file replayed as one `bd show` reply."""
+    fake_bin.make("bd", f'cat "{BEADS}/$FAKE_FILE"\n')
+    beads: list[Bead] = []
+    for name in names:
+        monkeypatch.setenv("FAKE_FILE", name)
+        result = beads_source.show(("replayed",))
+        assert isinstance(result, Ok), result
+        beads.extend(result.value)
+    return tuple(beads)
+
+
+@pytest.fixture
+def d4(fake_bin, monkeypatch: pytest.MonkeyPatch) -> tuple[PhaseFile, Phase, dict[str, Bead]]:
+    open_beads = recorded(fake_bin, monkeypatch, "list-open.json")
+    shown = recorded(fake_bin, monkeypatch, "show-closed.json", "show-findings.json", "planted.json")
+    file = phase_file(str(BEADS / "repo"), "bh").value
+    root = next(item for item in open_beads if item.id == "atm-phase-bh")
+    result = phase(file, root, open_beads, (), shown)
+    assert isinstance(result, Ok), result
+    return file, result.value, {item.id: item for item in shown + open_beads}
+
+
+def test_planted_steps_map_to_each_step_kind(d4) -> None:
+    _, mapped_phase, _ = d4
+    kinds = {item.bead_id: item.kind for item in mapped_phase.steps}
+    assert {kinds[bead_id] for bead_id in (
+        "atm-bh-7.group-dev", "atm-bh-7.qa1-f1-r1-fix", "atm-bh-7.qa1-f1-r1-sanity", "atm-bh-7.qa1-f1-r1-qa",
+        "atm-bh-7.group-qa-f10", "atm-bh-7.plan-review", "zz-other-1", "zz-phase-other",
+    )} == set(get_args(StepKind))
+    assert (kinds["atm-bh-7.group-dev"], kinds["atm-bh-7.qa1-f1-r1-fix"], kinds["atm-bh-7.qa1-f1-r1-sanity"],
+            kinds["atm-bh-7.qa1-f1-r1-qa"], kinds["atm-bh-7.group-qa-f10"], kinds["atm-bh-7.plan-review"],
+            kinds["zz-other-1"], kinds["zz-phase-other"]) == (
+        "dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other")
+
+
+def test_foreign_top_epic_is_kept_and_a_broken_chain_is_none(d4) -> None:
+    _, mapped_phase, _ = d4
+    steps = {item.bead_id: item for item in mapped_phase.steps}
+    foreign = steps["zz-other-1.group-dev"]
+    assert (foreign.top_epic, foreign.tag) == ("zz-phase-other", "phase-other")
+    assert steps["atm-bh-7.qa1-f1-r1-fix"].top_epic == "atm-phase-bh"
+    assert steps["atm-bh-7.orphan-dev"].top_epic is None
+
+
+def test_quick_fix_and_anchor_are_set(d4) -> None:
+    _, mapped_phase, _ = d4
+    steps = {item.bead_id: item for item in mapped_phase.steps}
+    assert (steps["zz-other-1.group-dev"].quick_fix, steps["zz-other-1.group-dev"].anchor) == (True, True)
+    assert (steps["atm-bh-7.group-dev"].quick_fix, steps["atm-bh-7.group-dev"].anchor) == (False, False)
+
+
+def test_finding_group_qa_carries_its_fix_bead(d4) -> None:
+    _, mapped_phase, _ = d4
+    qa = next(item for item in mapped_phase.steps if item.bead_id == "atm-bh-7.qa1-f1-r1-qa")
+    assert (qa.checked_bead, qa.carry_forward, qa.sprint_bead, qa.qa_round) == (
+        "atm-bh-7.qa1-f1-r1-fix", "atm-bh-7.qa1-f1-r1-fix", "atm-bh-7", 2)
+    sanity = next(item for item in mapped_phase.steps if item.bead_id == "atm-bh-7.qa1-f1-r1-sanity")
+    assert sanity.checked_bead == "atm-bh-7.qa1-f1-r1-fix"
+
+
+def test_qa_bead_template_qa_gets_sprint_bead_from_its_finding(d4) -> None:
+    _, mapped_phase, beads = d4
+    assert "sprint_bead" not in beads["atm-bh-7.group-qa-f10-qa"].metadata
+    qa = next(item for item in mapped_phase.steps if item.bead_id == "atm-bh-7.group-qa-f10-qa")
+    assert (qa.checked_bead, qa.sprint_bead, qa.carry_forward) == (
+        "atm-bh-7.group-qa-f10", "atm-bh-7", "atm-bh-7.group-qa-f10")
+
+
+def test_qa_without_round_or_checked_bead_is_a_step_error_and_every_other_step_is_present(d4) -> None:
+    file, mapped_phase, beads = d4
+    errors = dict(mapped_phase.step_errors)
+    assert errors["atm-bh-7.qa-no-round"] == NotFound("not_found", "atm-bh-7.qa-no-round.metadata.round",
+                                                      "add the required ATM BD value")
+    assert errors["atm-bh-7.qa-no-checked"] == NotFound("not_found", "atm-bh-7.qa-no-checked.metadata.checked_bead",
+                                                        "add the required ATM BD value")
+    step_ids = {item.bead_id for item in mapped_phase.steps}
+    assert not step_ids & {"atm-bh-7.qa-no-round", "atm-bh-7.qa-no-checked"}
+    others = set(beads) - set(errors) - set(file.sprints) - {"atm-phase-bh"}
+    assert step_ids == others

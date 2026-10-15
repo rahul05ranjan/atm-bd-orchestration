@@ -1,0 +1,738 @@
+[
+  {
+    "id": "atm-bh-7.qa1-f1-r1-fix",
+    "title": "bh-7: fix qa1-f1: No test for AC1 read-only-folder IoFailed naming the path",
+    "description": "Fix blocking finding qa1-f1 (round 1), filed by req-qa in atm-bh-7.group-qa.\n\nRemedy: Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.\n\nCommit the fix on the sprint's stack, then close this bead. A dev-sanity check and the filing reviewer's verification follow.\n\n## Deliverables\n1. Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.",
+    "status": "open",
+    "priority": 1,
+    "issue_type": "task",
+    "assignee": "trinity",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T04:06:39Z",
+    "created_by": "quality-mgr",
+    "updated_at": "2026-10-15T04:11:29Z",
+    "metadata": {
+      "adrs": [
+        "NONE"
+      ],
+      "difficulty": "normal",
+      "filed_by": "atm-bh-7.group-qa",
+      "finding_ref": "qa1-f1",
+      "found_at_commit": "51701f3c61656af723af9345a17194939a6f0b48",
+      "phase": "bh",
+      "remedy": "Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.",
+      "requirements": [
+        "NONE"
+      ],
+      "reviewer": "req-qa",
+      "role": "fix",
+      "round": 1,
+      "sc_compose_graph": {
+        "formula": "finding-group",
+        "inputs": "sha256:a6fda39adc7b41115a4884eb788016698cc4a3eb27e3d2350bdf717d962a74e4",
+        "mode": "attach",
+        "parent": "atm-bh-7",
+        "ref": "qa1-f1-r1",
+        "revision": "sha256:1774d4490c9fed7744263a251d26a7247ea0d069c2be2900903418210b56caf6",
+        "step": "fix",
+        "v": 1
+      },
+      "severity": "blocking",
+      "sprint": "bh-7",
+      "sprint_bead": "atm-bh-7",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:fix"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-7",
+        "title": "bh-7: runtime files: JSON state, lock, config, logging",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEverything the app shows lives in JSON files oversight can read (ANC-022), written safely by one process; settings and logging in one place each.\n\n## Deliverables\n1. `state.py`: folder `.atm-bd/atm-bd-console/\u003croot\u003e/` (`\u003croot\u003e` = the phase root bead id; writes `.atm-bd/atm-bd-console/.gitignore` containing `*` once): `lock`, `snapshot.json`, `state.json`, `merge.json`, `prs.json` written temp+rename with `to_json`, each exactly bh-1's detail-file type; `actions.jsonl` appended one `ActionLine` per line. Every writer returns `Result[None]` (`Err(IoFailed)` with the path and fix, never raises). `acquire_lock()` takes an OS advisory lock (`fcntl.flock`, non-blocking; macOS and Linux) on `lock`, held for the process's life and released by the OS when it dies, so a held lock always means a live holder: no stale-lock takeover exists. It returns `Ok` or `Err(LockHeld(snapshot_age_s))` (None when no snapshot exists); only the holder writes. Readers (`load_snapshot`, `load_state`, `load_prs`, `load_merges`) return `Result`; a missing file is `Err(NotFound)`.\n2. `config.py` builds bh-1's `Config` from `.atm-bd/console.toml` `[console]` with `github = \"graphql\" | \"rest\" | \"off\"` (default graphql) and `interval` seconds (default 60, minimum 10); a missing file means all defaults; CLI flags `--github`, `--interval`, `--dry-run`, `--no-fetch` override it; returns `Result[Config]`, `Err(ConfigInvalid)` naming the key, the value and the allowed values (ANC-018).\n3. `log.py`: one sc-observability logger per process under `.atm-bd/atm-bd-console/logs/` (`create_logger(LoggerConfig(service=\"atm-bd-console\", log_root=...))`); `event(action, **fields)` with actions `tick_start`, `tick_end`, `read` (source, duration_ms, ok), `github_read` (mode, ok), `action`, `hold`, `error`; times UTC; never writes to stdout or stderr.\n\n## Does Not Close\n- what goes in the files (bh-6); when they are written (bh-9).\n",
+        "design": "## Files\nTypes are bh-1's detail-file table (frozen there); this sprint writes them and adds nothing. Written: snapshot.json and state.json every tick; merge.json on each merge check; prs.json on each GitHub read; actions.jsonl appended per line. merge.json and prs.json are the runner's caches between cycles.\n",
+        "acceptance_criteria": "- [ ] (D1) A second process gets `Err(LockHeld)` with the snapshot age (None with no snapshot); after the holder process is killed (SIGKILL) the next `acquire_lock` succeeds; a crash mid-write (temp left behind) leaves the previous snapshot.json readable.\n- [ ] (D1) Every writer's file round-trips through `from_json` into its bh-1 type and equals the written instance; all times end in `Z`; two `actions.jsonl` appends give two parseable lines; `.gitignore` contains `*`.\n- [ ] (D1) A write into a read-only folder returns `Err(IoFailed)` naming the path; a missing snapshot returns `Err(NotFound)`.\n- [ ] (D2) No console.toml -\u003e defaults graphql/60; file values apply; flags override the file; bad `github` value and interval 5 -\u003e `Err(ConfigInvalid)` naming the key and allowed values.\n- [ ] (D3) A test reads the log back with sc-observability `query` and finds each event kind; captured stdout and stderr are empty.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:09Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-7-runtime-files",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 7,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/state.py",
+            "apps/atm-bd-console/src/atm_bd_console/config.py",
+            "apps/atm-bd-console/src/atm_bd_console/log.py",
+            "apps/atm-bd-console/tests/test_state.py",
+            "apps/atm-bd-console/tests/test_config.py",
+            "apps/atm-bd-console/tests/test_log.py"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-7",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console state.py, config.py and log.py",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-7-runtime-files"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-7.group-qa",
+        "title": "bh-7: QA round 1",
+        "description": "QA round 1 of atm-bh-7.group-dev (sprint bh-7), after its sanity check passes.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "quality-mgr",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T01:13:12Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T04:07:26Z",
+        "started_at": "2026-10-15T04:03:03Z",
+        "closed_at": "2026-10-15T04:07:26Z",
+        "close_reason": "FAIL: 10 findings filed",
+        "metadata": {
+          "checked_bead": "atm-bh-7.group-dev",
+          "difficulty": "normal",
+          "phase": "bh",
+          "role": "qa",
+          "round": 1,
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+            "mode": "attach",
+            "parent": "atm-bh-7",
+            "ref": "group",
+            "revision": "sha256:142699ccdca834bf84dd0b4950a33945c4bc870ae656a2cf0eeb5ed735e58053",
+            "step": "qa",
+            "v": 1
+          },
+          "sprint": "bh-7",
+          "sprint_bead": "atm-bh-7",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:qa"
+        ],
+        "dependency_type": "discovered-from"
+      }
+    ],
+    "parent": "atm-bh-7",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "3255726045685350717"
+  },
+  {
+    "id": "atm-bh-7.qa1-f1-r1-sanity",
+    "title": "bh-7: sanity check of the fix of qa1-f1",
+    "description": "Sanity check of atm-bh-7.qa1-f1-r1-fix: each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the fix bead and leave this bead open.",
+    "status": "open",
+    "priority": 1,
+    "issue_type": "task",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T04:06:39Z",
+    "created_by": "quality-mgr",
+    "updated_at": "2026-10-15T04:06:39Z",
+    "metadata": {
+      "dev_bead": "atm-bh-7.qa1-f1-r1-fix",
+      "difficulty": "normal",
+      "sc_compose_graph": {
+        "formula": "finding-group",
+        "inputs": "sha256:a6fda39adc7b41115a4884eb788016698cc4a3eb27e3d2350bdf717d962a74e4",
+        "mode": "attach",
+        "parent": "atm-bh-7",
+        "ref": "qa1-f1-r1",
+        "revision": "sha256:1774d4490c9fed7744263a251d26a7247ea0d069c2be2900903418210b56caf6",
+        "step": "sanity",
+        "v": 1
+      }
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev-sanity"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-7",
+        "title": "bh-7: runtime files: JSON state, lock, config, logging",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEverything the app shows lives in JSON files oversight can read (ANC-022), written safely by one process; settings and logging in one place each.\n\n## Deliverables\n1. `state.py`: folder `.atm-bd/atm-bd-console/\u003croot\u003e/` (`\u003croot\u003e` = the phase root bead id; writes `.atm-bd/atm-bd-console/.gitignore` containing `*` once): `lock`, `snapshot.json`, `state.json`, `merge.json`, `prs.json` written temp+rename with `to_json`, each exactly bh-1's detail-file type; `actions.jsonl` appended one `ActionLine` per line. Every writer returns `Result[None]` (`Err(IoFailed)` with the path and fix, never raises). `acquire_lock()` takes an OS advisory lock (`fcntl.flock`, non-blocking; macOS and Linux) on `lock`, held for the process's life and released by the OS when it dies, so a held lock always means a live holder: no stale-lock takeover exists. It returns `Ok` or `Err(LockHeld(snapshot_age_s))` (None when no snapshot exists); only the holder writes. Readers (`load_snapshot`, `load_state`, `load_prs`, `load_merges`) return `Result`; a missing file is `Err(NotFound)`.\n2. `config.py` builds bh-1's `Config` from `.atm-bd/console.toml` `[console]` with `github = \"graphql\" | \"rest\" | \"off\"` (default graphql) and `interval` seconds (default 60, minimum 10); a missing file means all defaults; CLI flags `--github`, `--interval`, `--dry-run`, `--no-fetch` override it; returns `Result[Config]`, `Err(ConfigInvalid)` naming the key, the value and the allowed values (ANC-018).\n3. `log.py`: one sc-observability logger per process under `.atm-bd/atm-bd-console/logs/` (`create_logger(LoggerConfig(service=\"atm-bd-console\", log_root=...))`); `event(action, **fields)` with actions `tick_start`, `tick_end`, `read` (source, duration_ms, ok), `github_read` (mode, ok), `action`, `hold`, `error`; times UTC; never writes to stdout or stderr.\n\n## Does Not Close\n- what goes in the files (bh-6); when they are written (bh-9).\n",
+        "design": "## Files\nTypes are bh-1's detail-file table (frozen there); this sprint writes them and adds nothing. Written: snapshot.json and state.json every tick; merge.json on each merge check; prs.json on each GitHub read; actions.jsonl appended per line. merge.json and prs.json are the runner's caches between cycles.\n",
+        "acceptance_criteria": "- [ ] (D1) A second process gets `Err(LockHeld)` with the snapshot age (None with no snapshot); after the holder process is killed (SIGKILL) the next `acquire_lock` succeeds; a crash mid-write (temp left behind) leaves the previous snapshot.json readable.\n- [ ] (D1) Every writer's file round-trips through `from_json` into its bh-1 type and equals the written instance; all times end in `Z`; two `actions.jsonl` appends give two parseable lines; `.gitignore` contains `*`.\n- [ ] (D1) A write into a read-only folder returns `Err(IoFailed)` naming the path; a missing snapshot returns `Err(NotFound)`.\n- [ ] (D2) No console.toml -\u003e defaults graphql/60; file values apply; flags override the file; bad `github` value and interval 5 -\u003e `Err(ConfigInvalid)` naming the key and allowed values.\n- [ ] (D3) A test reads the log back with sc-observability `query` and finds each event kind; captured stdout and stderr are empty.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:09Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-7-runtime-files",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 7,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/state.py",
+            "apps/atm-bd-console/src/atm_bd_console/config.py",
+            "apps/atm-bd-console/src/atm_bd_console/log.py",
+            "apps/atm-bd-console/tests/test_state.py",
+            "apps/atm-bd-console/tests/test_config.py",
+            "apps/atm-bd-console/tests/test_log.py"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-7",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console state.py, config.py and log.py",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-7-runtime-files"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-7.qa1-f1-r1-fix",
+        "title": "bh-7: fix qa1-f1: No test for AC1 read-only-folder IoFailed naming the path",
+        "description": "Fix blocking finding qa1-f1 (round 1), filed by req-qa in atm-bh-7.group-qa.\n\nRemedy: Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.\n\nCommit the fix on the sprint's stack, then close this bead. A dev-sanity check and the filing reviewer's verification follow.\n\n## Deliverables\n1. Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.",
+        "status": "open",
+        "priority": 1,
+        "issue_type": "task",
+        "assignee": "trinity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T04:06:39Z",
+        "created_by": "quality-mgr",
+        "updated_at": "2026-10-15T04:11:29Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "difficulty": "normal",
+          "filed_by": "atm-bh-7.group-qa",
+          "finding_ref": "qa1-f1",
+          "found_at_commit": "51701f3c61656af723af9345a17194939a6f0b48",
+          "phase": "bh",
+          "remedy": "Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.",
+          "requirements": [
+            "NONE"
+          ],
+          "reviewer": "req-qa",
+          "role": "fix",
+          "round": 1,
+          "sc_compose_graph": {
+            "formula": "finding-group",
+            "inputs": "sha256:a6fda39adc7b41115a4884eb788016698cc4a3eb27e3d2350bdf717d962a74e4",
+            "mode": "attach",
+            "parent": "atm-bh-7",
+            "ref": "qa1-f1-r1",
+            "revision": "sha256:1774d4490c9fed7744263a251d26a7247ea0d069c2be2900903418210b56caf6",
+            "step": "fix",
+            "v": 1
+          },
+          "severity": "blocking",
+          "sprint": "bh-7",
+          "sprint_bead": "atm-bh-7",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:fix"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-7",
+    "dependent_count": 1,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "681100931064972640"
+  },
+  {
+    "id": "atm-bh-7.qa1-f1-r1-qa",
+    "title": "bh-7: verify the fix of qa1-f1",
+    "description": "Fix verification of atm-bh-7.qa1-f1-r1-fix for finding qa1-f1, by its filing reviewer req-qa only, after its sanity check passes.",
+    "status": "open",
+    "priority": 1,
+    "issue_type": "task",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T04:06:39Z",
+    "created_by": "quality-mgr",
+    "updated_at": "2026-10-15T04:06:39Z",
+    "metadata": {
+      "checked_bead": "atm-bh-7.qa1-f1-r1-fix",
+      "difficulty": "normal",
+      "finding_ref": "qa1-f1",
+      "phase": "bh",
+      "reviewer": "req-qa",
+      "role": "qa",
+      "round": 1,
+      "sc_compose_graph": {
+        "formula": "finding-group",
+        "inputs": "sha256:a6fda39adc7b41115a4884eb788016698cc4a3eb27e3d2350bdf717d962a74e4",
+        "mode": "attach",
+        "parent": "atm-bh-7",
+        "ref": "qa1-f1-r1",
+        "revision": "sha256:1774d4490c9fed7744263a251d26a7247ea0d069c2be2900903418210b56caf6",
+        "step": "qa",
+        "v": 1
+      },
+      "sprint": "bh-7",
+      "sprint_bead": "atm-bh-7",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:qa"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-7",
+        "title": "bh-7: runtime files: JSON state, lock, config, logging",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEverything the app shows lives in JSON files oversight can read (ANC-022), written safely by one process; settings and logging in one place each.\n\n## Deliverables\n1. `state.py`: folder `.atm-bd/atm-bd-console/\u003croot\u003e/` (`\u003croot\u003e` = the phase root bead id; writes `.atm-bd/atm-bd-console/.gitignore` containing `*` once): `lock`, `snapshot.json`, `state.json`, `merge.json`, `prs.json` written temp+rename with `to_json`, each exactly bh-1's detail-file type; `actions.jsonl` appended one `ActionLine` per line. Every writer returns `Result[None]` (`Err(IoFailed)` with the path and fix, never raises). `acquire_lock()` takes an OS advisory lock (`fcntl.flock`, non-blocking; macOS and Linux) on `lock`, held for the process's life and released by the OS when it dies, so a held lock always means a live holder: no stale-lock takeover exists. It returns `Ok` or `Err(LockHeld(snapshot_age_s))` (None when no snapshot exists); only the holder writes. Readers (`load_snapshot`, `load_state`, `load_prs`, `load_merges`) return `Result`; a missing file is `Err(NotFound)`.\n2. `config.py` builds bh-1's `Config` from `.atm-bd/console.toml` `[console]` with `github = \"graphql\" | \"rest\" | \"off\"` (default graphql) and `interval` seconds (default 60, minimum 10); a missing file means all defaults; CLI flags `--github`, `--interval`, `--dry-run`, `--no-fetch` override it; returns `Result[Config]`, `Err(ConfigInvalid)` naming the key, the value and the allowed values (ANC-018).\n3. `log.py`: one sc-observability logger per process under `.atm-bd/atm-bd-console/logs/` (`create_logger(LoggerConfig(service=\"atm-bd-console\", log_root=...))`); `event(action, **fields)` with actions `tick_start`, `tick_end`, `read` (source, duration_ms, ok), `github_read` (mode, ok), `action`, `hold`, `error`; times UTC; never writes to stdout or stderr.\n\n## Does Not Close\n- what goes in the files (bh-6); when they are written (bh-9).\n",
+        "design": "## Files\nTypes are bh-1's detail-file table (frozen there); this sprint writes them and adds nothing. Written: snapshot.json and state.json every tick; merge.json on each merge check; prs.json on each GitHub read; actions.jsonl appended per line. merge.json and prs.json are the runner's caches between cycles.\n",
+        "acceptance_criteria": "- [ ] (D1) A second process gets `Err(LockHeld)` with the snapshot age (None with no snapshot); after the holder process is killed (SIGKILL) the next `acquire_lock` succeeds; a crash mid-write (temp left behind) leaves the previous snapshot.json readable.\n- [ ] (D1) Every writer's file round-trips through `from_json` into its bh-1 type and equals the written instance; all times end in `Z`; two `actions.jsonl` appends give two parseable lines; `.gitignore` contains `*`.\n- [ ] (D1) A write into a read-only folder returns `Err(IoFailed)` naming the path; a missing snapshot returns `Err(NotFound)`.\n- [ ] (D2) No console.toml -\u003e defaults graphql/60; file values apply; flags override the file; bad `github` value and interval 5 -\u003e `Err(ConfigInvalid)` naming the key and allowed values.\n- [ ] (D3) A test reads the log back with sc-observability `query` and finds each event kind; captured stdout and stderr are empty.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:09Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-7-runtime-files",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 7,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/state.py",
+            "apps/atm-bd-console/src/atm_bd_console/config.py",
+            "apps/atm-bd-console/src/atm_bd_console/log.py",
+            "apps/atm-bd-console/tests/test_state.py",
+            "apps/atm-bd-console/tests/test_config.py",
+            "apps/atm-bd-console/tests/test_log.py"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-7",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console state.py, config.py and log.py",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-7-runtime-files"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-7.qa1-f1-r1-fix",
+        "title": "bh-7: fix qa1-f1: No test for AC1 read-only-folder IoFailed naming the path",
+        "description": "Fix blocking finding qa1-f1 (round 1), filed by req-qa in atm-bh-7.group-qa.\n\nRemedy: Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.\n\nCommit the fix on the sprint's stack, then close this bead. A dev-sanity check and the filing reviewer's verification follow.\n\n## Deliverables\n1. Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.",
+        "status": "open",
+        "priority": 1,
+        "issue_type": "task",
+        "assignee": "trinity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T04:06:39Z",
+        "created_by": "quality-mgr",
+        "updated_at": "2026-10-15T04:11:29Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "difficulty": "normal",
+          "filed_by": "atm-bh-7.group-qa",
+          "finding_ref": "qa1-f1",
+          "found_at_commit": "51701f3c61656af723af9345a17194939a6f0b48",
+          "phase": "bh",
+          "remedy": "Add a test that makes the state directory read-only (restore in cleanup), calls a writer and append_action, and asserts Err(IoFailed) with the path.",
+          "requirements": [
+            "NONE"
+          ],
+          "reviewer": "req-qa",
+          "role": "fix",
+          "round": 1,
+          "sc_compose_graph": {
+            "formula": "finding-group",
+            "inputs": "sha256:a6fda39adc7b41115a4884eb788016698cc4a3eb27e3d2350bdf717d962a74e4",
+            "mode": "attach",
+            "parent": "atm-bh-7",
+            "ref": "qa1-f1-r1",
+            "revision": "sha256:1774d4490c9fed7744263a251d26a7247ea0d069c2be2900903418210b56caf6",
+            "step": "fix",
+            "v": 1
+          },
+          "severity": "blocking",
+          "sprint": "bh-7",
+          "sprint_bead": "atm-bh-7",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:fix"
+        ],
+        "dependency_type": "validates"
+      },
+      {
+        "id": "atm-bh-7.qa1-f1-r1-sanity",
+        "title": "bh-7: sanity check of the fix of qa1-f1",
+        "description": "Sanity check of atm-bh-7.qa1-f1-r1-fix: each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the fix bead and leave this bead open.",
+        "status": "open",
+        "priority": 1,
+        "issue_type": "task",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T04:06:39Z",
+        "created_by": "quality-mgr",
+        "updated_at": "2026-10-15T04:06:39Z",
+        "metadata": {
+          "dev_bead": "atm-bh-7.qa1-f1-r1-fix",
+          "difficulty": "normal",
+          "sc_compose_graph": {
+            "formula": "finding-group",
+            "inputs": "sha256:a6fda39adc7b41115a4884eb788016698cc4a3eb27e3d2350bdf717d962a74e4",
+            "mode": "attach",
+            "parent": "atm-bh-7",
+            "ref": "qa1-f1-r1",
+            "revision": "sha256:1774d4490c9fed7744263a251d26a7247ea0d069c2be2900903418210b56caf6",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-7",
+    "dependent_count": 0,
+    "dependency_count": 3,
+    "comment_count": 0,
+    "revision": "3510378211286650657"
+  },
+  {
+    "id": "atm-bh-7.group-qa-f10",
+    "title": "bh-7 important: Child process in the lock test is killed and reaped only on the success path",
+    "description": "child.kill()/wait() run only if both asserts pass; on failure the child survives up to 60s holding the flock and the pipe is never closed.\n\n## Deliverables\n1. Wrap spawn in try/finally (or a fixture) that kills, waits with a timeout and closes stdout; have the child block on stdin EOF instead of sleep(60).\n\n## Evidence\napps/atm-bd-console/tests/test_state.py:54 at 51701f3c\n\nFixed on a new layer at the top of stack phase-bh. QA verifies the fix after its sanity check; the sanity check judges only the acceptance criteria below.",
+    "design": "Wrap spawn in try/finally (or a fixture) that kills, waits with a timeout and closes stdout; have the child block on stdin EOF instead of sleep(60).",
+    "acceptance_criteria": "- [ ] the remedy (design) is applied at every occurrence in scope\n- [ ] a test or check that reproduces the defect passes at the fix head\n- [ ] the repository's validation passes",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "bug",
+    "assignee": "trinity",
+    "created_at": "2026-10-15T04:06:43Z",
+    "updated_at": "2026-10-15T04:11:35Z",
+    "metadata": {
+      "adrs": [
+        "NONE"
+      ],
+      "difficulty": "normal",
+      "finding_ref": "f10",
+      "found_at_commit": "51701f3c61656af723af9345a17194939a6f0b48",
+      "found_on_layer": "10",
+      "phase": "bh",
+      "requirements": [
+        "NONE"
+      ],
+      "reviewer": "flaky-test-qa",
+      "screen": "not_applicable",
+      "severity": "important",
+      "sprint": "bh-7",
+      "sprint_bead": "atm-bh-7",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "severity:important",
+      "stack:phase-bh",
+      "stage:finding"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-7.group-qa",
+        "title": "bh-7: QA round 1",
+        "description": "QA round 1 of atm-bh-7.group-dev (sprint bh-7), after its sanity check passes.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "quality-mgr",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T01:13:12Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T04:07:26Z",
+        "started_at": "2026-10-15T04:03:03Z",
+        "closed_at": "2026-10-15T04:07:26Z",
+        "close_reason": "FAIL: 10 findings filed",
+        "metadata": {
+          "checked_bead": "atm-bh-7.group-dev",
+          "difficulty": "normal",
+          "phase": "bh",
+          "role": "qa",
+          "round": 1,
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+            "mode": "attach",
+            "parent": "atm-bh-7",
+            "ref": "group",
+            "revision": "sha256:142699ccdca834bf84dd0b4950a33945c4bc870ae656a2cf0eeb5ed735e58053",
+            "step": "qa",
+            "v": 1
+          },
+          "sprint": "bh-7",
+          "sprint_bead": "atm-bh-7",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:qa"
+        ],
+        "dependency_type": "discovered-from"
+      },
+      {
+        "id": "atm-phase-bh",
+        "title": "phase-bh: atm-bd-console: one tick for dispatch, escalation and the dispatch dashboard",
+        "description": "## Goal\nA small CLI, `atm-bd-console`, that runs one business-logic tick (build the phase snapshot, dispatch ready sanity and QA, report problems) and shows the dispatch dashboard. Reliability and clear logic are the goals. The same tick runs as the app (every 60 s) and as cron (`--once --headless`, every 10-15 min).\n\nWhy: on sc-lint 2026-10-14, 11 of 19 open tasks were on beads outside phase-k and bead-queues showed none of them; dispatch and oversight ran as separate tools with separate rules.\n\n## Sprints (parallel-first)\n| Sprint | Title | Wave | Depends on (consumes) |\n| --- | --- | --- | --- |\n| bh-1 | contract: Result, source and tick types, JSON codec | 1 | - |\n| bh-2 | bead-queues as a front for `atm-bd-console show`, install check | 1 | - (calls the installed binary) |\n| bh-3 | ATM source | 2 | bh-1 (types.py, result.py, fake_bin) |\n| bh-4 | beads source and the atm-bd phase and formula mapping | 2 | bh-1 |\n| bh-5 | git and GitHub sources | 2 | bh-1 |\n| bh-6 | tick rules | 2 | bh-1 |\n| bh-7 | runtime files: JSON state, lock, config, logging | 2 | bh-1 |\n| bh-8 | renderers: dashboard, status bar, Status DAG, PRs | 2 | bh-1 |\n| bh-9 | runner and CLI (headless cron, show), MVP gates | 3 | bh-3..bh-8 (their modules) |\n| bh-10 | Textual app (sole app.py owner) | 3 | bh-1 (StepFn, lock), bh-8 (renderers) |\n\nRecipients: the lead from `--as`; the sanity and QA members from `.claude/project/atm-bd-orchestration.yaml` (Rand 2026-10-14), for the app and the cron alike. bh-10 owns app.py alone and runs beside bh-9 (Rand 2026-10-14).\n\nWave 2 sprints code against bh-1's types only and are developed in parallel, then rebased into the stack in layer order. Code lives in randlee/atm-bd-orchestration; the beads, plan file and phase file live in atm-core. Supersedes atm-bdo.3 and atm-bdo.4, and PR #129 (bead-dispatch).\n",
+        "design": "## Decisions (Rand, 2026-10-14)\n1. One module per source, each returning bh-1's plain types: `atm_source.py` (ATM), `beads_source.py` (generic bd), `atm_bd.py` (atm-bd phase and formula; the only atm-bd-specific file), `git_source.py`, `github_source.py`. Business logic lives once, pure, in `model.py` and `dispatch.py`; renderers and the CLI only call it (ANC-001, ANC-002).\n2. One `tick`; the app, the cron and `snapshot` call it through `runner.step`. Same input, same dispatches, messages and state (ANC-003).\n3. Holds: not in bd ready, branch not on origin, no worktree, merge conflict (git merge-tree). PR and CI state never hold (ANC-004, ANC-015).\n4. Reads: open `bd list`/`bd ready` by phase label plus batched `bd show`, never `bd list --all` or a closed sweep (ANC-005); `atm members`/`atm task list --all`. GitHub: one open-PR call per 10-min cycle (GraphQL, or REST, or off), plus PRs tab open and `r` (ANC-006, ANC-018); failures never stop work (ANC-017).\n5. `--as \u003cphase lead\u003e` is mandatory, no fallback (ANC-007).\n6. Problems: each new one sent at once; unresolved ones resent as one batch 10 min after the cycle's first send, then every 10 min (ANC-010). Merge conflicts and missing PRs go to the assignee, a red stack top to the lead (ANC-016); agent status is shown, never messaged (ANC-021).\n7. Root closed or 60 min with nothing ready or in progress stops ticking (ANC-011).\n8. Everything shown is in JSON under `.atm-bd/atm-bd-console/\u003croot\u003e/` (ANC-022); stored times UTC, shown times local 24 h (ANC-020).\n\n## Branches\nCode: randlee/atm-bd-orchestration `integrate/phase-bh` off main; sprint PRs form one stack on it; one final PR to main. Plan file and phase file: atm-core `integrate/phase-bh` off develop.\n\n## Governing documents\nNo requirements document or ADR governs this phase; every sprint's `requirements` and `adrs` are deliberately `NONE`. The anchors in docs/plans/phase-bh/anchors.json (ANC-001..022) and atm-bd-orchestration SKILL.md are the authority.\n\n## Error handling and logging (Rand, 2026-10-14)\n- Every fallible function returns `Ok[T] | Err`; `Err.error` is a discriminated union of frozen dataclasses (one `kind` literal each). No `raise` in the package.\n- Launch errors exit with a clear message. After the app starts it never exits on an error: each error is shown and the next tick runs (ANC-014).\n- Logging: `sc-observability` (PyPI, \u003e=1.5.0), one logger per process, under `.atm-bd/atm-bd-console/logs/`; never to the dashboard or cron stdout.\n- External binary: mmdflux \u003e=2.6.1 for the Status tab; missing -\u003e error plus text fallback.",
+        "acceptance_criteria": "## Phase Gates\n- bh-1..bh-10 merged to atm-bd-orchestration integrate/phase-bh, then one PR to main, CI green, merge commit.\n- The MVP gates are owned by bh-9's acceptance criteria (live tick on two teams, PR #129 closed, atm-bdo.3/.4 closed).\n\n## After the phase (Rand, 2026-10-14)\n- Consider building and publishing an atm-bd-console wheel that bundles the mmdflux binary per platform; not in this phase's scope.",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "epic",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T01:46:53Z",
+        "metadata": {
+          "integration_branch": "integrate/phase-bh",
+          "phase": "bh",
+          "plan_scope": "epic"
+        },
+        "labels": [
+          "phase-bh",
+          "scope:epic"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-phase-bh",
+    "dependent_count": 1,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "-2469588791987288252"
+  },
+  {
+    "id": "atm-bh-7.group-qa-f10-sanity",
+    "title": "bh-7: sanity check",
+    "description": "Sanity check of atm-bh-7.group-qa-f10 (sprint bh-7).\n\nVerify that the work is done:\n\n- each numbered deliverable is written;\n- lint passes.\n\nThis is not QA.",
+    "acceptance_criteria": "- [ ] each numbered deliverable of atm-bh-7.group-qa-f10 is written in the pushed head (workflow steps that come after the sanity check, such as linking and QA, are not judged)\n- [ ] lint passes",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "created_at": "2026-10-15T04:11:35Z",
+    "updated_at": "2026-10-15T04:11:35Z",
+    "metadata": {
+      "dev_bead": "atm-bh-7.group-qa-f10",
+      "phase": "bh",
+      "sprint": "bh-7",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev-sanity"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-7.group-qa-f10",
+        "title": "bh-7 important: Child process in the lock test is killed and reaped only on the success path",
+        "description": "child.kill()/wait() run only if both asserts pass; on failure the child survives up to 60s holding the flock and the pipe is never closed.\n\n## Deliverables\n1. Wrap spawn in try/finally (or a fixture) that kills, waits with a timeout and closes stdout; have the child block on stdin EOF instead of sleep(60).\n\n## Evidence\napps/atm-bd-console/tests/test_state.py:54 at 51701f3c\n\nFixed on a new layer at the top of stack phase-bh. QA verifies the fix after its sanity check; the sanity check judges only the acceptance criteria below.",
+        "design": "Wrap spawn in try/finally (or a fixture) that kills, waits with a timeout and closes stdout; have the child block on stdin EOF instead of sleep(60).",
+        "acceptance_criteria": "- [ ] the remedy (design) is applied at every occurrence in scope\n- [ ] a test or check that reproduces the defect passes at the fix head\n- [ ] the repository's validation passes",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "bug",
+        "assignee": "trinity",
+        "created_at": "2026-10-15T04:06:43Z",
+        "updated_at": "2026-10-15T04:11:35Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "difficulty": "normal",
+          "finding_ref": "f10",
+          "found_at_commit": "51701f3c61656af723af9345a17194939a6f0b48",
+          "found_on_layer": "10",
+          "phase": "bh",
+          "requirements": [
+            "NONE"
+          ],
+          "reviewer": "flaky-test-qa",
+          "screen": "not_applicable",
+          "severity": "important",
+          "sprint": "bh-7",
+          "sprint_bead": "atm-bh-7",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "severity:important",
+          "stack:phase-bh",
+          "stage:finding"
+        ],
+        "dependency_type": "blocks"
+      },
+      {
+        "id": "atm-phase-bh",
+        "title": "phase-bh: atm-bd-console: one tick for dispatch, escalation and the dispatch dashboard",
+        "description": "## Goal\nA small CLI, `atm-bd-console`, that runs one business-logic tick (build the phase snapshot, dispatch ready sanity and QA, report problems) and shows the dispatch dashboard. Reliability and clear logic are the goals. The same tick runs as the app (every 60 s) and as cron (`--once --headless`, every 10-15 min).\n\nWhy: on sc-lint 2026-10-14, 11 of 19 open tasks were on beads outside phase-k and bead-queues showed none of them; dispatch and oversight ran as separate tools with separate rules.\n\n## Sprints (parallel-first)\n| Sprint | Title | Wave | Depends on (consumes) |\n| --- | --- | --- | --- |\n| bh-1 | contract: Result, source and tick types, JSON codec | 1 | - |\n| bh-2 | bead-queues as a front for `atm-bd-console show`, install check | 1 | - (calls the installed binary) |\n| bh-3 | ATM source | 2 | bh-1 (types.py, result.py, fake_bin) |\n| bh-4 | beads source and the atm-bd phase and formula mapping | 2 | bh-1 |\n| bh-5 | git and GitHub sources | 2 | bh-1 |\n| bh-6 | tick rules | 2 | bh-1 |\n| bh-7 | runtime files: JSON state, lock, config, logging | 2 | bh-1 |\n| bh-8 | renderers: dashboard, status bar, Status DAG, PRs | 2 | bh-1 |\n| bh-9 | runner and CLI (headless cron, show), MVP gates | 3 | bh-3..bh-8 (their modules) |\n| bh-10 | Textual app (sole app.py owner) | 3 | bh-1 (StepFn, lock), bh-8 (renderers) |\n\nRecipients: the lead from `--as`; the sanity and QA members from `.claude/project/atm-bd-orchestration.yaml` (Rand 2026-10-14), for the app and the cron alike. bh-10 owns app.py alone and runs beside bh-9 (Rand 2026-10-14).\n\nWave 2 sprints code against bh-1's types only and are developed in parallel, then rebased into the stack in layer order. Code lives in randlee/atm-bd-orchestration; the beads, plan file and phase file live in atm-core. Supersedes atm-bdo.3 and atm-bdo.4, and PR #129 (bead-dispatch).\n",
+        "design": "## Decisions (Rand, 2026-10-14)\n1. One module per source, each returning bh-1's plain types: `atm_source.py` (ATM), `beads_source.py` (generic bd), `atm_bd.py` (atm-bd phase and formula; the only atm-bd-specific file), `git_source.py`, `github_source.py`. Business logic lives once, pure, in `model.py` and `dispatch.py`; renderers and the CLI only call it (ANC-001, ANC-002).\n2. One `tick`; the app, the cron and `snapshot` call it through `runner.step`. Same input, same dispatches, messages and state (ANC-003).\n3. Holds: not in bd ready, branch not on origin, no worktree, merge conflict (git merge-tree). PR and CI state never hold (ANC-004, ANC-015).\n4. Reads: open `bd list`/`bd ready` by phase label plus batched `bd show`, never `bd list --all` or a closed sweep (ANC-005); `atm members`/`atm task list --all`. GitHub: one open-PR call per 10-min cycle (GraphQL, or REST, or off), plus PRs tab open and `r` (ANC-006, ANC-018); failures never stop work (ANC-017).\n5. `--as \u003cphase lead\u003e` is mandatory, no fallback (ANC-007).\n6. Problems: each new one sent at once; unresolved ones resent as one batch 10 min after the cycle's first send, then every 10 min (ANC-010). Merge conflicts and missing PRs go to the assignee, a red stack top to the lead (ANC-016); agent status is shown, never messaged (ANC-021).\n7. Root closed or 60 min with nothing ready or in progress stops ticking (ANC-011).\n8. Everything shown is in JSON under `.atm-bd/atm-bd-console/\u003croot\u003e/` (ANC-022); stored times UTC, shown times local 24 h (ANC-020).\n\n## Branches\nCode: randlee/atm-bd-orchestration `integrate/phase-bh` off main; sprint PRs form one stack on it; one final PR to main. Plan file and phase file: atm-core `integrate/phase-bh` off develop.\n\n## Governing documents\nNo requirements document or ADR governs this phase; every sprint's `requirements` and `adrs` are deliberately `NONE`. The anchors in docs/plans/phase-bh/anchors.json (ANC-001..022) and atm-bd-orchestration SKILL.md are the authority.\n\n## Error handling and logging (Rand, 2026-10-14)\n- Every fallible function returns `Ok[T] | Err`; `Err.error` is a discriminated union of frozen dataclasses (one `kind` literal each). No `raise` in the package.\n- Launch errors exit with a clear message. After the app starts it never exits on an error: each error is shown and the next tick runs (ANC-014).\n- Logging: `sc-observability` (PyPI, \u003e=1.5.0), one logger per process, under `.atm-bd/atm-bd-console/logs/`; never to the dashboard or cron stdout.\n- External binary: mmdflux \u003e=2.6.1 for the Status tab; missing -\u003e error plus text fallback.",
+        "acceptance_criteria": "## Phase Gates\n- bh-1..bh-10 merged to atm-bd-orchestration integrate/phase-bh, then one PR to main, CI green, merge commit.\n- The MVP gates are owned by bh-9's acceptance criteria (live tick on two teams, PR #129 closed, atm-bdo.3/.4 closed).\n\n## After the phase (Rand, 2026-10-14)\n- Consider building and publishing an atm-bd-console wheel that bundles the mmdflux binary per platform; not in this phase's scope.",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "epic",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T01:46:53Z",
+        "metadata": {
+          "integration_branch": "integrate/phase-bh",
+          "phase": "bh",
+          "plan_scope": "epic"
+        },
+        "labels": [
+          "phase-bh",
+          "scope:epic"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-phase-bh",
+    "dependent_count": 1,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "1790542554909462549"
+  },
+  {
+    "id": "atm-bh-7.group-qa-f10-qa",
+    "title": "bh-7: QA round 1 of atm-bh-7.group-qa-f10",
+    "description": "QA round 1 of atm-bh-7.group-qa-f10 on stack phase-bh, pinned when it is dispatched.",
+    "acceptance_criteria": "- [ ] every reviewer ran at the dispatched head\n- [ ] every finding filed as a finding bead (discovered-from this bead)\n- [ ] report posted and task closed",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "quality-mgr",
+    "created_at": "2026-10-15T04:11:35Z",
+    "updated_at": "2026-10-15T04:11:35Z",
+    "metadata": {
+      "branch": null,
+      "checked_bead": "atm-bh-7.group-qa-f10",
+      "commit": null,
+      "difficulty": "normal",
+      "layer": null,
+      "phase": "bh",
+      "pr_target": null,
+      "quick_fix": false,
+      "round": 1,
+      "sprint": "bh-7",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:qa"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-7.group-qa-f10-sanity",
+        "title": "bh-7: sanity check",
+        "description": "Sanity check of atm-bh-7.group-qa-f10 (sprint bh-7).\n\nVerify that the work is done:\n\n- each numbered deliverable is written;\n- lint passes.\n\nThis is not QA.",
+        "acceptance_criteria": "- [ ] each numbered deliverable of atm-bh-7.group-qa-f10 is written in the pushed head (workflow steps that come after the sanity check, such as linking and QA, are not judged)\n- [ ] lint passes",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T04:11:35Z",
+        "updated_at": "2026-10-15T04:11:35Z",
+        "metadata": {
+          "dev_bead": "atm-bh-7.group-qa-f10",
+          "phase": "bh",
+          "sprint": "bh-7",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      },
+      {
+        "id": "atm-phase-bh",
+        "title": "phase-bh: atm-bd-console: one tick for dispatch, escalation and the dispatch dashboard",
+        "description": "## Goal\nA small CLI, `atm-bd-console`, that runs one business-logic tick (build the phase snapshot, dispatch ready sanity and QA, report problems) and shows the dispatch dashboard. Reliability and clear logic are the goals. The same tick runs as the app (every 60 s) and as cron (`--once --headless`, every 10-15 min).\n\nWhy: on sc-lint 2026-10-14, 11 of 19 open tasks were on beads outside phase-k and bead-queues showed none of them; dispatch and oversight ran as separate tools with separate rules.\n\n## Sprints (parallel-first)\n| Sprint | Title | Wave | Depends on (consumes) |\n| --- | --- | --- | --- |\n| bh-1 | contract: Result, source and tick types, JSON codec | 1 | - |\n| bh-2 | bead-queues as a front for `atm-bd-console show`, install check | 1 | - (calls the installed binary) |\n| bh-3 | ATM source | 2 | bh-1 (types.py, result.py, fake_bin) |\n| bh-4 | beads source and the atm-bd phase and formula mapping | 2 | bh-1 |\n| bh-5 | git and GitHub sources | 2 | bh-1 |\n| bh-6 | tick rules | 2 | bh-1 |\n| bh-7 | runtime files: JSON state, lock, config, logging | 2 | bh-1 |\n| bh-8 | renderers: dashboard, status bar, Status DAG, PRs | 2 | bh-1 |\n| bh-9 | runner and CLI (headless cron, show), MVP gates | 3 | bh-3..bh-8 (their modules) |\n| bh-10 | Textual app (sole app.py owner) | 3 | bh-1 (StepFn, lock), bh-8 (renderers) |\n\nRecipients: the lead from `--as`; the sanity and QA members from `.claude/project/atm-bd-orchestration.yaml` (Rand 2026-10-14), for the app and the cron alike. bh-10 owns app.py alone and runs beside bh-9 (Rand 2026-10-14).\n\nWave 2 sprints code against bh-1's types only and are developed in parallel, then rebased into the stack in layer order. Code lives in randlee/atm-bd-orchestration; the beads, plan file and phase file live in atm-core. Supersedes atm-bdo.3 and atm-bdo.4, and PR #129 (bead-dispatch).\n",
+        "design": "## Decisions (Rand, 2026-10-14)\n1. One module per source, each returning bh-1's plain types: `atm_source.py` (ATM), `beads_source.py` (generic bd), `atm_bd.py` (atm-bd phase and formula; the only atm-bd-specific file), `git_source.py`, `github_source.py`. Business logic lives once, pure, in `model.py` and `dispatch.py`; renderers and the CLI only call it (ANC-001, ANC-002).\n2. One `tick`; the app, the cron and `snapshot` call it through `runner.step`. Same input, same dispatches, messages and state (ANC-003).\n3. Holds: not in bd ready, branch not on origin, no worktree, merge conflict (git merge-tree). PR and CI state never hold (ANC-004, ANC-015).\n4. Reads: open `bd list`/`bd ready` by phase label plus batched `bd show`, never `bd list --all` or a closed sweep (ANC-005); `atm members`/`atm task list --all`. GitHub: one open-PR call per 10-min cycle (GraphQL, or REST, or off), plus PRs tab open and `r` (ANC-006, ANC-018); failures never stop work (ANC-017).\n5. `--as \u003cphase lead\u003e` is mandatory, no fallback (ANC-007).\n6. Problems: each new one sent at once; unresolved ones resent as one batch 10 min after the cycle's first send, then every 10 min (ANC-010). Merge conflicts and missing PRs go to the assignee, a red stack top to the lead (ANC-016); agent status is shown, never messaged (ANC-021).\n7. Root closed or 60 min with nothing ready or in progress stops ticking (ANC-011).\n8. Everything shown is in JSON under `.atm-bd/atm-bd-console/\u003croot\u003e/` (ANC-022); stored times UTC, shown times local 24 h (ANC-020).\n\n## Branches\nCode: randlee/atm-bd-orchestration `integrate/phase-bh` off main; sprint PRs form one stack on it; one final PR to main. Plan file and phase file: atm-core `integrate/phase-bh` off develop.\n\n## Governing documents\nNo requirements document or ADR governs this phase; every sprint's `requirements` and `adrs` are deliberately `NONE`. The anchors in docs/plans/phase-bh/anchors.json (ANC-001..022) and atm-bd-orchestration SKILL.md are the authority.\n\n## Error handling and logging (Rand, 2026-10-14)\n- Every fallible function returns `Ok[T] | Err`; `Err.error` is a discriminated union of frozen dataclasses (one `kind` literal each). No `raise` in the package.\n- Launch errors exit with a clear message. After the app starts it never exits on an error: each error is shown and the next tick runs (ANC-014).\n- Logging: `sc-observability` (PyPI, \u003e=1.5.0), one logger per process, under `.atm-bd/atm-bd-console/logs/`; never to the dashboard or cron stdout.\n- External binary: mmdflux \u003e=2.6.1 for the Status tab; missing -\u003e error plus text fallback.",
+        "acceptance_criteria": "## Phase Gates\n- bh-1..bh-10 merged to atm-bd-orchestration integrate/phase-bh, then one PR to main, CI green, merge commit.\n- The MVP gates are owned by bh-9's acceptance criteria (live tick on two teams, PR #129 closed, atm-bdo.3/.4 closed).\n\n## After the phase (Rand, 2026-10-14)\n- Consider building and publishing an atm-bd-console wheel that bundles the mmdflux binary per platform; not in this phase's scope.",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "epic",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T01:46:53Z",
+        "metadata": {
+          "integration_branch": "integrate/phase-bh",
+          "phase": "bh",
+          "plan_scope": "epic"
+        },
+        "labels": [
+          "phase-bh",
+          "scope:epic"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-phase-bh",
+    "dependent_count": 0,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "5734403475091223687"
+  }
+]

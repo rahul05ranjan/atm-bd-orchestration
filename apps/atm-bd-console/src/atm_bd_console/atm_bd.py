@@ -193,7 +193,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     suffix = bead.id.rsplit(".group-", 1)[-1] if ".group-" in bead.id else ""
     if stage == "other" and suffix in {"dev", "sanity", "qa"}:
         stage = {"sanity": "dev-sanity", "qa": "qa"}.get(suffix, suffix)
-    kind = {"dev-sanity": "sanity", "qa": "qa", "plan-review": "plan_review"}.get(stage, stage if stage in {"dev", "fix", "finding"} else "other")
+    kind = {"dev-sanity": "sanity", "qa": "qa", "plan-review": "plan_review", "sprint": "container"}.get(stage, stage if stage in {"dev", "fix", "finding"} else "other")
     checked = metadata.get("dev_bead") if kind == "sanity" else metadata.get("checked_bead") if kind == "qa" else None
     if kind in {"sanity", "qa"} and not checked: return _missing(f"{bead.id}.metadata.checked_bead")
     if kind == "qa" and metadata.get("round") is None: return _missing(f"{bead.id}.metadata.round")
