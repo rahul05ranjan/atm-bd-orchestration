@@ -30,6 +30,7 @@ import pytest
 
 from atm_bd_console import beads_source
 from atm_bd_console.atm_bd import (
+    DISPATCH_KEYS,
     closed_show_ids,
     dispatch_spec,
     group_ids,
@@ -561,6 +562,16 @@ def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullReque
     assert rendered.returncode == 0, rendered.stderr
     verification = f"This is fix verification of fix bead `{FIX.id}`"
     assert (verification in rendered.stdout) is (kind == "fix_qa")
+
+
+def test_dispatch_spec_uses_named_template_variable_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(DISPATCH_KEYS, "task", "task_identifier")
+
+    spec = dispatch_spec(context(mapped(SANITY), None))
+
+    assert isinstance(spec, Ok), spec
+    assert spec.value.vars["task_identifier"] == SANITY.id
+    assert "task_id" not in spec.value.vars
 
 
 def test_fix_verification_round_is_the_fix_beads_round_plus_one() -> None:

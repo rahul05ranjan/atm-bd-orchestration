@@ -25,21 +25,37 @@ STAGE_PREFIX = "stage:"
 FINDING_LABEL = f"{STAGE_PREFIX}finding"
 FIX_LABEL = f"{STAGE_PREFIX}fix"
 ANCHOR_LABEL = "anchor"
+SANITY_KIND: StepKind = "sanity"
+QA_KIND: StepKind = "qa"
 # stage:<stage> label -> StepKind; a bead without a stage label takes the stage of its group suffix.
 STAGE_KINDS: Mapping[str, StepKind] = {
-    "dev": "dev", "fix": "fix", "finding": "finding", "dev-sanity": "sanity", "qa": "qa",
+    "dev": "dev", "fix": "fix", "finding": "finding", "dev-sanity": SANITY_KIND, "qa": QA_KIND,
     "plan-review": "plan_review", "sprint": "container",
 }
 SUFFIX_STAGES = dict(zip(GROUP_SUFFIXES, ("dev", "dev-sanity", "qa"), strict=True))
 # Step metadata keys (formulas sprint-group/finding-group, qa-bead.json.j2, finding-bead.json.j2).
-CHECKED_KEYS: Mapping[StepKind, str] = {"sanity": "dev_bead", "qa": "checked_bead"}
+CHECKED_KEYS: Mapping[StepKind, str] = {SANITY_KIND: "dev_bead", QA_KIND: "checked_bead"}
 ROUND_KEY = "round"
 SPRINT_KEY = "sprint"
 SPRINT_BEAD_KEY = "sprint_bead"
 QUICK_FIX_KEY = "quick_fix"
 BRANCH_KEY, PR_TARGET_KEY, WORKTREE_KEY, LAYER_KEY, DIFFICULTY_KEY = "branch", "pr_target", "worktree", "layer", "difficulty"
 # The production template each dispatched StepKind fills.
-TEMPLATES: Mapping[StepKind, str] = {"sanity": "dev-sanity-template.xml.j2", "qa": "qa-template.xml.j2"}
+TEMPLATES: Mapping[StepKind, str] = {
+    SANITY_KIND: "dev-sanity-template.xml.j2",
+    QA_KIND: "qa-template.xml.j2",
+}
+# Semantic source name -> production template variable. Dispatch code uses these names
+# so the template contract is defined here once, next to the template paths.
+DISPATCH_KEYS: Mapping[str, str] = {
+    "task": "task_id", "checked": "checked_bead", "sprint": "sprint",
+    "worktree": "worktree_path", "branch": "branch", "commit": "commit", "base": "base",
+    "pr_number": "pr_number", "pr_url": "pr_url", "layer_prs": "layer_prs",
+    "primary_checkout": "primary_checkout", "lint_command": "lint_command",
+    "phase": "phase", "phase_title": "phase_feature", "stack": "stack", "layer": "layer",
+    "round": "round", "policy": "policy_path", "reviewers": "reviewers_round1",
+    "sprint_bead": "sprint_bead", "carry_forward": "carry_forward",
+}
 REPO_CONFIG_PATH = ".claude/project/atm-bd-orchestration.yaml"
 # RepoConfig field -> key in the repository configuration file; primary_checkout is repo_root (per-machine path).
 REPO_KEYS = (
@@ -333,21 +349,29 @@ def dispatch_spec(ctx: DispatchContext) -> Result[DispatchSpec]:
                                  f"dispatch only {' or '.join(TEMPLATES)} steps"))
     # Template vars are JSON: layer PRs go as their numbers, the form `gh pr view <n>` takes.
     layer_prs = [layer.number for layer in ctx.layer_prs]
+    keys = DISPATCH_KEYS
     values = {
-        "task_id": current.bead_id, "checked_bead": current.checked_bead or "", "sprint": current.sprint or "",
-        "worktree_path": ctx.worktree_path, "branch": current.branch or "", "commit": ctx.commit, "base": ctx.base,
-        "pr_number": str(pr.number) if pr else "", "pr_url": pr.url if pr else "", "layer_prs": layer_prs,
+        keys["task"]: current.bead_id, keys["checked"]: current.checked_bead or "",
+        keys["sprint"]: current.sprint or "", keys["worktree"]: ctx.worktree_path,
+        keys["branch"]: current.branch or "", keys["commit"]: ctx.commit, keys["base"]: ctx.base,
+        keys["pr_number"]: str(pr.number) if pr else "", keys["pr_url"]: pr.url if pr else "",
+        keys["layer_prs"]: layer_prs,
     }
-    if current.kind == "sanity":
-        values |= {"primary_checkout": ctx.repo.primary_checkout, "lint_command": ctx.repo.lint_command}
+    if current.kind == SANITY_KIND:
+        values |= {
+            keys["primary_checkout"]: ctx.repo.primary_checkout,
+            keys["lint_command"]: ctx.repo.lint_command,
+        }
         return Ok(DispatchSpec(template, values))
     if current.qa_round is None:
         return _missing(f"{current.bead_id}.metadata.{ROUND_KEY}")
     values |= {
-        "phase": ctx.phase_id, "phase_feature": ctx.phase_title, "stack": ctx.sprint.stack, "layer": ctx.sprint.layer,
-        "round": current.qa_round, "policy_path": ctx.repo.policy_path,
-        "reviewers_round1": list(ctx.repo.reviewers_round1), "sprint_bead": current.sprint_bead or "",
+        keys["phase"]: ctx.phase_id, keys["phase_title"]: ctx.phase_title,
+        keys["stack"]: ctx.sprint.stack, keys["layer"]: ctx.sprint.layer,
+        keys["round"]: current.qa_round, keys["policy"]: ctx.repo.policy_path,
+        keys["reviewers"]: list(ctx.repo.reviewers_round1),
+        keys["sprint_bead"]: current.sprint_bead or "",
     }
     if current.carry_forward:
-        values["carry_forward"] = current.carry_forward
+        values[keys["carry_forward"]] = current.carry_forward
     return Ok(DispatchSpec(template, values))
