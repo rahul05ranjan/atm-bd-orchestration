@@ -24,7 +24,7 @@ from contract_samples import (
 
 from atm_bd_console import runner
 from atm_bd_console.model import tick as model_tick
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.result import ConfigInvalid, Err, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Task
 
@@ -546,3 +546,62 @@ def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, m
     assert ("atm", "members", "--team", "atm-dev", "--json") in argv
     assert ("atm", "task", "list", "--all", "--json", "--team", "atm-dev") in argv
     assert all(command[command.index("--team") + 1] != "fenix" for command in argv if "--team" in command)
+
+
+@pytest.mark.parametrize("failed_source", ("phase_file", "repo_config"))
+def test_config_error_mid_run_replaces_persisted_snapshot(monkeypatch, tmp_path, failed_source) -> None:
+    class Clock:
+        @staticmethod
+        def now(_timezone): return SNAPSHOT.generated_at
+
+    monkeypatch.setattr(runner, "datetime", Clock)
+    error = ConfigInvalid("config_invalid", failed_source, "bad", "repair the configuration")
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.atm_bd, failed_source, lambda *_: Err(error))
+    config = replace(CONFIG, repo_root=str(tmp_path))
+    acquired = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(acquired, Ok)
+
+    with acquired.value as store:
+        assert store.write_state(STATE) == Ok(None)
+        assert store.write_snapshot(replace(SNAPSHOT, errors=())) == Ok(None)
+
+        snapshot, next_state = runner.step(config, STATE, False, store)
+
+        assert snapshot.errors == (error,)
+        assert snapshot.files == {
+            "snapshot": str(store.directory / "snapshot.json"),
+            "state": str(store.directory / "state.json"),
+        }
+        assert load_snapshot(tmp_path, PHASE_FILE.root_id) == Ok(snapshot)
+        assert load_state(tmp_path, PHASE_FILE.root_id) == Ok(STATE)
+        assert next_state == STATE
+
+
+@pytest.mark.parametrize("failed_writes", (("state",), ("snapshot",), ("state", "snapshot")))
+def test_config_error_reports_write_failures(monkeypatch, tmp_path, failed_writes) -> None:
+    writes = []
+
+    class Store:
+        directory = tmp_path
+        load_errors = ()
+
+        def write_state(self, value):
+            writes.append(("state", value))
+            return Err(IO_FAILED) if "state" in failed_writes else Ok(None)
+
+        def write_snapshot(self, value):
+            writes.append(("snapshot", value))
+            return Err(IO_FAILED) if "snapshot" in failed_writes else Ok(None)
+
+    error = ConfigInvalid("config_invalid", "phase", "bad", "repair the phase file")
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Err(error))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+
+    snapshot, next_state = runner.step(CONFIG, STATE, False, Store())
+
+    assert [name for name, _ in writes] == ["state", "snapshot"]
+    assert writes[0][1] == STATE and next_state == STATE
+    assert writes[1][1].errors == (error, *((IO_FAILED,) if "state" in failed_writes else ()))
+    assert snapshot.errors == (error, *(IO_FAILED for _ in failed_writes))

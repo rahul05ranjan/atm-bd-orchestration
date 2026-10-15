@@ -115,10 +115,14 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
                             _gh(config.github), None, None, "graph TD", (), config.interval_s, config.lead,
                             "", (), (), {})
         logger = create_console_logger(config.repo_root)
-        if isinstance(logger, Ok):
-            logger.value.event("tick_start", phase=config.phase)
-            logger.value.event("tick_end", actions=0)
-        return snapshot, state
+        if isinstance(logger, Ok): logger.value.event("tick_start", phase=config.phase)
+        state_written = store.write_state(state)
+        if isinstance(state_written, Err): snapshot = replace(snapshot, errors=(*snapshot.errors, state_written.error))
+        persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+        snapshot_written = store.write_snapshot(persisted)
+        if isinstance(snapshot_written, Err): persisted = replace(persisted, errors=(*persisted.errors, snapshot_written.error))
+        if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
+        return persisted, state
     logger = create_console_logger(config.repo_root)
     if isinstance(logger, Ok): logger.value.event("tick_start", phase=config.phase)
     root = beads_source.show((file.value.root_id,))
