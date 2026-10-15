@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from contract_samples import ACTION, BEAD, CONFIG, LOCK_HELD, PHASE, PHASE_FILE, REPO_CONFIG, SNAPSHOT
+from contract_samples import ACTION, BEAD, CONFIG, IO_FAILED, LOCK_HELD, PHASE, PHASE_FILE, REPO_CONFIG, SNAPSHOT
 
 from atm_bd_console import cli, runner
 from atm_bd_console.result import Err, NotFound, Ok
@@ -127,6 +127,16 @@ def test_headless_held_lock_reports_stale_snapshot_with_injected_clock(monkeypat
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     assert cli.main(["--once", "--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert "stopped updating" in capsys.readouterr().out
+
+
+def test_headless_lock_io_failure_is_a_launch_error(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(IO_FAILED))
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    assert cli.main(["--once", "--headless", "--phase", "bh", "--as", "fenix"]) == 3
+    assert "io_failed" in capsys.readouterr().out
 
 
 def test_show_missing_snapshot_never_starts_runner(monkeypatch, capsys) -> None:

@@ -64,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.headless or args.command == "snapshot":
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
+            if lock.error.kind != "lock_held":
+                print(f"{CONSOLE_NAME}: {lock.error.kind}: {lock.error.fix}")
+                return 3
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, datetime.now(UTC)):
                 text = f"{CONSOLE_NAME} stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
