@@ -175,10 +175,8 @@ def _agent_views(
             status = "blocked"
         elif member.presence in ("offline", "unknown") and mine:
             status = "offline"
-        elif any(task.state == "active" for task in mine):
-            status = "busy"
         elif mine:
-            status = "stalling"
+            status = "busy" if member.presence == "active" else "stalling"
         else:
             status = "idle"
         rows: list[Row] = []

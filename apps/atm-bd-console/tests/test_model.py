@@ -93,7 +93,7 @@ def test_roster_statuses_and_markers() -> None:
     assert snapshot.agents[0].rows[0].age_s == 20
 
 
-def test_agent_status_uses_task_state_when_presence_disagrees() -> None:
+def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
     members = (
         Member("presence-idle", "idle", NOW - timedelta(minutes=5)),
         Member("presence-active", "active", NOW - timedelta(minutes=5)),
@@ -106,7 +106,7 @@ def test_agent_status_uses_task_state_when_presence_disagrees() -> None:
     snapshot, actions, _ = tick(inputs(value, members=Ok(members), tasks=Ok(tasks)), STATE, NOW, render)
 
     assert actions == ()
-    assert tuple(agent.status for agent in snapshot.agents) == ("busy", "stalling")
+    assert tuple(agent.status for agent in snapshot.agents) == ("stalling", "busy")
     assert tuple(agent.rows[0].state for agent in snapshot.agents) == ("running", "queued")
 
 
