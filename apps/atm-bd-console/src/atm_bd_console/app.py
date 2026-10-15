@@ -108,7 +108,7 @@ class ConsoleApp(App[int]):
         if event.pane.id == "prs":
             self.tick(True)
 
-    @work(thread=True, group="tick", exit_on_error=False)
+    @work(thread=True, group="tick", exclusive=True, exit_on_error=False)
     def tick(self, force_github: bool) -> None:
         try:
             with self._step_lock:
