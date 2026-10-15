@@ -183,7 +183,7 @@ def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     base = inputs(value, remotes=Ok((RemoteRef("pushed", "sha"),)))
     success = replace(base, gh=GhStatus("graphql", True, None, NOW, False))
     snapshot, _, _ = tick(success, STATE, NOW, render)
-    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
     for gh in (GhStatus("off", None, None, None, False), GhStatus("graphql", False, NotFound("not_found", "gh", "retry"), NOW, False)):
         snapshot, _, _ = tick(replace(base, gh=gh), STATE, NOW, render)
         assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
@@ -199,13 +199,13 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
     first = inputs(value, remotes=Ok((remote,)), prs=Ok(()),
                    gh=GhStatus("graphql", True, None, NOW, False))
     snapshot, actions, state = tick(first, STATE, NOW, render)
-    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
     assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
     assert state.batch_due["solar"] == NOW + timedelta(minutes=10)
 
     unread = replace(first, prs=None, gh=GhStatus("off", None, None, None, False))
     snapshot, actions, state = tick(unread, state, NOW + timedelta(minutes=5), render)
-    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
     assert snapshot.problems[0].first_seen == NOW
     assert actions == ()
     assert state.batch_due["solar"] == NOW + timedelta(minutes=10)
@@ -213,7 +213,7 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
     snapshot, actions, state = tick(replace(first, gh=GhStatus("graphql", True, None,
                                                               NOW + timedelta(minutes=10), False)),
                                     state, NOW + timedelta(minutes=10), render)
-    assert [problem.key for problem in snapshot.problems] == ["missing_pr:dev"]
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
     assert [action.kind for action in actions] == ["batch"]
     assert state.batch_due["solar"] == NOW + timedelta(minutes=20)
 
@@ -245,15 +245,31 @@ def test_ci_and_conflict_problems_survive_until_their_sources_are_refreshed() ->
     conflict = Merge("pushed", "base", "conflict", ("model.py",), (), NOW)
     with_merge = replace(first, prs=None, gh=GhStatus("off", None, None, None, False), merges=(Ok(conflict),))
     snapshot, _, state = tick(with_merge, STATE, NOW, render)
-    assert [problem.key for problem in snapshot.problems] == ["conflict:dev"]
+    assert [problem.key for problem in snapshot.problems] == ["conflict:pushed"]
     snapshot, actions, state = tick(replace(with_merge, merges=(Err(NotFound("not_found", "merge", "retry")),)),
                                     state, NOW + timedelta(minutes=5), render)
-    assert [problem.key for problem in snapshot.problems] == ["conflict:dev"]
+    assert [problem.key for problem in snapshot.problems] == ["conflict:pushed"]
     assert actions == ()
     clean_merge = replace(conflict, state="clean", files=())
     snapshot, _, _ = tick(replace(with_merge, merges=(Ok(clean_merge),)), state,
                           NOW + timedelta(minutes=10), render)
     assert snapshot.problems == ()
+
+
+def test_shared_branch_reports_one_problem_per_kind_to_work_owner() -> None:
+    dev = step("dev", "atm-bh-1", branch="shared", assignee="solar", status="closed")
+    qa = step("qa", "atm-bh-1", kind="qa", branch="shared", assignee=None)
+    qa_task = Task("qa", "quality-mgr", "assigned", 1, NOW, NOW, "review")
+    conflict = Merge("shared", "base", "conflict", ("model.py",), (), NOW)
+    for steps in ((dev, qa), (qa, dev)):
+        supplied = inputs(
+            phase(*steps), tasks=Ok((qa_task,)), remotes=Ok((RemoteRef("shared", "sha"),)),
+            merges=(Ok(conflict),), prs=Ok(()), gh=GhStatus("graphql", True, None, NOW, False),
+        )
+        snapshot, actions, _ = tick(supplied, STATE, NOW, render)
+        assert [problem.key for problem in snapshot.problems] == ["conflict:shared", "missing_pr:shared"]
+        assert [(problem.bead_id, problem.to) for problem in snapshot.problems] == [("dev", "solar")] * 2
+        assert [(action.kind, action.to) for action in actions] == [("send", "solar")] * 2
 
 
 def test_stop_rules_metrics_mermaid_and_sent_window() -> None:

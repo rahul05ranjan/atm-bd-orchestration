@@ -261,7 +261,7 @@ def _pr_rows(
 ) -> tuple[tuple[PrRow, ...], PullRequest | None]:
     if phase is None:
         return (), None
-    by_branch = {step.branch: step for step in phase.steps if step.branch}
+    by_branch = _branch_owners(phase)
     by_branch.update({sprint.branch: None for sprint in phase.sprints if sprint.branch not in by_branch})
     relevant = tuple(pr for pr in prs if pr.head in by_branch)
     bases = {pr.base for pr in relevant}
@@ -281,6 +281,17 @@ def _pr_rows(
     return tuple(sorted(rows, key=lambda row: (row.layer if row.layer is not None else -1, row.pr.number))), top
 
 
+def _branch_owners(phase: Phase) -> dict[str, Step]:
+    owners: dict[str, Step] = {}
+    ordered = sorted(phase.steps, key=lambda step: (
+        step.kind not in ("dev", "fix"), step.assignee is None, step.status == "closed", step.bead_id,
+    ))
+    for step in ordered:
+        if step.branch:
+            owners.setdefault(step.branch, step)
+    return owners
+
+
 def _problems(
     phase: Phase | None,
     held,
@@ -296,7 +307,7 @@ def _problems(
             problem for problem in state.problems
             if problem.key.startswith(("missing_pr:", "top_ci:", "conflict:"))
         )
-    by_branch = {step.branch: step for step in phase.steps if step.branch}
+    by_branch = _branch_owners(phase)
     by_id = {step.bead_id: step for step in phase.steps}
     problems: list[Problem] = []
     for row in held:
@@ -306,7 +317,7 @@ def _problems(
         if (merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
                 and not any(problem.key == f"hold:{step.bead_id}" for problem in problems)):
             problems.append(Problem(
-                f"conflict:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
+                f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
                 f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
             ))
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
@@ -316,12 +327,15 @@ def _problems(
         heads = {pr.head for pr in prs}
         remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
         pushed = {remote.branch for remote in remotes}
-        for step in phase.steps:
-            if (step.status != "closed" and step.branch in pushed and step.branch not in heads
-                    and step.kind in ("dev", "fix", "sanity", "qa")):
+        open_branches = {
+            step.branch for step in phase.steps
+            if step.status != "closed" and step.kind in ("dev", "fix", "sanity", "qa")
+        }
+        for branch, step in by_branch.items():
+            if branch in open_branches and branch in pushed and branch not in heads:
                 problems.append(Problem(
-                    f"missing_pr:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
-                    f"pushed branch {step.branch} has no open PR", now,
+                    f"missing_pr:{branch}", step.bead_id, step.assignee or inputs.lead,
+                    f"pushed branch {branch} has no open PR", now,
                 ))
     if fresh_github and top_pr is not None and top_pr.ci == "failure":
         checks = ", ".join(top_pr.failed_checks)
@@ -334,12 +348,11 @@ def _problems(
     for previous in state.problems:
         if previous.key in current_keys:
             continue
-        if previous.key.startswith(("missing_pr:", "top_ci:")) and not fresh_github:
+        if (
+            previous.key.startswith(("missing_pr:", "top_ci:")) and not fresh_github
+            or previous.key.startswith("conflict:") and previous.key.removeprefix("conflict:") not in refreshed_merges
+        ):
             problems.append(previous)
-        elif previous.key.startswith("conflict:"):
-            step = by_id.get(previous.bead_id)
-            if step is None or step.branch not in refreshed_merges:
-                problems.append(previous)
     return tuple(problems)
 
 
