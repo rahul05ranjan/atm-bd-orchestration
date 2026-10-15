@@ -1,0 +1,1641 @@
+[
+  {
+    "id": "atm-bh-1.group-dev",
+    "title": "bh-1: dev",
+    "description": "Dev work for sprint bh-1. The deliverables and acceptance criteria are on the sprint container atm-bh-1.",
+    "notes": "layer PR #131 https://github.com/randlee/atm-bd-orchestration/pull/131",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "trinity",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:16Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:07:36Z",
+    "started_at": "2026-10-15T01:57:44Z",
+    "closed_at": "2026-10-15T02:06:53Z",
+    "close_reason": "dev complete at 8bfc413",
+    "metadata": {
+      "difficulty": "hard",
+      "layer": 1,
+      "phase": "bh",
+      "role": "dev",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+        "mode": "attach",
+        "parent": "atm-bh-1",
+        "ref": "group",
+        "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+        "step": "dev",
+        "v": 1
+      },
+      "sprint": "bh-1",
+      "sprint_bead": "atm-bh-1",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1",
+        "title": "bh-1: contract: Result, source and tick types, JSON codec",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nThe one shared contract every other sprint codes against: the package skeleton, `Ok | Err` with the error union, the plain types each source module returns, the tick and detail-file types, and the JSON codec. Small on purpose: it unblocks bh-3..bh-8 and bh-10 in parallel.\n\n## Deliverables\n1. Package `apps/atm-bd-console/`: pyproject.toml (python \u003e=3.11; deps rich, textual, sc-observability\u003e=1.5.0; dev deps pytest, ruff; script `atm-bd-console = atm_bd_console.cli:main`), `__init__.py` with `__version__`; `uv run pytest` and `uv run ruff check` work. Platform: macOS and Linux (bh-7 uses `fcntl`).\n2. `result.py` and `types.py` exactly as the design (field names and literals verbatim), plus `MergeFile`, `PrsFile`, `ActionLine` from the detail-file table. Frozen dataclasses and type aliases only; no logic, no I/O.\n3. `codec.py`: `to_json`, `from_json` and `snapshot_stale` per the design's wire format.\n4. `tests/conftest.py`: a `fake_bin(tmp_path, name, script)` fixture that puts a recording fake executable first on PATH (argv log + canned stdout/exit); every source sprint uses it.\n5. `tests/fixtures/contract/`: one JSON file per detail file and per Snapshot shape (running, stopped closed, stopped idle, gh off, gh Err), written with `to_json` from populated instances. They are shape fixtures: consumers (bh-8, bh-10) render them; producers own their own goldens.\n6. `tests/test_boundaries.py`, the one ownership test: only `atm_source.py`, `beads_source.py`, `git_source.py`, `github_source.py` and `status.py` import `subprocess`; `model.py`, `dispatch.py`, `render.py` and `prs.py` import no `*_source` module; no file under `src/` exceeds 1000 lines; no `bd list --all` string under `src/`. Modules not written yet are skipped.\n\n## Does Not Close\n- any source module, rule, renderer or CLI (bh-2..bh-10).\n",
+        "design": "## Contract (agreed 2026-10-14; frozen for wave 2: a needed change is a new layer on types.py, never an edit inside a wave-2 sprint)\n```python\n# result.py\n@dataclass(frozen=True)\nclass Ok(Generic[T]): value: T\n@dataclass(frozen=True)\nclass Err: error: \"Error\"\nResult = Ok[T] | Err\n\n@dataclass(frozen=True)\nclass CommandFailed: kind: Literal[\"command_failed\"]; argv: tuple[str, ...]; code: int; stderr: str; fix: str\n@dataclass(frozen=True)\nclass Timeout: kind: Literal[\"timeout\"]; argv: tuple[str, ...]; seconds: int; fix: str\n@dataclass(frozen=True)\nclass Rejected: kind: Literal[\"rejected\"]; argv: tuple[str, ...]; status: int; message: str; fix: str   # e.g. GitHub 401/403\n@dataclass(frozen=True)\nclass Unreachable: kind: Literal[\"unreachable\"]; argv: tuple[str, ...]; message: str; fix: str\n@dataclass(frozen=True)\nclass ParseFailed: kind: Literal[\"parse_failed\"]; source: str; message: str; fix: str\n@dataclass(frozen=True)\nclass NotFound: kind: Literal[\"not_found\"]; what: str; fix: str\n@dataclass(frozen=True)\nclass ConfigInvalid: kind: Literal[\"config_invalid\"]; key: str; value: str; fix: str\n@dataclass(frozen=True)\nclass LockHeld: kind: Literal[\"lock_held\"]; snapshot_age_s: int | None; fix: str   # None: no snapshot yet\n@dataclass(frozen=True)\nclass IoFailed: kind: Literal[\"io_failed\"]; path: str; message: str; fix: str      # a state/snapshot write or read failed\nError = CommandFailed | Timeout | Rejected | Unreachable | ParseFailed | NotFound | ConfigInvalid | LockHeld | IoFailed   # discriminated by `kind`; every variant carries `fix` (the next action)\n\n# types.py -- source types: each source module returns these, never raw strings of its tool\nPresence = Literal[\"active\", \"idle\", \"offline\", \"blocked\", \"unknown\"]\n@dataclass(frozen=True)\nclass Member: name: str; presence: Presence; presence_since: datetime   # recipients come from RepoConfig and --as, never from the roster\n@dataclass(frozen=True)\nclass Task: id: str; agent: str; state: Literal[\"assigned\", \"active\"]; position: int; assigned_at: datetime; state_since: datetime; description: str   # state_since = atm `updated_at` (atm reports no started_at)\n@dataclass(frozen=True)\nclass Bead: id: str; title: str; status: Literal[\"open\", \"in_progress\", \"blocked\", \"closed\"]; labels: tuple[str, ...]; parent: str | None\n    blocked_by: tuple[str, ...]; assignee: str | None; metadata: Mapping[str, Any]; created_at: datetime; claimed_at: datetime | None; closed_at: datetime | None\nStepKind = Literal[\"dev\", \"fix\", \"sanity\", \"qa\", \"finding\", \"plan_review\", \"container\", \"other\"]\n@dataclass(frozen=True)\nclass Step: bead_id: str; sprint: str | None; kind: StepKind; quick_fix: bool; anchor: bool; status: Literal[\"open\", \"in_progress\", \"blocked\", \"closed\"]\n    ready: bool; assignee: str | None; branch: str | None; target: str | None; worktree: str | None; layer: int | None\n    difficulty: Literal[\"hard\", \"normal\", \"fast\"] | None; tag: str; top_epic: str | None; claimed_at: datetime | None; closed_at: datetime | None; title: str\n    checked_bead: str | None; sprint_bead: str | None; qa_round: int | None; carry_forward: str | None\n    # production keys (formulas sprint-group/finding-group, qa-bead.json.j2, finding-bead.json.j2):\n    # sanity: checked_bead = metadata.dev_bead\n    # QA: checked_bead = metadata.checked_bead; qa_round = metadata.round;\n    #     sprint_bead = metadata.sprint_bead, else the checked bead's metadata.sprint_bead (qa-bead.json.j2 writes none);\n    #     carry_forward = checked_bead when the checked bead is a fix or finding bead (fix verification), else None (sprint review)\n    #     -- carry_forward is never a metadata key; it is derived here\n@dataclass(frozen=True)\nclass Sprint: id: str; title: str; layer: int; branch: str; target: str; depends_on: tuple[str, ...]; closed: bool; findings: int\n@dataclass(frozen=True)\nclass Phase: root_id: str; label: str; title: str; closed: bool; sprints: tuple[Sprint, ...]; steps: tuple[Step, ...]\n    step_errors: tuple[tuple[str, Error], ...]     # (bead_id, Err) for each bead step() rejected; that bead is in no step, never defaulted\n@dataclass(frozen=True)\nclass DispatchSpec: template: str; vars: Mapping[str, Any]\n@dataclass(frozen=True)\nclass RemoteRef: branch: str; sha: str\n@dataclass(frozen=True)\nclass Merge: branch: str; target: str; state: Literal[\"clean\", \"conflict\", \"error\"]; files: tuple[str, ...]; messages: tuple[str, ...]; checked_at: datetime\n@dataclass(frozen=True)\nclass Worktree: path: str; branch: str | None; head: str\n@dataclass(frozen=True)\nclass PullRequest: number: int; url: str; head: str; base: str; head_sha: str; ci: Literal[\"success\", \"pending\", \"failure\", \"none\"]; failed_checks: tuple[str, ...]\n@dataclass(frozen=True)\nclass GhStatus: mode: Literal[\"graphql\", \"rest\", \"off\"]; ok: bool | None; error: Error | None; at: datetime | None; truncated: bool   # \u003e100 open PRs\n@dataclass(frozen=True)\nclass RepoConfig: bead_prefix: str; sanity_member: str; qa_member: str; primary_checkout: str; worktree_base: str; lint_command: str; policy_path: str; reviewers_round1: tuple[str, ...]; plans_dir: str\n    # from .claude/project/atm-bd-orchestration.yaml (dev_sanity_member, qa_member, ...); the lead is Config.lead (--as)\n@dataclass(frozen=True)\nclass Config: phase: str; lead: str; github: Literal[\"graphql\", \"rest\", \"off\"]; interval_s: int; dry_run: bool; no_fetch: bool; repo_root: str; state_dir: str\n@dataclass(frozen=True)\nclass DispatchContext:                                              # everything dispatch_spec needs; no hidden reads\n    step: Step; sprint: Sprint; phase_id: str; phase_title: str; stack: str; lead: str; commit: str   # commit = origin/\u003cbranch\u003e sha\n    base: str; worktree_path: str; pr: PullRequest | None; layer_prs: tuple[PullRequest, ...]; repo: RepoConfig\n    # checked_bead, sprint_bead, round and carry_forward come from step (never defaulted for a QA step: a missing checked_bead is Err(NotFound))\n\n# types.py -- tick types\n@dataclass(frozen=True)\nclass Inputs:\n    now: datetime; lead: str; phase: Result[Phase]; members: Result[tuple[Member, ...]]; tasks: Result[tuple[Task, ...]]\n    worktrees: Result[tuple[Worktree, ...]]; remotes: Result[tuple[RemoteRef, ...]] | None; merges: tuple[Result[Merge], ...] | None\n    prs: Result[tuple[PullRequest, ...]] | None; gh: GhStatus                      # None = not read this tick (not due)\nAgentStatus = Literal[\"busy\", \"stalling\", \"blocked\", \"offline\", \"idle\"]\n@dataclass(frozen=True)\nclass Row: task_id: str; state: Literal[\"running\", \"queued\"]; kind: Literal[\"dev\", \"fix\", \"sprint_qa\", \"fix_qa\", \"other\"]\n    difficulty: Literal[\"hard\", \"normal\", \"fast\"] | None; tag: str; marker: Literal[\"red\", \"yellow\"] | None; age_s: int; description: str\n@dataclass(frozen=True)\nclass AgentView: name: str; status: AgentStatus; status_since: datetime; depth: int; rows: tuple[Row, ...]\n@dataclass(frozen=True)\nclass SectionRow: bead_id: str; age_s: int; reason: str; pr: int | None\n@dataclass(frozen=True)\nclass Section: label: str; rows: tuple[SectionRow, ...]\n@dataclass(frozen=True)\nclass StepView: bead_id: str; kind: StepKind; status: str; assignee: str | None\n@dataclass(frozen=True)\nclass SprintView: id: str; title: str; state: Literal[\"closed\", \"in_progress\", \"ready\", \"not_ready\"]; depends_on: tuple[str, ...]; steps: tuple[StepView, ...]\n@dataclass(frozen=True)\nclass Problem: key: str; bead_id: str | None; to: str; text: str; first_seen: datetime\n@dataclass(frozen=True)\nclass Action: at: datetime; kind: Literal[\"assign\", \"send\", \"batch\"]; to: str; bead_ids: tuple[str, ...]; text: str; spec: DispatchSpec | None\n@dataclass(frozen=True)\nclass PrRow: pr: PullRequest; layer: int | None; bead_id: str | None; top: bool; merge: Merge | None   # one per open phase PR, layer order\n@dataclass(frozen=True)\nclass Metrics: done: int; total: int; pct: int; active_s: int\n@dataclass(frozen=True)\nclass Due: fetch: bool; merges: tuple[tuple[str, str], ...]; github: bool         # what the runner reads before the next tick\n# due(state: State, phase: Phase, github_mode: str, now: datetime) -\u003e Due\n# tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -\u003e tuple[Snapshot, tuple[Action, ...], State]   -- remote refs come from State.remotes (last read)\n@dataclass(frozen=True)\nclass Snapshot:\n    schema: int; generated_at: datetime; phase: str; root_closed: bool; stopped: Literal[\"closed\", \"idle\"] | None\n    agents: tuple[AgentView, ...]; sections: tuple[Section, ...]; problems: tuple[Problem, ...]; errors: tuple[Error, ...]\n    metrics: Metrics; gh: GhStatus; top_pr: int | None; top_ci: str | None; mermaid: str; sprints: tuple[SprintView, ...]\n    interval_s: int; lead: str; bead_prefix: str; sent: tuple[Action, ...]; prs: tuple[PrRow, ...]\n    files: Mapping[str, str]   # detail-file name -\u003e path relative to the repo root, e.g. {\"prs\": \".atm-bd/atm-bd-console/atm-phase-bh/prs.json\"}\n@dataclass(frozen=True)\nclass State: problems: tuple[Problem, ...]; cycle_first_send: datetime | None; last_batch: datetime | None\n    last_cycle: datetime | None; idle_since: datetime | None; sent: tuple[Action, ...]; remotes: tuple[RemoteRef, ...]\n    batch_due: Mapping[str, datetime]               # per recipient: next batch resend\n\n@dataclass(frozen=True)\nclass PhaseFile: phase: str; root_id: str; label: str; sprints: tuple[str, ...]; depends_on: Mapping[str, tuple[str, ...]]   # .atm-bd/phase-\u003cx\u003e.toml + plan file\n\n# injected functions (keep the pure tick free of imports of atm_bd and of the runner)\nSpecFn = Callable[[DispatchContext], Result[DispatchSpec]]      # atm_bd.dispatch_spec (bh-4), passed to model.tick by the runner\n# runner contract (implemented by bh-9, called by bh-10's app)\nStepFn = Callable[[Config, \"State\", bool], tuple[Snapshot, \"State\"]]   # third arg: force_github (one GitHub read now, unless mode off)\n\n# codec.py (the only logic in bh-1)\ndef to_json(obj) -\u003e str: ...\ndef from_json(cls, text: str) -\u003e Result[Any]: ...\ndef snapshot_stale(snapshot: Snapshot, now: datetime) -\u003e bool: ...   # now - generated_at \u003e 2 * interval_s; the one staleness rule (cli show, cli --once)\n```\n\n## Wire format (codec.py)\n- dataclass -\u003e JSON object with its field names; tuple -\u003e array; Mapping -\u003e object (string keys); None -\u003e null; Literal -\u003e its string (decode rejects any other value).\n- datetime -\u003e `YYYY-MM-DDTHH:MM:SSZ` UTC; decode rejects naive or non-`Z` text.\n- Ok -\u003e `{\"ok\": \u003cvalue\u003e}`; Err -\u003e `{\"err\": \u003cerror\u003e}`; an Error object is decoded by its `kind`.\n- `from_json(cls, text)` decodes by the type annotations of `cls`; any mismatch is `Err(ParseFailed)` naming the field path; it never raises.\n\n## Detail files (JSON schemas, written by bh-7; `\u003croot\u003e` = the phase root bead id)\n| file | schema |\n|---|---|\n| snapshot.json | `Snapshot` |\n| state.json | `State` |\n| merge.json | `MergeFile(checked_at: datetime, merges: Mapping[str, Merge])`: the runner's cache of the last merge check per branch |\n| prs.json | `PrsFile(read_at: datetime, gh: GhStatus, prs: tuple[PullRequest, ...])`: the runner's cache of the last GitHub read |\n| actions.jsonl | one `ActionLine(at: datetime, kind: Literal[\"assign\",\"send\",\"batch\",\"hold\",\"dry_run\"], to: str | None, bead: str | None, text: str)` per line |\n\nThe renderers read only `Snapshot` (PR rows, CI and merge state are in `Snapshot.prs`). Read errors live in `Snapshot.errors` and the log; there is no errors file and no CI history file.\n",
+        "acceptance_criteria": "- [ ] (D1) `uv run pytest -q` and `uv run ruff check src tests` pass on the skeleton; `atm-bd-console` script entry is declared.\n- [ ] (D2) `types.py` and `result.py` define every name in the design with the same fields and literals (a test imports each name); `grep -nE 'raise|subprocess|open\\(|def ' result.py types.py` finds nothing.\n- [ ] (D3) Round-trip test over one populated instance of every type including `Ok`/`Err` of each Error kind; a naive datetime, a wrong Literal and a missing field each give `Err(ParseFailed)` naming the field path; a local-time datetime is written in UTC with `Z`; `snapshot_stale` is false at 2 × interval and true one second later.\n- [ ] (D4) A test uses `fake_bin` and reads back the recorded argv.\n- [ ] (D5) Every contract fixture parses back with `from_json` into its type.\n- [ ] (D6) `test_boundaries.py` fails on a planted `import subprocess` in a temp copy of `model.py` and on a planted 1001-line file.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:24:56Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-1-contract",
+          "closure_type": "contract",
+          "difficulty": "normal",
+          "layer": 1,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/pyproject.toml",
+            "apps/atm-bd-console/src/atm_bd_console/__init__.py",
+            "apps/atm-bd-console/src/atm_bd_console/result.py",
+            "apps/atm-bd-console/src/atm_bd_console/types.py",
+            "apps/atm-bd-console/tests/test_types.py",
+            "apps/atm-bd-console/tests/conftest.py",
+            "apps/atm-bd-console/tests/fixtures/contract/",
+            "apps/atm-bd-console/src/atm_bd_console/codec.py",
+            "apps/atm-bd-console/tests/test_boundaries.py",
+            "apps/atm-bd-console/tests/test_codec.py",
+            "apps/atm-bd-console/tests/test_fixtures.py",
+            "apps/atm-bd-console/uv.lock"
+          ],
+          "phase": "bh",
+          "pr_target": "integrate/phase-bh",
+          "relation": "root",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-1",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console package skeleton and the shared type contract",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-1-contract"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-bh-1",
+    "dependent_count": 2,
+    "dependency_count": 1,
+    "comment_count": 0,
+    "revision": "6217031801509332633"
+  },
+  {
+    "id": "atm-bh-1.group-qa",
+    "title": "bh-1: QA round 1",
+    "description": "QA round 1 of atm-bh-1.group-dev (sprint bh-1), after its sanity check passes.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "quality-mgr",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:16Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:16:13Z",
+    "started_at": "2026-10-15T02:12:39Z",
+    "closed_at": "2026-10-15T02:16:13Z",
+    "close_reason": "FAIL: 12 findings filed",
+    "metadata": {
+      "checked_bead": "atm-bh-1.group-dev",
+      "difficulty": "hard",
+      "phase": "bh",
+      "role": "qa",
+      "round": 1,
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+        "mode": "attach",
+        "parent": "atm-bh-1",
+        "ref": "group",
+        "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+        "step": "qa",
+        "v": 1
+      },
+      "sprint": "bh-1",
+      "sprint_bead": "atm-bh-1",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:qa"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1",
+        "title": "bh-1: contract: Result, source and tick types, JSON codec",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nThe one shared contract every other sprint codes against: the package skeleton, `Ok | Err` with the error union, the plain types each source module returns, the tick and detail-file types, and the JSON codec. Small on purpose: it unblocks bh-3..bh-8 and bh-10 in parallel.\n\n## Deliverables\n1. Package `apps/atm-bd-console/`: pyproject.toml (python \u003e=3.11; deps rich, textual, sc-observability\u003e=1.5.0; dev deps pytest, ruff; script `atm-bd-console = atm_bd_console.cli:main`), `__init__.py` with `__version__`; `uv run pytest` and `uv run ruff check` work. Platform: macOS and Linux (bh-7 uses `fcntl`).\n2. `result.py` and `types.py` exactly as the design (field names and literals verbatim), plus `MergeFile`, `PrsFile`, `ActionLine` from the detail-file table. Frozen dataclasses and type aliases only; no logic, no I/O.\n3. `codec.py`: `to_json`, `from_json` and `snapshot_stale` per the design's wire format.\n4. `tests/conftest.py`: a `fake_bin(tmp_path, name, script)` fixture that puts a recording fake executable first on PATH (argv log + canned stdout/exit); every source sprint uses it.\n5. `tests/fixtures/contract/`: one JSON file per detail file and per Snapshot shape (running, stopped closed, stopped idle, gh off, gh Err), written with `to_json` from populated instances. They are shape fixtures: consumers (bh-8, bh-10) render them; producers own their own goldens.\n6. `tests/test_boundaries.py`, the one ownership test: only `atm_source.py`, `beads_source.py`, `git_source.py`, `github_source.py` and `status.py` import `subprocess`; `model.py`, `dispatch.py`, `render.py` and `prs.py` import no `*_source` module; no file under `src/` exceeds 1000 lines; no `bd list --all` string under `src/`. Modules not written yet are skipped.\n\n## Does Not Close\n- any source module, rule, renderer or CLI (bh-2..bh-10).\n",
+        "design": "## Contract (agreed 2026-10-14; frozen for wave 2: a needed change is a new layer on types.py, never an edit inside a wave-2 sprint)\n```python\n# result.py\n@dataclass(frozen=True)\nclass Ok(Generic[T]): value: T\n@dataclass(frozen=True)\nclass Err: error: \"Error\"\nResult = Ok[T] | Err\n\n@dataclass(frozen=True)\nclass CommandFailed: kind: Literal[\"command_failed\"]; argv: tuple[str, ...]; code: int; stderr: str; fix: str\n@dataclass(frozen=True)\nclass Timeout: kind: Literal[\"timeout\"]; argv: tuple[str, ...]; seconds: int; fix: str\n@dataclass(frozen=True)\nclass Rejected: kind: Literal[\"rejected\"]; argv: tuple[str, ...]; status: int; message: str; fix: str   # e.g. GitHub 401/403\n@dataclass(frozen=True)\nclass Unreachable: kind: Literal[\"unreachable\"]; argv: tuple[str, ...]; message: str; fix: str\n@dataclass(frozen=True)\nclass ParseFailed: kind: Literal[\"parse_failed\"]; source: str; message: str; fix: str\n@dataclass(frozen=True)\nclass NotFound: kind: Literal[\"not_found\"]; what: str; fix: str\n@dataclass(frozen=True)\nclass ConfigInvalid: kind: Literal[\"config_invalid\"]; key: str; value: str; fix: str\n@dataclass(frozen=True)\nclass LockHeld: kind: Literal[\"lock_held\"]; snapshot_age_s: int | None; fix: str   # None: no snapshot yet\n@dataclass(frozen=True)\nclass IoFailed: kind: Literal[\"io_failed\"]; path: str; message: str; fix: str      # a state/snapshot write or read failed\nError = CommandFailed | Timeout | Rejected | Unreachable | ParseFailed | NotFound | ConfigInvalid | LockHeld | IoFailed   # discriminated by `kind`; every variant carries `fix` (the next action)\n\n# types.py -- source types: each source module returns these, never raw strings of its tool\nPresence = Literal[\"active\", \"idle\", \"offline\", \"blocked\", \"unknown\"]\n@dataclass(frozen=True)\nclass Member: name: str; presence: Presence; presence_since: datetime   # recipients come from RepoConfig and --as, never from the roster\n@dataclass(frozen=True)\nclass Task: id: str; agent: str; state: Literal[\"assigned\", \"active\"]; position: int; assigned_at: datetime; state_since: datetime; description: str   # state_since = atm `updated_at` (atm reports no started_at)\n@dataclass(frozen=True)\nclass Bead: id: str; title: str; status: Literal[\"open\", \"in_progress\", \"blocked\", \"closed\"]; labels: tuple[str, ...]; parent: str | None\n    blocked_by: tuple[str, ...]; assignee: str | None; metadata: Mapping[str, Any]; created_at: datetime; claimed_at: datetime | None; closed_at: datetime | None\nStepKind = Literal[\"dev\", \"fix\", \"sanity\", \"qa\", \"finding\", \"plan_review\", \"container\", \"other\"]\n@dataclass(frozen=True)\nclass Step: bead_id: str; sprint: str | None; kind: StepKind; quick_fix: bool; anchor: bool; status: Literal[\"open\", \"in_progress\", \"blocked\", \"closed\"]\n    ready: bool; assignee: str | None; branch: str | None; target: str | None; worktree: str | None; layer: int | None\n    difficulty: Literal[\"hard\", \"normal\", \"fast\"] | None; tag: str; top_epic: str | None; claimed_at: datetime | None; closed_at: datetime | None; title: str\n    checked_bead: str | None; sprint_bead: str | None; qa_round: int | None; carry_forward: str | None\n    # production keys (formulas sprint-group/finding-group, qa-bead.json.j2, finding-bead.json.j2):\n    # sanity: checked_bead = metadata.dev_bead\n    # QA: checked_bead = metadata.checked_bead; qa_round = metadata.round;\n    #     sprint_bead = metadata.sprint_bead, else the checked bead's metadata.sprint_bead (qa-bead.json.j2 writes none);\n    #     carry_forward = checked_bead when the checked bead is a fix or finding bead (fix verification), else None (sprint review)\n    #     -- carry_forward is never a metadata key; it is derived here\n@dataclass(frozen=True)\nclass Sprint: id: str; title: str; layer: int; branch: str; target: str; depends_on: tuple[str, ...]; closed: bool; findings: int\n@dataclass(frozen=True)\nclass Phase: root_id: str; label: str; title: str; closed: bool; sprints: tuple[Sprint, ...]; steps: tuple[Step, ...]\n    step_errors: tuple[tuple[str, Error], ...]     # (bead_id, Err) for each bead step() rejected; that bead is in no step, never defaulted\n@dataclass(frozen=True)\nclass DispatchSpec: template: str; vars: Mapping[str, Any]\n@dataclass(frozen=True)\nclass RemoteRef: branch: str; sha: str\n@dataclass(frozen=True)\nclass Merge: branch: str; target: str; state: Literal[\"clean\", \"conflict\", \"error\"]; files: tuple[str, ...]; messages: tuple[str, ...]; checked_at: datetime\n@dataclass(frozen=True)\nclass Worktree: path: str; branch: str | None; head: str\n@dataclass(frozen=True)\nclass PullRequest: number: int; url: str; head: str; base: str; head_sha: str; ci: Literal[\"success\", \"pending\", \"failure\", \"none\"]; failed_checks: tuple[str, ...]\n@dataclass(frozen=True)\nclass GhStatus: mode: Literal[\"graphql\", \"rest\", \"off\"]; ok: bool | None; error: Error | None; at: datetime | None; truncated: bool   # \u003e100 open PRs\n@dataclass(frozen=True)\nclass RepoConfig: bead_prefix: str; sanity_member: str; qa_member: str; primary_checkout: str; worktree_base: str; lint_command: str; policy_path: str; reviewers_round1: tuple[str, ...]; plans_dir: str\n    # from .claude/project/atm-bd-orchestration.yaml (dev_sanity_member, qa_member, ...); the lead is Config.lead (--as)\n@dataclass(frozen=True)\nclass Config: phase: str; lead: str; github: Literal[\"graphql\", \"rest\", \"off\"]; interval_s: int; dry_run: bool; no_fetch: bool; repo_root: str; state_dir: str\n@dataclass(frozen=True)\nclass DispatchContext:                                              # everything dispatch_spec needs; no hidden reads\n    step: Step; sprint: Sprint; phase_id: str; phase_title: str; stack: str; lead: str; commit: str   # commit = origin/\u003cbranch\u003e sha\n    base: str; worktree_path: str; pr: PullRequest | None; layer_prs: tuple[PullRequest, ...]; repo: RepoConfig\n    # checked_bead, sprint_bead, round and carry_forward come from step (never defaulted for a QA step: a missing checked_bead is Err(NotFound))\n\n# types.py -- tick types\n@dataclass(frozen=True)\nclass Inputs:\n    now: datetime; lead: str; phase: Result[Phase]; members: Result[tuple[Member, ...]]; tasks: Result[tuple[Task, ...]]\n    worktrees: Result[tuple[Worktree, ...]]; remotes: Result[tuple[RemoteRef, ...]] | None; merges: tuple[Result[Merge], ...] | None\n    prs: Result[tuple[PullRequest, ...]] | None; gh: GhStatus                      # None = not read this tick (not due)\nAgentStatus = Literal[\"busy\", \"stalling\", \"blocked\", \"offline\", \"idle\"]\n@dataclass(frozen=True)\nclass Row: task_id: str; state: Literal[\"running\", \"queued\"]; kind: Literal[\"dev\", \"fix\", \"sprint_qa\", \"fix_qa\", \"other\"]\n    difficulty: Literal[\"hard\", \"normal\", \"fast\"] | None; tag: str; marker: Literal[\"red\", \"yellow\"] | None; age_s: int; description: str\n@dataclass(frozen=True)\nclass AgentView: name: str; status: AgentStatus; status_since: datetime; depth: int; rows: tuple[Row, ...]\n@dataclass(frozen=True)\nclass SectionRow: bead_id: str; age_s: int; reason: str; pr: int | None\n@dataclass(frozen=True)\nclass Section: label: str; rows: tuple[SectionRow, ...]\n@dataclass(frozen=True)\nclass StepView: bead_id: str; kind: StepKind; status: str; assignee: str | None\n@dataclass(frozen=True)\nclass SprintView: id: str; title: str; state: Literal[\"closed\", \"in_progress\", \"ready\", \"not_ready\"]; depends_on: tuple[str, ...]; steps: tuple[StepView, ...]\n@dataclass(frozen=True)\nclass Problem: key: str; bead_id: str | None; to: str; text: str; first_seen: datetime\n@dataclass(frozen=True)\nclass Action: at: datetime; kind: Literal[\"assign\", \"send\", \"batch\"]; to: str; bead_ids: tuple[str, ...]; text: str; spec: DispatchSpec | None\n@dataclass(frozen=True)\nclass PrRow: pr: PullRequest; layer: int | None; bead_id: str | None; top: bool; merge: Merge | None   # one per open phase PR, layer order\n@dataclass(frozen=True)\nclass Metrics: done: int; total: int; pct: int; active_s: int\n@dataclass(frozen=True)\nclass Due: fetch: bool; merges: tuple[tuple[str, str], ...]; github: bool         # what the runner reads before the next tick\n# due(state: State, phase: Phase, github_mode: str, now: datetime) -\u003e Due\n# tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -\u003e tuple[Snapshot, tuple[Action, ...], State]   -- remote refs come from State.remotes (last read)\n@dataclass(frozen=True)\nclass Snapshot:\n    schema: int; generated_at: datetime; phase: str; root_closed: bool; stopped: Literal[\"closed\", \"idle\"] | None\n    agents: tuple[AgentView, ...]; sections: tuple[Section, ...]; problems: tuple[Problem, ...]; errors: tuple[Error, ...]\n    metrics: Metrics; gh: GhStatus; top_pr: int | None; top_ci: str | None; mermaid: str; sprints: tuple[SprintView, ...]\n    interval_s: int; lead: str; bead_prefix: str; sent: tuple[Action, ...]; prs: tuple[PrRow, ...]\n    files: Mapping[str, str]   # detail-file name -\u003e path relative to the repo root, e.g. {\"prs\": \".atm-bd/atm-bd-console/atm-phase-bh/prs.json\"}\n@dataclass(frozen=True)\nclass State: problems: tuple[Problem, ...]; cycle_first_send: datetime | None; last_batch: datetime | None\n    last_cycle: datetime | None; idle_since: datetime | None; sent: tuple[Action, ...]; remotes: tuple[RemoteRef, ...]\n    batch_due: Mapping[str, datetime]               # per recipient: next batch resend\n\n@dataclass(frozen=True)\nclass PhaseFile: phase: str; root_id: str; label: str; sprints: tuple[str, ...]; depends_on: Mapping[str, tuple[str, ...]]   # .atm-bd/phase-\u003cx\u003e.toml + plan file\n\n# injected functions (keep the pure tick free of imports of atm_bd and of the runner)\nSpecFn = Callable[[DispatchContext], Result[DispatchSpec]]      # atm_bd.dispatch_spec (bh-4), passed to model.tick by the runner\n# runner contract (implemented by bh-9, called by bh-10's app)\nStepFn = Callable[[Config, \"State\", bool], tuple[Snapshot, \"State\"]]   # third arg: force_github (one GitHub read now, unless mode off)\n\n# codec.py (the only logic in bh-1)\ndef to_json(obj) -\u003e str: ...\ndef from_json(cls, text: str) -\u003e Result[Any]: ...\ndef snapshot_stale(snapshot: Snapshot, now: datetime) -\u003e bool: ...   # now - generated_at \u003e 2 * interval_s; the one staleness rule (cli show, cli --once)\n```\n\n## Wire format (codec.py)\n- dataclass -\u003e JSON object with its field names; tuple -\u003e array; Mapping -\u003e object (string keys); None -\u003e null; Literal -\u003e its string (decode rejects any other value).\n- datetime -\u003e `YYYY-MM-DDTHH:MM:SSZ` UTC; decode rejects naive or non-`Z` text.\n- Ok -\u003e `{\"ok\": \u003cvalue\u003e}`; Err -\u003e `{\"err\": \u003cerror\u003e}`; an Error object is decoded by its `kind`.\n- `from_json(cls, text)` decodes by the type annotations of `cls`; any mismatch is `Err(ParseFailed)` naming the field path; it never raises.\n\n## Detail files (JSON schemas, written by bh-7; `\u003croot\u003e` = the phase root bead id)\n| file | schema |\n|---|---|\n| snapshot.json | `Snapshot` |\n| state.json | `State` |\n| merge.json | `MergeFile(checked_at: datetime, merges: Mapping[str, Merge])`: the runner's cache of the last merge check per branch |\n| prs.json | `PrsFile(read_at: datetime, gh: GhStatus, prs: tuple[PullRequest, ...])`: the runner's cache of the last GitHub read |\n| actions.jsonl | one `ActionLine(at: datetime, kind: Literal[\"assign\",\"send\",\"batch\",\"hold\",\"dry_run\"], to: str | None, bead: str | None, text: str)` per line |\n\nThe renderers read only `Snapshot` (PR rows, CI and merge state are in `Snapshot.prs`). Read errors live in `Snapshot.errors` and the log; there is no errors file and no CI history file.\n",
+        "acceptance_criteria": "- [ ] (D1) `uv run pytest -q` and `uv run ruff check src tests` pass on the skeleton; `atm-bd-console` script entry is declared.\n- [ ] (D2) `types.py` and `result.py` define every name in the design with the same fields and literals (a test imports each name); `grep -nE 'raise|subprocess|open\\(|def ' result.py types.py` finds nothing.\n- [ ] (D3) Round-trip test over one populated instance of every type including `Ok`/`Err` of each Error kind; a naive datetime, a wrong Literal and a missing field each give `Err(ParseFailed)` naming the field path; a local-time datetime is written in UTC with `Z`; `snapshot_stale` is false at 2 × interval and true one second later.\n- [ ] (D4) A test uses `fake_bin` and reads back the recorded argv.\n- [ ] (D5) Every contract fixture parses back with `from_json` into its type.\n- [ ] (D6) `test_boundaries.py` fails on a planted `import subprocess` in a temp copy of `model.py` and on a planted 1001-line file.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:24:56Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-1-contract",
+          "closure_type": "contract",
+          "difficulty": "normal",
+          "layer": 1,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/pyproject.toml",
+            "apps/atm-bd-console/src/atm_bd_console/__init__.py",
+            "apps/atm-bd-console/src/atm_bd_console/result.py",
+            "apps/atm-bd-console/src/atm_bd_console/types.py",
+            "apps/atm-bd-console/tests/test_types.py",
+            "apps/atm-bd-console/tests/conftest.py",
+            "apps/atm-bd-console/tests/fixtures/contract/",
+            "apps/atm-bd-console/src/atm_bd_console/codec.py",
+            "apps/atm-bd-console/tests/test_boundaries.py",
+            "apps/atm-bd-console/tests/test_codec.py",
+            "apps/atm-bd-console/tests/test_fixtures.py",
+            "apps/atm-bd-console/uv.lock"
+          ],
+          "phase": "bh",
+          "pr_target": "integrate/phase-bh",
+          "relation": "root",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-1",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console package skeleton and the shared type contract",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-1-contract"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-1.group-dev",
+        "title": "bh-1: dev",
+        "description": "Dev work for sprint bh-1. The deliverables and acceptance criteria are on the sprint container atm-bh-1.",
+        "notes": "layer PR #131 https://github.com/randlee/atm-bd-orchestration/pull/131",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "trinity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:07:36Z",
+        "started_at": "2026-10-15T01:57:44Z",
+        "closed_at": "2026-10-15T02:06:53Z",
+        "close_reason": "dev complete at 8bfc413",
+        "metadata": {
+          "difficulty": "hard",
+          "layer": 1,
+          "phase": "bh",
+          "role": "dev",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "dev",
+            "v": 1
+          },
+          "sprint": "bh-1",
+          "sprint_bead": "atm-bh-1",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev"
+        ],
+        "dependency_type": "validates"
+      },
+      {
+        "id": "atm-bh-1.group-sanity",
+        "title": "bh-1: sanity check",
+        "description": "Sanity check of atm-bh-1.group-dev (sprint bh-1): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:11:02Z",
+        "started_at": "2026-10-15T02:07:55Z",
+        "closed_at": "2026-10-15T02:11:02Z",
+        "close_reason": "PASS at 8bfc413c251704addd33f35bc998703e40004cf3",
+        "metadata": {
+          "dev_bead": "atm-bh-1.group-dev",
+          "difficulty": "hard",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-1",
+    "dependent_count": 12,
+    "dependency_count": 3,
+    "comment_count": 0,
+    "revision": "-4369128968731314365"
+  },
+  {
+    "id": "atm-bh-1.group-sanity",
+    "title": "bh-1: sanity check",
+    "description": "Sanity check of atm-bh-1.group-dev (sprint bh-1): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "atm-sanity",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:16Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:11:02Z",
+    "started_at": "2026-10-15T02:07:55Z",
+    "closed_at": "2026-10-15T02:11:02Z",
+    "close_reason": "PASS at 8bfc413c251704addd33f35bc998703e40004cf3",
+    "metadata": {
+      "dev_bead": "atm-bh-1.group-dev",
+      "difficulty": "hard",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+        "mode": "attach",
+        "parent": "atm-bh-1",
+        "ref": "group",
+        "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+        "step": "sanity",
+        "v": 1
+      }
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev-sanity"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1",
+        "title": "bh-1: contract: Result, source and tick types, JSON codec",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nThe one shared contract every other sprint codes against: the package skeleton, `Ok | Err` with the error union, the plain types each source module returns, the tick and detail-file types, and the JSON codec. Small on purpose: it unblocks bh-3..bh-8 and bh-10 in parallel.\n\n## Deliverables\n1. Package `apps/atm-bd-console/`: pyproject.toml (python \u003e=3.11; deps rich, textual, sc-observability\u003e=1.5.0; dev deps pytest, ruff; script `atm-bd-console = atm_bd_console.cli:main`), `__init__.py` with `__version__`; `uv run pytest` and `uv run ruff check` work. Platform: macOS and Linux (bh-7 uses `fcntl`).\n2. `result.py` and `types.py` exactly as the design (field names and literals verbatim), plus `MergeFile`, `PrsFile`, `ActionLine` from the detail-file table. Frozen dataclasses and type aliases only; no logic, no I/O.\n3. `codec.py`: `to_json`, `from_json` and `snapshot_stale` per the design's wire format.\n4. `tests/conftest.py`: a `fake_bin(tmp_path, name, script)` fixture that puts a recording fake executable first on PATH (argv log + canned stdout/exit); every source sprint uses it.\n5. `tests/fixtures/contract/`: one JSON file per detail file and per Snapshot shape (running, stopped closed, stopped idle, gh off, gh Err), written with `to_json` from populated instances. They are shape fixtures: consumers (bh-8, bh-10) render them; producers own their own goldens.\n6. `tests/test_boundaries.py`, the one ownership test: only `atm_source.py`, `beads_source.py`, `git_source.py`, `github_source.py` and `status.py` import `subprocess`; `model.py`, `dispatch.py`, `render.py` and `prs.py` import no `*_source` module; no file under `src/` exceeds 1000 lines; no `bd list --all` string under `src/`. Modules not written yet are skipped.\n\n## Does Not Close\n- any source module, rule, renderer or CLI (bh-2..bh-10).\n",
+        "design": "## Contract (agreed 2026-10-14; frozen for wave 2: a needed change is a new layer on types.py, never an edit inside a wave-2 sprint)\n```python\n# result.py\n@dataclass(frozen=True)\nclass Ok(Generic[T]): value: T\n@dataclass(frozen=True)\nclass Err: error: \"Error\"\nResult = Ok[T] | Err\n\n@dataclass(frozen=True)\nclass CommandFailed: kind: Literal[\"command_failed\"]; argv: tuple[str, ...]; code: int; stderr: str; fix: str\n@dataclass(frozen=True)\nclass Timeout: kind: Literal[\"timeout\"]; argv: tuple[str, ...]; seconds: int; fix: str\n@dataclass(frozen=True)\nclass Rejected: kind: Literal[\"rejected\"]; argv: tuple[str, ...]; status: int; message: str; fix: str   # e.g. GitHub 401/403\n@dataclass(frozen=True)\nclass Unreachable: kind: Literal[\"unreachable\"]; argv: tuple[str, ...]; message: str; fix: str\n@dataclass(frozen=True)\nclass ParseFailed: kind: Literal[\"parse_failed\"]; source: str; message: str; fix: str\n@dataclass(frozen=True)\nclass NotFound: kind: Literal[\"not_found\"]; what: str; fix: str\n@dataclass(frozen=True)\nclass ConfigInvalid: kind: Literal[\"config_invalid\"]; key: str; value: str; fix: str\n@dataclass(frozen=True)\nclass LockHeld: kind: Literal[\"lock_held\"]; snapshot_age_s: int | None; fix: str   # None: no snapshot yet\n@dataclass(frozen=True)\nclass IoFailed: kind: Literal[\"io_failed\"]; path: str; message: str; fix: str      # a state/snapshot write or read failed\nError = CommandFailed | Timeout | Rejected | Unreachable | ParseFailed | NotFound | ConfigInvalid | LockHeld | IoFailed   # discriminated by `kind`; every variant carries `fix` (the next action)\n\n# types.py -- source types: each source module returns these, never raw strings of its tool\nPresence = Literal[\"active\", \"idle\", \"offline\", \"blocked\", \"unknown\"]\n@dataclass(frozen=True)\nclass Member: name: str; presence: Presence; presence_since: datetime   # recipients come from RepoConfig and --as, never from the roster\n@dataclass(frozen=True)\nclass Task: id: str; agent: str; state: Literal[\"assigned\", \"active\"]; position: int; assigned_at: datetime; state_since: datetime; description: str   # state_since = atm `updated_at` (atm reports no started_at)\n@dataclass(frozen=True)\nclass Bead: id: str; title: str; status: Literal[\"open\", \"in_progress\", \"blocked\", \"closed\"]; labels: tuple[str, ...]; parent: str | None\n    blocked_by: tuple[str, ...]; assignee: str | None; metadata: Mapping[str, Any]; created_at: datetime; claimed_at: datetime | None; closed_at: datetime | None\nStepKind = Literal[\"dev\", \"fix\", \"sanity\", \"qa\", \"finding\", \"plan_review\", \"container\", \"other\"]\n@dataclass(frozen=True)\nclass Step: bead_id: str; sprint: str | None; kind: StepKind; quick_fix: bool; anchor: bool; status: Literal[\"open\", \"in_progress\", \"blocked\", \"closed\"]\n    ready: bool; assignee: str | None; branch: str | None; target: str | None; worktree: str | None; layer: int | None\n    difficulty: Literal[\"hard\", \"normal\", \"fast\"] | None; tag: str; top_epic: str | None; claimed_at: datetime | None; closed_at: datetime | None; title: str\n    checked_bead: str | None; sprint_bead: str | None; qa_round: int | None; carry_forward: str | None\n    # production keys (formulas sprint-group/finding-group, qa-bead.json.j2, finding-bead.json.j2):\n    # sanity: checked_bead = metadata.dev_bead\n    # QA: checked_bead = metadata.checked_bead; qa_round = metadata.round;\n    #     sprint_bead = metadata.sprint_bead, else the checked bead's metadata.sprint_bead (qa-bead.json.j2 writes none);\n    #     carry_forward = checked_bead when the checked bead is a fix or finding bead (fix verification), else None (sprint review)\n    #     -- carry_forward is never a metadata key; it is derived here\n@dataclass(frozen=True)\nclass Sprint: id: str; title: str; layer: int; branch: str; target: str; depends_on: tuple[str, ...]; closed: bool; findings: int\n@dataclass(frozen=True)\nclass Phase: root_id: str; label: str; title: str; closed: bool; sprints: tuple[Sprint, ...]; steps: tuple[Step, ...]\n    step_errors: tuple[tuple[str, Error], ...]     # (bead_id, Err) for each bead step() rejected; that bead is in no step, never defaulted\n@dataclass(frozen=True)\nclass DispatchSpec: template: str; vars: Mapping[str, Any]\n@dataclass(frozen=True)\nclass RemoteRef: branch: str; sha: str\n@dataclass(frozen=True)\nclass Merge: branch: str; target: str; state: Literal[\"clean\", \"conflict\", \"error\"]; files: tuple[str, ...]; messages: tuple[str, ...]; checked_at: datetime\n@dataclass(frozen=True)\nclass Worktree: path: str; branch: str | None; head: str\n@dataclass(frozen=True)\nclass PullRequest: number: int; url: str; head: str; base: str; head_sha: str; ci: Literal[\"success\", \"pending\", \"failure\", \"none\"]; failed_checks: tuple[str, ...]\n@dataclass(frozen=True)\nclass GhStatus: mode: Literal[\"graphql\", \"rest\", \"off\"]; ok: bool | None; error: Error | None; at: datetime | None; truncated: bool   # \u003e100 open PRs\n@dataclass(frozen=True)\nclass RepoConfig: bead_prefix: str; sanity_member: str; qa_member: str; primary_checkout: str; worktree_base: str; lint_command: str; policy_path: str; reviewers_round1: tuple[str, ...]; plans_dir: str\n    # from .claude/project/atm-bd-orchestration.yaml (dev_sanity_member, qa_member, ...); the lead is Config.lead (--as)\n@dataclass(frozen=True)\nclass Config: phase: str; lead: str; github: Literal[\"graphql\", \"rest\", \"off\"]; interval_s: int; dry_run: bool; no_fetch: bool; repo_root: str; state_dir: str\n@dataclass(frozen=True)\nclass DispatchContext:                                              # everything dispatch_spec needs; no hidden reads\n    step: Step; sprint: Sprint; phase_id: str; phase_title: str; stack: str; lead: str; commit: str   # commit = origin/\u003cbranch\u003e sha\n    base: str; worktree_path: str; pr: PullRequest | None; layer_prs: tuple[PullRequest, ...]; repo: RepoConfig\n    # checked_bead, sprint_bead, round and carry_forward come from step (never defaulted for a QA step: a missing checked_bead is Err(NotFound))\n\n# types.py -- tick types\n@dataclass(frozen=True)\nclass Inputs:\n    now: datetime; lead: str; phase: Result[Phase]; members: Result[tuple[Member, ...]]; tasks: Result[tuple[Task, ...]]\n    worktrees: Result[tuple[Worktree, ...]]; remotes: Result[tuple[RemoteRef, ...]] | None; merges: tuple[Result[Merge], ...] | None\n    prs: Result[tuple[PullRequest, ...]] | None; gh: GhStatus                      # None = not read this tick (not due)\nAgentStatus = Literal[\"busy\", \"stalling\", \"blocked\", \"offline\", \"idle\"]\n@dataclass(frozen=True)\nclass Row: task_id: str; state: Literal[\"running\", \"queued\"]; kind: Literal[\"dev\", \"fix\", \"sprint_qa\", \"fix_qa\", \"other\"]\n    difficulty: Literal[\"hard\", \"normal\", \"fast\"] | None; tag: str; marker: Literal[\"red\", \"yellow\"] | None; age_s: int; description: str\n@dataclass(frozen=True)\nclass AgentView: name: str; status: AgentStatus; status_since: datetime; depth: int; rows: tuple[Row, ...]\n@dataclass(frozen=True)\nclass SectionRow: bead_id: str; age_s: int; reason: str; pr: int | None\n@dataclass(frozen=True)\nclass Section: label: str; rows: tuple[SectionRow, ...]\n@dataclass(frozen=True)\nclass StepView: bead_id: str; kind: StepKind; status: str; assignee: str | None\n@dataclass(frozen=True)\nclass SprintView: id: str; title: str; state: Literal[\"closed\", \"in_progress\", \"ready\", \"not_ready\"]; depends_on: tuple[str, ...]; steps: tuple[StepView, ...]\n@dataclass(frozen=True)\nclass Problem: key: str; bead_id: str | None; to: str; text: str; first_seen: datetime\n@dataclass(frozen=True)\nclass Action: at: datetime; kind: Literal[\"assign\", \"send\", \"batch\"]; to: str; bead_ids: tuple[str, ...]; text: str; spec: DispatchSpec | None\n@dataclass(frozen=True)\nclass PrRow: pr: PullRequest; layer: int | None; bead_id: str | None; top: bool; merge: Merge | None   # one per open phase PR, layer order\n@dataclass(frozen=True)\nclass Metrics: done: int; total: int; pct: int; active_s: int\n@dataclass(frozen=True)\nclass Due: fetch: bool; merges: tuple[tuple[str, str], ...]; github: bool         # what the runner reads before the next tick\n# due(state: State, phase: Phase, github_mode: str, now: datetime) -\u003e Due\n# tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -\u003e tuple[Snapshot, tuple[Action, ...], State]   -- remote refs come from State.remotes (last read)\n@dataclass(frozen=True)\nclass Snapshot:\n    schema: int; generated_at: datetime; phase: str; root_closed: bool; stopped: Literal[\"closed\", \"idle\"] | None\n    agents: tuple[AgentView, ...]; sections: tuple[Section, ...]; problems: tuple[Problem, ...]; errors: tuple[Error, ...]\n    metrics: Metrics; gh: GhStatus; top_pr: int | None; top_ci: str | None; mermaid: str; sprints: tuple[SprintView, ...]\n    interval_s: int; lead: str; bead_prefix: str; sent: tuple[Action, ...]; prs: tuple[PrRow, ...]\n    files: Mapping[str, str]   # detail-file name -\u003e path relative to the repo root, e.g. {\"prs\": \".atm-bd/atm-bd-console/atm-phase-bh/prs.json\"}\n@dataclass(frozen=True)\nclass State: problems: tuple[Problem, ...]; cycle_first_send: datetime | None; last_batch: datetime | None\n    last_cycle: datetime | None; idle_since: datetime | None; sent: tuple[Action, ...]; remotes: tuple[RemoteRef, ...]\n    batch_due: Mapping[str, datetime]               # per recipient: next batch resend\n\n@dataclass(frozen=True)\nclass PhaseFile: phase: str; root_id: str; label: str; sprints: tuple[str, ...]; depends_on: Mapping[str, tuple[str, ...]]   # .atm-bd/phase-\u003cx\u003e.toml + plan file\n\n# injected functions (keep the pure tick free of imports of atm_bd and of the runner)\nSpecFn = Callable[[DispatchContext], Result[DispatchSpec]]      # atm_bd.dispatch_spec (bh-4), passed to model.tick by the runner\n# runner contract (implemented by bh-9, called by bh-10's app)\nStepFn = Callable[[Config, \"State\", bool], tuple[Snapshot, \"State\"]]   # third arg: force_github (one GitHub read now, unless mode off)\n\n# codec.py (the only logic in bh-1)\ndef to_json(obj) -\u003e str: ...\ndef from_json(cls, text: str) -\u003e Result[Any]: ...\ndef snapshot_stale(snapshot: Snapshot, now: datetime) -\u003e bool: ...   # now - generated_at \u003e 2 * interval_s; the one staleness rule (cli show, cli --once)\n```\n\n## Wire format (codec.py)\n- dataclass -\u003e JSON object with its field names; tuple -\u003e array; Mapping -\u003e object (string keys); None -\u003e null; Literal -\u003e its string (decode rejects any other value).\n- datetime -\u003e `YYYY-MM-DDTHH:MM:SSZ` UTC; decode rejects naive or non-`Z` text.\n- Ok -\u003e `{\"ok\": \u003cvalue\u003e}`; Err -\u003e `{\"err\": \u003cerror\u003e}`; an Error object is decoded by its `kind`.\n- `from_json(cls, text)` decodes by the type annotations of `cls`; any mismatch is `Err(ParseFailed)` naming the field path; it never raises.\n\n## Detail files (JSON schemas, written by bh-7; `\u003croot\u003e` = the phase root bead id)\n| file | schema |\n|---|---|\n| snapshot.json | `Snapshot` |\n| state.json | `State` |\n| merge.json | `MergeFile(checked_at: datetime, merges: Mapping[str, Merge])`: the runner's cache of the last merge check per branch |\n| prs.json | `PrsFile(read_at: datetime, gh: GhStatus, prs: tuple[PullRequest, ...])`: the runner's cache of the last GitHub read |\n| actions.jsonl | one `ActionLine(at: datetime, kind: Literal[\"assign\",\"send\",\"batch\",\"hold\",\"dry_run\"], to: str | None, bead: str | None, text: str)` per line |\n\nThe renderers read only `Snapshot` (PR rows, CI and merge state are in `Snapshot.prs`). Read errors live in `Snapshot.errors` and the log; there is no errors file and no CI history file.\n",
+        "acceptance_criteria": "- [ ] (D1) `uv run pytest -q` and `uv run ruff check src tests` pass on the skeleton; `atm-bd-console` script entry is declared.\n- [ ] (D2) `types.py` and `result.py` define every name in the design with the same fields and literals (a test imports each name); `grep -nE 'raise|subprocess|open\\(|def ' result.py types.py` finds nothing.\n- [ ] (D3) Round-trip test over one populated instance of every type including `Ok`/`Err` of each Error kind; a naive datetime, a wrong Literal and a missing field each give `Err(ParseFailed)` naming the field path; a local-time datetime is written in UTC with `Z`; `snapshot_stale` is false at 2 × interval and true one second later.\n- [ ] (D4) A test uses `fake_bin` and reads back the recorded argv.\n- [ ] (D5) Every contract fixture parses back with `from_json` into its type.\n- [ ] (D6) `test_boundaries.py` fails on a planted `import subprocess` in a temp copy of `model.py` and on a planted 1001-line file.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:24:56Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-1-contract",
+          "closure_type": "contract",
+          "difficulty": "normal",
+          "layer": 1,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/pyproject.toml",
+            "apps/atm-bd-console/src/atm_bd_console/__init__.py",
+            "apps/atm-bd-console/src/atm_bd_console/result.py",
+            "apps/atm-bd-console/src/atm_bd_console/types.py",
+            "apps/atm-bd-console/tests/test_types.py",
+            "apps/atm-bd-console/tests/conftest.py",
+            "apps/atm-bd-console/tests/fixtures/contract/",
+            "apps/atm-bd-console/src/atm_bd_console/codec.py",
+            "apps/atm-bd-console/tests/test_boundaries.py",
+            "apps/atm-bd-console/tests/test_codec.py",
+            "apps/atm-bd-console/tests/test_fixtures.py",
+            "apps/atm-bd-console/uv.lock"
+          ],
+          "phase": "bh",
+          "pr_target": "integrate/phase-bh",
+          "relation": "root",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-1",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console package skeleton and the shared type contract",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-1-contract"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-1.group-dev",
+        "title": "bh-1: dev",
+        "description": "Dev work for sprint bh-1. The deliverables and acceptance criteria are on the sprint container atm-bh-1.",
+        "notes": "layer PR #131 https://github.com/randlee/atm-bd-orchestration/pull/131",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "trinity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:07:36Z",
+        "started_at": "2026-10-15T01:57:44Z",
+        "closed_at": "2026-10-15T02:06:53Z",
+        "close_reason": "dev complete at 8bfc413",
+        "metadata": {
+          "difficulty": "hard",
+          "layer": 1,
+          "phase": "bh",
+          "role": "dev",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "dev",
+            "v": 1
+          },
+          "sprint": "bh-1",
+          "sprint_bead": "atm-bh-1",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-1",
+    "dependent_count": 8,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "-7719449454866024173"
+  },
+  {
+    "id": "atm-bh-2.group-dev",
+    "title": "bh-2: dev",
+    "description": "Dev work for sprint bh-2. The deliverables and acceptance criteria are on the sprint container atm-bh-2.",
+    "notes": "BLOCKED: team-lead GitHub-degradation restriction (01M4WBEBE0EZSKKP42Q7C0GVKE) prohibits the mandatory stack-top and stack-view polling; implementation pushed at 307e9edf. Fenix classification request: 01M4YNQBF97XVXVR0CTG9V8JC9.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "arch-ctm",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:17Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:30:24Z",
+    "started_at": "2026-10-15T01:57:10Z",
+    "closed_at": "2026-10-15T02:30:24Z",
+    "close_reason": "dev complete at b907583",
+    "metadata": {
+      "difficulty": "normal",
+      "layer": 2,
+      "phase": "bh",
+      "pr_target": "integrate/phase-bh",
+      "role": "dev",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+        "mode": "attach",
+        "parent": "atm-bh-2",
+        "ref": "group",
+        "revision": "sha256:0208502345d6787df94cd7f332706b4826e3e2ed8c5458f42b2900733a38f981",
+        "step": "dev",
+        "v": 1
+      },
+      "sprint": "bh-2",
+      "sprint_bead": "atm-bh-2",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-2",
+        "title": "bh-2: bead-queues as a snapshot viewer, install check",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nbead-queues stops computing queues: it becomes a thin front for `atm-bd-console show`, which owns the snapshot reading, the staleness rule and the rendering (ANC-002). It never starts the console. The package install checks the app and mmdflux are installed.\n\n## Deliverables\n1. bead-queues `--phase \u003cx\u003e` runs `atm-bd-console show --phase \u003cx\u003e` and passes its stdout and exit code through unchanged; all its queue logic is deleted. It never runs the console loop (`--once` or the app). When `atm-bd-console` is not on PATH it prints the install command and exits 2.\n2. Its cron mode (`--json`, its state file under `.atm-bd/bead-queues/`) is removed; SKILL.md names `atm-bd-console --once --headless --phase \u003cx\u003e --as \u003clead\u003e` as the cron and `bead-queues --phase \u003cx\u003e` as the viewer; no other plugin file references the removed cron mode.\n3. install.py checks `atm-bd-console --version` against `REQUIRED_CONSOLE_VERSION` (a constant in install.py, set to the console's `__version__` released with this phase, 0.1.0) and `mmdflux --version` (\u003e=2.6.1, used by the Status tab), and fails naming whichever is missing or too old with its install command: `uv tool install \u003catm-bd-orchestration repo\u003e/apps/atm-bd-console` and `brew install kevinswiber/mmdflux/mmdflux` or `cargo install mmdflux`.\n4. Minor version bump in `.claude-plugin/plugin.json`, `manifest.yaml` and `test_install.py`'s expected version; CHANGELOG entry naming the bead-queues change and the install checks.\n\n## Does Not Close\n- `atm-bd-console show` itself (bh-9); the app (bh-1, bh-3..bh-10).\n",
+        "design": "## Notes\nTested with `fake_bin` style fakes in the plugin tests (a fake `atm-bd-console` recording argv and returning canned stdout/exit); it does not import the app package.\n",
+        "acceptance_criteria": "- [ ] (D1) With a fake `atm-bd-console` returning canned output and exit 0, then exit 2, bead-queues prints that output and exits with the same code; the fake records exactly `show --phase \u003cx\u003e`; `grep -nE 'bd (list|ready|show)' bead-queues` finds nothing.\n- [ ] (D1) `atm-bd-console` absent from PATH: bead-queues prints the install command and exits 2.\n- [ ] (D2) SKILL.md contains the cron command string `atm-bd-console --once --headless --phase \u003cx\u003e --as \u003clead\u003e`; bead-queues has no `--json` cron mode and no `.atm-bd/bead-queues/` state file; `grep -rn 'bead-queues.*--json' plugins/atm-bd-orchestration` finds nothing.\n- [ ] (D3) install.py fails with the install command when `atm-bd-console` is missing, older than `REQUIRED_CONSOLE_VERSION`, or `mmdflux` is missing or older than 2.6.1; passes when both are current (fakes on PATH).\n- [ ] (D4) plugin.json, manifest.yaml and test_install.py carry the same new version; CHANGELOG has its entry; `gen_manifest.py --check` passes.\n\n## Validation\n- `cd plugins/atm-bd-orchestration \u0026\u0026 python3.11 -m pytest -q tests skills \u0026\u0026 python3.11 tests/gen_manifest.py --check`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:12:11Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-2-bead-queues-viewer",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 2,
+          "model_class": "",
+          "owned_paths": [
+            "plugins/atm-bd-orchestration/skills/atm-bd-orchestration/scripts/bead-queues",
+            "plugins/atm-bd-orchestration/skills/atm-bd-orchestration/SKILL.md",
+            "plugins/atm-bd-orchestration/install.py",
+            "plugins/atm-bd-orchestration/tests/",
+            "plugins/atm-bd-orchestration/.claude-plugin/plugin.json",
+            "plugins/atm-bd-orchestration/manifest.yaml",
+            "plugins/atm-bd-orchestration/CHANGELOG.md"
+          ],
+          "phase": "bh",
+          "pr_target": "integrate/phase-bh",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-2",
+          "stack": "phase-bh",
+          "target_boundary": "plugins/atm-bd-orchestration: bead-queues, install and skill text",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-2-bead-queues-viewer"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-bh-2",
+    "dependent_count": 2,
+    "dependency_count": 1,
+    "comment_count": 0,
+    "revision": "-3815102112054866400"
+  },
+  {
+    "id": "atm-bh-3.group-dev",
+    "title": "bh-3: dev",
+    "description": "Dev work for sprint bh-3. The deliverables and acceptance criteria are on the sprint container atm-bh-3.",
+    "notes": "layer PR #135 https://github.com/randlee/atm-bd-orchestration/pull/135 (lead rebased onto sprint/bh-4-beads-source at 26e8db2f)",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "trinity",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:18Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:24:05Z",
+    "started_at": "2026-10-15T02:18:47Z",
+    "closed_at": "2026-10-15T02:20:06Z",
+    "close_reason": "dev complete at e8360a2",
+    "metadata": {
+      "difficulty": "normal",
+      "layer": 3,
+      "phase": "bh",
+      "pr_target": "sprint/bh-1-contract",
+      "role": "dev",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:032cff81ce7120ab4e5bae69587a117cc0534251fa9f79d9e8b741067ef5b781",
+        "mode": "attach",
+        "parent": "atm-bh-3",
+        "ref": "group",
+        "revision": "sha256:1d432be5a91ba840769c0dfdb4b0d041dedda2aefc233a43ebafb653903c0d0d",
+        "step": "dev",
+        "v": 1
+      },
+      "sprint": "bh-3",
+      "sprint_bead": "atm-bh-3",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1.group-sanity",
+        "title": "bh-1: sanity check",
+        "description": "Sanity check of atm-bh-1.group-dev (sprint bh-1): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:11:02Z",
+        "started_at": "2026-10-15T02:07:55Z",
+        "closed_at": "2026-10-15T02:11:02Z",
+        "close_reason": "PASS at 8bfc413c251704addd33f35bc998703e40004cf3",
+        "metadata": {
+          "dev_bead": "atm-bh-1.group-dev",
+          "difficulty": "hard",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      },
+      {
+        "id": "atm-bh-3",
+        "title": "bh-3: ATM source: members, tasks, presence, send, assign",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEvery ATM read and write behind one module, returning bh-1 types. If ATM's CLI changes, only this file changes.\n\n## Deliverables\n1. `members(team) -\u003e Result[tuple[Member, ...]]` from `atm members --json` (fields used: `name`, `state`, `state_changed_at`): presence from `state` (`active`, `idle`, `offline`, `blocked`, else `unknown`), `presence_since` from `state_changed_at`. Roles are not read from the roster (recipients come from repo config and `--as`).\n2. `tasks(team) -\u003e Result[tuple[Task, ...]]` from `atm task list --all --json` (fields used: the task id, agent, state, `assigned_at`, `updated_at` and description, names as in the recorded fixture), queue order kept as `position`; `state_since` from `updated_at` (atm reports no start time).\n3. `send(to, text, as_)` (`atm send \u003cto\u003e --as \u003cas_\u003e --stdin`, body on stdin) and `assign(agent, task_id, spec: DispatchSpec, as_)` (`atm task assign \u003cagent\u003e --as \u003cas_\u003e --task-id \u003cid\u003e --template \u003cspec.template\u003e --vars \u003cfile\u003e`, vars written to a temp file outside the repo and removed after) -\u003e `Result[None]`.\n4. Every failure is an `Err` (`CommandFailed` with stderr, `Timeout`, `ParseFailed`), each with its `fix`; nothing raises; a 20 s timeout per call.\n\n## Does Not Close\n- deciding what to send (bh-6); calling it (bh-9).\n",
+        "design": "## Notes\nFixtures are recorded `atm members --json` / `atm task list --all --json` outputs (current atm-dev roster, trimmed). ATM's own field names stop here; bh-1's `test_boundaries.py` enforces that only this module runs `atm`.\n",
+        "acceptance_criteria": "- [ ] (D1) Recorded roster fixture maps to Members with every presence value, including `blocked` and an unknown state -\u003e `unknown`, and `presence_since` from `state_changed_at`.\n- [ ] (D2) Recorded task-list fixture maps to Tasks in queue order with `position` 0..n and `state_since` = `updated_at`.\n- [ ] (D3) `send` runs exactly `atm send \u003cto\u003e --as \u003cas_\u003e --stdin` and the fake receives the body on stdin; `assign` runs exactly the design argv and the vars file holds the spec's vars and is gone afterwards.\n- [ ] (D4) Nonzero exit, invalid JSON and a fake sleeping past the timeout (timeout injected as 1 s in the test) each return the matching `Err`; `grep -n raise atm_source.py` finds nothing.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:11:32Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-3-atm-source",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 3,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/atm_source.py",
+            "apps/atm-bd-console/tests/test_atm_source.py",
+            "apps/atm-bd-console/tests/fixtures/atm/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-3",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console atm_source.py: the only module that runs atm",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-3-atm-source"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-bh-3",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "-3160582485652678492"
+  },
+  {
+    "id": "atm-bh-3.group-qa",
+    "title": "bh-3: QA round 1",
+    "description": "QA round 1 of atm-bh-3.group-dev (sprint bh-3), after its sanity check passes.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "quality-mgr",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:18Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:30:42Z",
+    "started_at": "2026-10-15T02:27:11Z",
+    "closed_at": "2026-10-15T02:30:42Z",
+    "close_reason": "FAIL: 10 findings filed",
+    "metadata": {
+      "checked_bead": "atm-bh-3.group-dev",
+      "difficulty": "normal",
+      "phase": "bh",
+      "role": "qa",
+      "round": 1,
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:032cff81ce7120ab4e5bae69587a117cc0534251fa9f79d9e8b741067ef5b781",
+        "mode": "attach",
+        "parent": "atm-bh-3",
+        "ref": "group",
+        "revision": "sha256:1d432be5a91ba840769c0dfdb4b0d041dedda2aefc233a43ebafb653903c0d0d",
+        "step": "qa",
+        "v": 1
+      },
+      "sprint": "bh-3",
+      "sprint_bead": "atm-bh-3",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:qa"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-3",
+        "title": "bh-3: ATM source: members, tasks, presence, send, assign",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEvery ATM read and write behind one module, returning bh-1 types. If ATM's CLI changes, only this file changes.\n\n## Deliverables\n1. `members(team) -\u003e Result[tuple[Member, ...]]` from `atm members --json` (fields used: `name`, `state`, `state_changed_at`): presence from `state` (`active`, `idle`, `offline`, `blocked`, else `unknown`), `presence_since` from `state_changed_at`. Roles are not read from the roster (recipients come from repo config and `--as`).\n2. `tasks(team) -\u003e Result[tuple[Task, ...]]` from `atm task list --all --json` (fields used: the task id, agent, state, `assigned_at`, `updated_at` and description, names as in the recorded fixture), queue order kept as `position`; `state_since` from `updated_at` (atm reports no start time).\n3. `send(to, text, as_)` (`atm send \u003cto\u003e --as \u003cas_\u003e --stdin`, body on stdin) and `assign(agent, task_id, spec: DispatchSpec, as_)` (`atm task assign \u003cagent\u003e --as \u003cas_\u003e --task-id \u003cid\u003e --template \u003cspec.template\u003e --vars \u003cfile\u003e`, vars written to a temp file outside the repo and removed after) -\u003e `Result[None]`.\n4. Every failure is an `Err` (`CommandFailed` with stderr, `Timeout`, `ParseFailed`), each with its `fix`; nothing raises; a 20 s timeout per call.\n\n## Does Not Close\n- deciding what to send (bh-6); calling it (bh-9).\n",
+        "design": "## Notes\nFixtures are recorded `atm members --json` / `atm task list --all --json` outputs (current atm-dev roster, trimmed). ATM's own field names stop here; bh-1's `test_boundaries.py` enforces that only this module runs `atm`.\n",
+        "acceptance_criteria": "- [ ] (D1) Recorded roster fixture maps to Members with every presence value, including `blocked` and an unknown state -\u003e `unknown`, and `presence_since` from `state_changed_at`.\n- [ ] (D2) Recorded task-list fixture maps to Tasks in queue order with `position` 0..n and `state_since` = `updated_at`.\n- [ ] (D3) `send` runs exactly `atm send \u003cto\u003e --as \u003cas_\u003e --stdin` and the fake receives the body on stdin; `assign` runs exactly the design argv and the vars file holds the spec's vars and is gone afterwards.\n- [ ] (D4) Nonzero exit, invalid JSON and a fake sleeping past the timeout (timeout injected as 1 s in the test) each return the matching `Err`; `grep -n raise atm_source.py` finds nothing.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:11:32Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-3-atm-source",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 3,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/atm_source.py",
+            "apps/atm-bd-console/tests/test_atm_source.py",
+            "apps/atm-bd-console/tests/fixtures/atm/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-3",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console atm_source.py: the only module that runs atm",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-3-atm-source"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-3.group-dev",
+        "title": "bh-3: dev",
+        "description": "Dev work for sprint bh-3. The deliverables and acceptance criteria are on the sprint container atm-bh-3.",
+        "notes": "layer PR #135 https://github.com/randlee/atm-bd-orchestration/pull/135 (lead rebased onto sprint/bh-4-beads-source at 26e8db2f)",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "trinity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:18Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:24:05Z",
+        "started_at": "2026-10-15T02:18:47Z",
+        "closed_at": "2026-10-15T02:20:06Z",
+        "close_reason": "dev complete at e8360a2",
+        "metadata": {
+          "difficulty": "normal",
+          "layer": 3,
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "role": "dev",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:032cff81ce7120ab4e5bae69587a117cc0534251fa9f79d9e8b741067ef5b781",
+            "mode": "attach",
+            "parent": "atm-bh-3",
+            "ref": "group",
+            "revision": "sha256:1d432be5a91ba840769c0dfdb4b0d041dedda2aefc233a43ebafb653903c0d0d",
+            "step": "dev",
+            "v": 1
+          },
+          "sprint": "bh-3",
+          "sprint_bead": "atm-bh-3",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev"
+        ],
+        "dependency_type": "validates"
+      },
+      {
+        "id": "atm-bh-3.group-sanity",
+        "title": "bh-3: sanity check",
+        "description": "Sanity check of atm-bh-3.group-dev (sprint bh-3): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:18Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:26:18Z",
+        "started_at": "2026-10-15T02:24:23Z",
+        "closed_at": "2026-10-15T02:26:18Z",
+        "close_reason": "PASS at 26e8db2f11ff58ca425cb30c51684ca230b02a4a",
+        "metadata": {
+          "dev_bead": "atm-bh-3.group-dev",
+          "difficulty": "normal",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:032cff81ce7120ab4e5bae69587a117cc0534251fa9f79d9e8b741067ef5b781",
+            "mode": "attach",
+            "parent": "atm-bh-3",
+            "ref": "group",
+            "revision": "sha256:1d432be5a91ba840769c0dfdb4b0d041dedda2aefc233a43ebafb653903c0d0d",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-3",
+    "dependent_count": 10,
+    "dependency_count": 3,
+    "comment_count": 0,
+    "revision": "8965863292762499927"
+  },
+  {
+    "id": "atm-bh-3.group-sanity",
+    "title": "bh-3: sanity check",
+    "description": "Sanity check of atm-bh-3.group-dev (sprint bh-3): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "atm-sanity",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-14T23:27:18Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:26:18Z",
+    "started_at": "2026-10-15T02:24:23Z",
+    "closed_at": "2026-10-15T02:26:18Z",
+    "close_reason": "PASS at 26e8db2f11ff58ca425cb30c51684ca230b02a4a",
+    "metadata": {
+      "dev_bead": "atm-bh-3.group-dev",
+      "difficulty": "normal",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:032cff81ce7120ab4e5bae69587a117cc0534251fa9f79d9e8b741067ef5b781",
+        "mode": "attach",
+        "parent": "atm-bh-3",
+        "ref": "group",
+        "revision": "sha256:1d432be5a91ba840769c0dfdb4b0d041dedda2aefc233a43ebafb653903c0d0d",
+        "step": "sanity",
+        "v": 1
+      }
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev-sanity"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-3",
+        "title": "bh-3: ATM source: members, tasks, presence, send, assign",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEvery ATM read and write behind one module, returning bh-1 types. If ATM's CLI changes, only this file changes.\n\n## Deliverables\n1. `members(team) -\u003e Result[tuple[Member, ...]]` from `atm members --json` (fields used: `name`, `state`, `state_changed_at`): presence from `state` (`active`, `idle`, `offline`, `blocked`, else `unknown`), `presence_since` from `state_changed_at`. Roles are not read from the roster (recipients come from repo config and `--as`).\n2. `tasks(team) -\u003e Result[tuple[Task, ...]]` from `atm task list --all --json` (fields used: the task id, agent, state, `assigned_at`, `updated_at` and description, names as in the recorded fixture), queue order kept as `position`; `state_since` from `updated_at` (atm reports no start time).\n3. `send(to, text, as_)` (`atm send \u003cto\u003e --as \u003cas_\u003e --stdin`, body on stdin) and `assign(agent, task_id, spec: DispatchSpec, as_)` (`atm task assign \u003cagent\u003e --as \u003cas_\u003e --task-id \u003cid\u003e --template \u003cspec.template\u003e --vars \u003cfile\u003e`, vars written to a temp file outside the repo and removed after) -\u003e `Result[None]`.\n4. Every failure is an `Err` (`CommandFailed` with stderr, `Timeout`, `ParseFailed`), each with its `fix`; nothing raises; a 20 s timeout per call.\n\n## Does Not Close\n- deciding what to send (bh-6); calling it (bh-9).\n",
+        "design": "## Notes\nFixtures are recorded `atm members --json` / `atm task list --all --json` outputs (current atm-dev roster, trimmed). ATM's own field names stop here; bh-1's `test_boundaries.py` enforces that only this module runs `atm`.\n",
+        "acceptance_criteria": "- [ ] (D1) Recorded roster fixture maps to Members with every presence value, including `blocked` and an unknown state -\u003e `unknown`, and `presence_since` from `state_changed_at`.\n- [ ] (D2) Recorded task-list fixture maps to Tasks in queue order with `position` 0..n and `state_since` = `updated_at`.\n- [ ] (D3) `send` runs exactly `atm send \u003cto\u003e --as \u003cas_\u003e --stdin` and the fake receives the body on stdin; `assign` runs exactly the design argv and the vars file holds the spec's vars and is gone afterwards.\n- [ ] (D4) Nonzero exit, invalid JSON and a fake sleeping past the timeout (timeout injected as 1 s in the test) each return the matching `Err`; `grep -n raise atm_source.py` finds nothing.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-14T23:27:14Z",
+        "updated_at": "2026-10-15T02:11:32Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-3-atm-source",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 3,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/atm_source.py",
+            "apps/atm-bd-console/tests/test_atm_source.py",
+            "apps/atm-bd-console/tests/fixtures/atm/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-3",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console atm_source.py: the only module that runs atm",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-3-atm-source"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-3.group-dev",
+        "title": "bh-3: dev",
+        "description": "Dev work for sprint bh-3. The deliverables and acceptance criteria are on the sprint container atm-bh-3.",
+        "notes": "layer PR #135 https://github.com/randlee/atm-bd-orchestration/pull/135 (lead rebased onto sprint/bh-4-beads-source at 26e8db2f)",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "trinity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:18Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:24:05Z",
+        "started_at": "2026-10-15T02:18:47Z",
+        "closed_at": "2026-10-15T02:20:06Z",
+        "close_reason": "dev complete at e8360a2",
+        "metadata": {
+          "difficulty": "normal",
+          "layer": 3,
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "role": "dev",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:032cff81ce7120ab4e5bae69587a117cc0534251fa9f79d9e8b741067ef5b781",
+            "mode": "attach",
+            "parent": "atm-bh-3",
+            "ref": "group",
+            "revision": "sha256:1d432be5a91ba840769c0dfdb4b0d041dedda2aefc233a43ebafb653903c0d0d",
+            "step": "dev",
+            "v": 1
+          },
+          "sprint": "bh-3",
+          "sprint_bead": "atm-bh-3",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-3",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "8417299831273598946"
+  },
+  {
+    "id": "atm-bh-5.group-dev",
+    "title": "bh-5: dev",
+    "description": "Dev work for sprint bh-5. The deliverables and acceptance criteria are on the sprint container atm-bh-5.",
+    "notes": "BLOCKED: atm-wf-stack-top-gh-pr-list: final stack-top returned GATE_CANNOT_RUN at pushed commit 0ef9289e; redispatch after the workflow class clears.\nLead ruling: stack-top GATE_CANNOT_RUN is the cross-repo gap (atm-wf-stack-top-gh-pr-list); take the top from python3 $(find ~/.claude -name gh_stack_view.py | head -1) --phase bh run in the package repo (now sprint/bh-3-atm-source, PR #135). Also: commit 0ef9289e has no tests; every D1-D3 acceptance criterion needs test_git_source.py / test_github_source.py with the fake gh and temp repos.\nDEV_CANNOT_COMPLETE; escalation 01M4YPG8PXWHKHGCC6GS4QT5DS: gh_stack_view.py --phase bh failed because GitHub GraphQL API rate limit is exhausted. HEAD 45f2d3a is pushed.\nlayer PR #140 https://github.com/randlee/atm-bd-orchestration/pull/140",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T01:13:09Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:40:46Z",
+    "started_at": "2026-10-15T02:20:15Z",
+    "closed_at": "2026-10-15T02:40:45Z",
+    "close_reason": "dev work by arch-ctm pushed; refusal was external-quota only; lead rebased onto fix/bh-1-qa-r1 and opened PR #140 at 235f3a7d",
+    "metadata": {
+      "difficulty": "normal",
+      "layer": 5,
+      "phase": "bh",
+      "pr_target": "sprint/bh-1-contract",
+      "role": "dev",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+        "mode": "attach",
+        "parent": "atm-bh-5",
+        "ref": "group",
+        "revision": "sha256:d8b8d096afe45bca1c6cb0eeecdf55b9ddb6c9be7d623216c9e070f3977ed55e",
+        "step": "dev",
+        "v": 1
+      },
+      "sprint": "bh-5",
+      "sprint_bead": "atm-bh-5",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1.group-sanity",
+        "title": "bh-1: sanity check",
+        "description": "Sanity check of atm-bh-1.group-dev (sprint bh-1): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:11:02Z",
+        "started_at": "2026-10-15T02:07:55Z",
+        "closed_at": "2026-10-15T02:11:02Z",
+        "close_reason": "PASS at 8bfc413c251704addd33f35bc998703e40004cf3",
+        "metadata": {
+          "dev_bead": "atm-bh-1.group-dev",
+          "difficulty": "hard",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      },
+      {
+        "id": "atm-bh-5",
+        "title": "bh-5: git and GitHub sources: refs, merge check, worktrees, open PRs",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEvery git and GitHub call behind two modules, returning bh-1 types. GitHub failing or off never stops work (ANC-017).\n\n## Deliverables\n1. `git_source.py`: `fetch(repo) -\u003e Result[None]` (`git fetch origin --prune`), `remote_refs(repo) -\u003e Result[tuple[RemoteRef, ...]]` (one `git for-each-ref --format='%(refname:lstrip=3) %(objectname)' refs/remotes/origin`), `worktrees(repo) -\u003e Result[tuple[Worktree, ...]]` (`git worktree list --porcelain`, detached -\u003e branch None), `merge(repo, branch, target) -\u003e Result[Merge]` with `git merge-tree --write-tree --name-only -z origin/\u003ctarget\u003e origin/\u003cbranch\u003e`: exit 0 clean, 1 conflict with the NUL-separated files and conflict messages, else `Err` (ANC-015).\n2. `github_source.py`: `open_prs(mode) -\u003e tuple[Result[tuple[PullRequest, ...]], GhStatus]`. Exactly one call per read (ANC-006). `graphql`: one `gh api graphql` query `pullRequests(states: OPEN, first: 100)` with `totalCount`: number, url, head, base, head sha, the head commit's `statusCheckRollup.state` and the names of its contexts whose conclusion/state is FAILURE, ERROR, CANCELLED or TIMED_OUT. `rest`: one `gh api 'repos/\u003co\u003e/\u003cr\u003e/pulls?state=open\u0026per_page=100'`; CI is `none` for every PR (REST trades CI for the single call). `off`: no call, `GhStatus(mode=\"off\", ok=None)`. 20 s timeout.\n3. Mapping (GitHub names stop here): rollup SUCCESS -\u003e `success`; PENDING, EXPECTED -\u003e `pending`; FAILURE, ERROR -\u003e `failure`; null -\u003e `none`. Truncation: graphql `totalCount` \u003e 100, rest 100 rows returned -\u003e `GhStatus.truncated=True`. Failures: timeout -\u003e `Timeout`; HTTP 401/403 and 5xx in gh's stderr -\u003e `Rejected(status)`; no connectivity (`error connecting`, DNS) -\u003e `Unreachable`; anything else nonzero -\u003e `CommandFailed`; bad JSON -\u003e `ParseFailed`; each with `GhStatus(ok=False, error=...)`.\n\n## Does Not Close\n- when to call them (bh-6 `Due`); calling them (bh-9).\n",
+        "design": "## Notes\ngit is tested on a real temporary repo with a bare `origin` (real git, no fake): clean and conflicting branches, a detached worktree. GitHub is tested with fake `gh` returning recorded GraphQL and REST bodies (trimmed from randlee/atm-core) and failure exits.\n",
+        "acceptance_criteria": "- [ ] (D1) Temp repo: `fetch` then `remote_refs` lists the pushed branches with their shas; `worktrees` lists the main and a detached worktree (branch None); clean branch -\u003e `Merge(state=\"clean\")`; conflicting branch -\u003e `conflict` with the right file list; missing branch -\u003e `Err`.\n- [ ] (D2) Recorded GraphQL body -\u003e PullRequests with ci and failed check names; `graphql` and `rest` each make exactly 1 call per read, `off` 0 (fake gh records calls); a body with `totalCount: 101` sets `truncated`, as does a 100-row REST body.\n- [ ] (D3) Rollup states SUCCESS, PENDING, EXPECTED, FAILURE, ERROR and null map per the table.\n- [ ] (D3) Fake gh timing out (timeout injected as 1 s), exiting with HTTP 401, HTTP 502, and no connectivity each return the matching `Err` and a GhStatus with `ok=False`.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:01Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-5-git-github-source",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 5,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/git_source.py",
+            "apps/atm-bd-console/src/atm_bd_console/github_source.py",
+            "apps/atm-bd-console/tests/test_git_source.py",
+            "apps/atm-bd-console/tests/test_github_source.py",
+            "apps/atm-bd-console/tests/fixtures/github/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-5",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console git_source.py and github_source.py",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-5-git-github-source"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-bh-5",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "-3124891726865127967"
+  },
+  {
+    "id": "atm-bh-6.group-dev",
+    "title": "bh-6: dev",
+    "description": "Dev work for sprint bh-6. The deliverables and acceptance criteria are on the sprint container atm-bh-6.",
+    "notes": "Parallel Quick Fix fix/bh-1-tick-context (solar): Inputs.repo, Inputs.interval_s, Sprint.stack added to bh-1 types\nlayer PR #136 https://github.com/randlee/atm-bd-orchestration/pull/136",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "solar",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T01:13:11Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:28:29Z",
+    "started_at": "2026-10-15T02:14:15Z",
+    "closed_at": "2026-10-15T02:28:20Z",
+    "close_reason": "dev complete at c157e04",
+    "metadata": {
+      "difficulty": "hard",
+      "layer": 6,
+      "phase": "bh",
+      "pr_target": "sprint/bh-1-contract",
+      "role": "dev",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+        "mode": "attach",
+        "parent": "atm-bh-6",
+        "ref": "group",
+        "revision": "sha256:376ad14077be112f4cb5626262f3eda9a0416bc8cd1eeafc1d720d714e8252e9",
+        "step": "dev",
+        "v": 1
+      },
+      "sprint": "bh-6",
+      "sprint_bead": "atm-bh-6",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1.group-sanity",
+        "title": "bh-1: sanity check",
+        "description": "Sanity check of atm-bh-1.group-dev (sprint bh-1): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:11:02Z",
+        "started_at": "2026-10-15T02:07:55Z",
+        "closed_at": "2026-10-15T02:11:02Z",
+        "close_reason": "PASS at 8bfc413c251704addd33f35bc998703e40004cf3",
+        "metadata": {
+          "dev_bead": "atm-bh-1.group-dev",
+          "difficulty": "hard",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      },
+      {
+        "id": "atm-bh-6",
+        "title": "bh-6: tick rules: snapshot, holds, problems, agent status, metrics, stops",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nAll business logic in one place, pure: `tick(inputs, state, now, spec) -\u003e (Snapshot, actions, State)` and `due(state, phase, github_mode, now) -\u003e Due` (signatures in bh-1). No I/O, no source strings, no import of atm_bd or any source module (`spec` is bh-1's injected `SpecFn`); the app and the cron call the same function (ANC-001..003).\n\n## Deliverables\n1. Agents: one AgentView per member in roster order with all open tasks as Rows (state, kind, difficulty, tag, age) and status (ANC-021): `blocked` presence blocked; `offline` offline/unknown with a task; `busy` active with a task; `stalling` idle with a task; `idle` no task. Markers (ANC-009): red when the task's step has no top_epic or a top_epic other than the root; yellow when the task has no bead.\n2. Dispatch (`dispatch.py`): candidates are ready sanity/QA steps, not anchor, not quick_fix, no open task with the bead id; recipient `RepoConfig.sanity_member` or `.qa_member`. Holds (ANC-004), each one flat check: not ready, branch not in remote refs, no worktree, merge state conflict. A held bead is a Section row with its reason; a sent one is an `assign` Action with `spec(DispatchContext)` built per bh-4's field-source table; an `Err` from `spec` is a Snapshot error and no Action. PR and CI never hold.\n3. Problems (ANC-010): holds, merge conflicts (to the step's assignee, naming the files; ANC-015), a pushed step with no matching PR (to the assignee; ANC-006) — only from a GitHub read that returned `Ok` this cycle, never when mode is `off` or the read is `Err` (ANC-017) — and CI failure on the stack top's head only (to the lead; ANC-016). Each problem has one recipient. Each new problem -\u003e its own `send` to its recipient at once; per recipient, unresolved ones -\u003e one `batch` 10 min after that recipient's first send of the cycle and every 10 min (`State.batch_due`); resolved ones drop out. Agent status never makes a problem.\n4. `due`: `fetch` and `github` true once per 10-min cycle (github false in `off` mode), fetch also when a candidate's branch is not in `State.remotes`; `merges` = every pushed step branch per cycle plus each candidate. Stack top = the open phase PR whose head is no other open phase PR's base; PR match by branch. `Snapshot.prs` = one PrRow per open phase PR in layer order (layer and bead from the matched step, `top`, last Merge).\n5. Stops (ANC-011): root closed -\u003e `stopped=\"closed\"`, no actions; no ready and no in_progress step for 60 min -\u003e `stopped=\"idle\"`, no actions; the clock restarts on any ready or in_progress step. A stopped snapshot is the only notice (it shows in `show`, the app and the cron's JSON line).\n6. Metrics (ANC-019): done = closed dev+fix steps; total = all dev+fix steps + for each unfinished sprint max(0, round(avg findings per closed sprint) - its findings); pct; active_s = union of step claimed_at..closed_at (now when open) intervals. `Snapshot.sprints` and Mermaid `graph TD` source of the sprints (icon ✅ closed, 🌀 in progress, 📥 ready, ⏳ not ready; id, title, current step and assignee; one edge per depends_on). `Snapshot.sent` = the last 5 Actions; `bead_prefix` from RepoConfig.\n7. Every read error in Inputs and every `Phase.step_errors` entry becomes a Snapshot error (a rejected bead is never dispatched); the tick still returns a snapshot (ANC-014).\n\n## Does Not Close\n- reading Inputs or running Actions (bh-9); drawing (bh-8, bh-10).\n",
+        "design": "## Constants (model.py, not flags)\n`CYCLE = 10 min`, `IDLE_STOP = 60 min`. Times are UTC datetimes; nothing here formats local time.\n\n## Headless JSON line (bh-1 `ActionLine`, one per Action/hold/dry_run; errors as `{\"at\",\"kind\":\"error\",\"text\"}`; written by bh-9)\n```json\n{\"at\":\"2026-10-14T16:31:02Z\",\"kind\":\"hold\",\"to\":null,\"bead\":\"atm-bh-6.group-qa\",\"text\":\"merge conflict with sprint/bh-5-git-github-source: model.py\"}\n```\n\nTick goldens (tests/fixtures/tick/) are this sprint's own, written by hand from the rules above.\n",
+        "acceptance_criteria": "- [ ] (D1) Roster fixture with one member per AgentStatus yields that status; planted foreign-epic, broken-chain and no-bead tasks get the right markers; a sprint container task gets none.\n- [ ] (D2) Each hold alone holds a candidate with its reason; a red CI, a missing PR and a layer above hold nothing; a fake `spec` returning `Err` gives a Snapshot error and no Action; the assign Action goes to the configured sanity or QA member.\n- [ ] (D3) Problems at 1m/2m/3m for the lead and one at 2m for an assignee -\u003e sends at 1m, 2m, 2m, 3m; batches at 11m and 21m to the lead and at 12m to the assignee; resolved ones drop; restoring State from JSON neither resends nor resets.\n- [ ] (D3) Only the stack top's failing CI makes a problem, addressed to the lead; a failing lower layer makes none; a conflict message names the files and goes to the assignee; a pushed step without a PR makes a problem after an `Ok` read and none with mode `off` or an `Err` read.\n- [ ] (D4) `due` at t=0, 5m, 10m with and without a candidate missing its remote ref; `github=False` in off mode; Snapshot.prs lists the fixture PRs in layer order with exactly one `top`.\n- [ ] (D5) Root closed -\u003e stopped closed, no actions; 61 min idle -\u003e stopped idle, no actions; one step in progress for 2 h -\u003e keeps ticking (injected `now`, runs in ms).\n- [ ] (D6) Metrics on a fixture of 4 sprints (2 closed with 3 and 1 findings) give the expected N/M, pct and active_s; Mermaid source equals a golden written by hand; `sent` holds the last 5 actions.\n- [ ] (D7) An `Err` in every Inputs field and a `Phase.step_errors` entry each yield a Snapshot with that error, no Action for the rejected bead, and no exception.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:03Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-6-tick-rules",
+          "closure_type": "boundary",
+          "difficulty": "hard",
+          "layer": 6,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/model.py",
+            "apps/atm-bd-console/src/atm_bd_console/dispatch.py",
+            "apps/atm-bd-console/tests/test_model.py",
+            "apps/atm-bd-console/tests/test_dispatch.py",
+            "apps/atm-bd-console/tests/fixtures/tick/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-6",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console model.py and dispatch.py: every business rule, pure",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-6-tick-rules"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-bh-6",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "-875493352103755755"
+  },
+  {
+    "id": "atm-bh-6.group-qa",
+    "title": "bh-6: QA round 1",
+    "description": "QA round 1 of atm-bh-6.group-dev (sprint bh-6), after its sanity check passes.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "quality-mgr",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T01:13:11Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:38:21Z",
+    "started_at": "2026-10-15T02:35:32Z",
+    "closed_at": "2026-10-15T02:38:21Z",
+    "close_reason": "FAIL: 10 findings filed",
+    "metadata": {
+      "checked_bead": "atm-bh-6.group-dev",
+      "difficulty": "hard",
+      "phase": "bh",
+      "role": "qa",
+      "round": 1,
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+        "mode": "attach",
+        "parent": "atm-bh-6",
+        "ref": "group",
+        "revision": "sha256:376ad14077be112f4cb5626262f3eda9a0416bc8cd1eeafc1d720d714e8252e9",
+        "step": "qa",
+        "v": 1
+      },
+      "sprint": "bh-6",
+      "sprint_bead": "atm-bh-6",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:qa"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-6",
+        "title": "bh-6: tick rules: snapshot, holds, problems, agent status, metrics, stops",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nAll business logic in one place, pure: `tick(inputs, state, now, spec) -\u003e (Snapshot, actions, State)` and `due(state, phase, github_mode, now) -\u003e Due` (signatures in bh-1). No I/O, no source strings, no import of atm_bd or any source module (`spec` is bh-1's injected `SpecFn`); the app and the cron call the same function (ANC-001..003).\n\n## Deliverables\n1. Agents: one AgentView per member in roster order with all open tasks as Rows (state, kind, difficulty, tag, age) and status (ANC-021): `blocked` presence blocked; `offline` offline/unknown with a task; `busy` active with a task; `stalling` idle with a task; `idle` no task. Markers (ANC-009): red when the task's step has no top_epic or a top_epic other than the root; yellow when the task has no bead.\n2. Dispatch (`dispatch.py`): candidates are ready sanity/QA steps, not anchor, not quick_fix, no open task with the bead id; recipient `RepoConfig.sanity_member` or `.qa_member`. Holds (ANC-004), each one flat check: not ready, branch not in remote refs, no worktree, merge state conflict. A held bead is a Section row with its reason; a sent one is an `assign` Action with `spec(DispatchContext)` built per bh-4's field-source table; an `Err` from `spec` is a Snapshot error and no Action. PR and CI never hold.\n3. Problems (ANC-010): holds, merge conflicts (to the step's assignee, naming the files; ANC-015), a pushed step with no matching PR (to the assignee; ANC-006) — only from a GitHub read that returned `Ok` this cycle, never when mode is `off` or the read is `Err` (ANC-017) — and CI failure on the stack top's head only (to the lead; ANC-016). Each problem has one recipient. Each new problem -\u003e its own `send` to its recipient at once; per recipient, unresolved ones -\u003e one `batch` 10 min after that recipient's first send of the cycle and every 10 min (`State.batch_due`); resolved ones drop out. Agent status never makes a problem.\n4. `due`: `fetch` and `github` true once per 10-min cycle (github false in `off` mode), fetch also when a candidate's branch is not in `State.remotes`; `merges` = every pushed step branch per cycle plus each candidate. Stack top = the open phase PR whose head is no other open phase PR's base; PR match by branch. `Snapshot.prs` = one PrRow per open phase PR in layer order (layer and bead from the matched step, `top`, last Merge).\n5. Stops (ANC-011): root closed -\u003e `stopped=\"closed\"`, no actions; no ready and no in_progress step for 60 min -\u003e `stopped=\"idle\"`, no actions; the clock restarts on any ready or in_progress step. A stopped snapshot is the only notice (it shows in `show`, the app and the cron's JSON line).\n6. Metrics (ANC-019): done = closed dev+fix steps; total = all dev+fix steps + for each unfinished sprint max(0, round(avg findings per closed sprint) - its findings); pct; active_s = union of step claimed_at..closed_at (now when open) intervals. `Snapshot.sprints` and Mermaid `graph TD` source of the sprints (icon ✅ closed, 🌀 in progress, 📥 ready, ⏳ not ready; id, title, current step and assignee; one edge per depends_on). `Snapshot.sent` = the last 5 Actions; `bead_prefix` from RepoConfig.\n7. Every read error in Inputs and every `Phase.step_errors` entry becomes a Snapshot error (a rejected bead is never dispatched); the tick still returns a snapshot (ANC-014).\n\n## Does Not Close\n- reading Inputs or running Actions (bh-9); drawing (bh-8, bh-10).\n",
+        "design": "## Constants (model.py, not flags)\n`CYCLE = 10 min`, `IDLE_STOP = 60 min`. Times are UTC datetimes; nothing here formats local time.\n\n## Headless JSON line (bh-1 `ActionLine`, one per Action/hold/dry_run; errors as `{\"at\",\"kind\":\"error\",\"text\"}`; written by bh-9)\n```json\n{\"at\":\"2026-10-14T16:31:02Z\",\"kind\":\"hold\",\"to\":null,\"bead\":\"atm-bh-6.group-qa\",\"text\":\"merge conflict with sprint/bh-5-git-github-source: model.py\"}\n```\n\nTick goldens (tests/fixtures/tick/) are this sprint's own, written by hand from the rules above.\n",
+        "acceptance_criteria": "- [ ] (D1) Roster fixture with one member per AgentStatus yields that status; planted foreign-epic, broken-chain and no-bead tasks get the right markers; a sprint container task gets none.\n- [ ] (D2) Each hold alone holds a candidate with its reason; a red CI, a missing PR and a layer above hold nothing; a fake `spec` returning `Err` gives a Snapshot error and no Action; the assign Action goes to the configured sanity or QA member.\n- [ ] (D3) Problems at 1m/2m/3m for the lead and one at 2m for an assignee -\u003e sends at 1m, 2m, 2m, 3m; batches at 11m and 21m to the lead and at 12m to the assignee; resolved ones drop; restoring State from JSON neither resends nor resets.\n- [ ] (D3) Only the stack top's failing CI makes a problem, addressed to the lead; a failing lower layer makes none; a conflict message names the files and goes to the assignee; a pushed step without a PR makes a problem after an `Ok` read and none with mode `off` or an `Err` read.\n- [ ] (D4) `due` at t=0, 5m, 10m with and without a candidate missing its remote ref; `github=False` in off mode; Snapshot.prs lists the fixture PRs in layer order with exactly one `top`.\n- [ ] (D5) Root closed -\u003e stopped closed, no actions; 61 min idle -\u003e stopped idle, no actions; one step in progress for 2 h -\u003e keeps ticking (injected `now`, runs in ms).\n- [ ] (D6) Metrics on a fixture of 4 sprints (2 closed with 3 and 1 findings) give the expected N/M, pct and active_s; Mermaid source equals a golden written by hand; `sent` holds the last 5 actions.\n- [ ] (D7) An `Err` in every Inputs field and a `Phase.step_errors` entry each yield a Snapshot with that error, no Action for the rejected bead, and no exception.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:03Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-6-tick-rules",
+          "closure_type": "boundary",
+          "difficulty": "hard",
+          "layer": 6,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/model.py",
+            "apps/atm-bd-console/src/atm_bd_console/dispatch.py",
+            "apps/atm-bd-console/tests/test_model.py",
+            "apps/atm-bd-console/tests/test_dispatch.py",
+            "apps/atm-bd-console/tests/fixtures/tick/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-6",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console model.py and dispatch.py: every business rule, pure",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-6-tick-rules"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-6.group-dev",
+        "title": "bh-6: dev",
+        "description": "Dev work for sprint bh-6. The deliverables and acceptance criteria are on the sprint container atm-bh-6.",
+        "notes": "Parallel Quick Fix fix/bh-1-tick-context (solar): Inputs.repo, Inputs.interval_s, Sprint.stack added to bh-1 types\nlayer PR #136 https://github.com/randlee/atm-bd-orchestration/pull/136",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "solar",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T01:13:11Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:28:29Z",
+        "started_at": "2026-10-15T02:14:15Z",
+        "closed_at": "2026-10-15T02:28:20Z",
+        "close_reason": "dev complete at c157e04",
+        "metadata": {
+          "difficulty": "hard",
+          "layer": 6,
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "role": "dev",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+            "mode": "attach",
+            "parent": "atm-bh-6",
+            "ref": "group",
+            "revision": "sha256:376ad14077be112f4cb5626262f3eda9a0416bc8cd1eeafc1d720d714e8252e9",
+            "step": "dev",
+            "v": 1
+          },
+          "sprint": "bh-6",
+          "sprint_bead": "atm-bh-6",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev"
+        ],
+        "dependency_type": "validates"
+      },
+      {
+        "id": "atm-bh-6.group-sanity",
+        "title": "bh-6: sanity check",
+        "description": "Sanity check of atm-bh-6.group-dev (sprint bh-6): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T01:13:11Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:30:50Z",
+        "started_at": "2026-10-15T02:28:43Z",
+        "closed_at": "2026-10-15T02:30:50Z",
+        "close_reason": "PASS at c157e041af1d78e368d1cc45615873bb67b15787",
+        "metadata": {
+          "dev_bead": "atm-bh-6.group-dev",
+          "difficulty": "hard",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+            "mode": "attach",
+            "parent": "atm-bh-6",
+            "ref": "group",
+            "revision": "sha256:376ad14077be112f4cb5626262f3eda9a0416bc8cd1eeafc1d720d714e8252e9",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-6",
+    "dependent_count": 10,
+    "dependency_count": 3,
+    "comment_count": 0,
+    "revision": "-4612770520313383400"
+  },
+  {
+    "id": "atm-bh-6.group-sanity",
+    "title": "bh-6: sanity check",
+    "description": "Sanity check of atm-bh-6.group-dev (sprint bh-6): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "assignee": "atm-sanity",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T01:13:11Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:30:50Z",
+    "started_at": "2026-10-15T02:28:43Z",
+    "closed_at": "2026-10-15T02:30:50Z",
+    "close_reason": "PASS at c157e041af1d78e368d1cc45615873bb67b15787",
+    "metadata": {
+      "dev_bead": "atm-bh-6.group-dev",
+      "difficulty": "hard",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+        "mode": "attach",
+        "parent": "atm-bh-6",
+        "ref": "group",
+        "revision": "sha256:376ad14077be112f4cb5626262f3eda9a0416bc8cd1eeafc1d720d714e8252e9",
+        "step": "sanity",
+        "v": 1
+      }
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev-sanity"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-6",
+        "title": "bh-6: tick rules: snapshot, holds, problems, agent status, metrics, stops",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nAll business logic in one place, pure: `tick(inputs, state, now, spec) -\u003e (Snapshot, actions, State)` and `due(state, phase, github_mode, now) -\u003e Due` (signatures in bh-1). No I/O, no source strings, no import of atm_bd or any source module (`spec` is bh-1's injected `SpecFn`); the app and the cron call the same function (ANC-001..003).\n\n## Deliverables\n1. Agents: one AgentView per member in roster order with all open tasks as Rows (state, kind, difficulty, tag, age) and status (ANC-021): `blocked` presence blocked; `offline` offline/unknown with a task; `busy` active with a task; `stalling` idle with a task; `idle` no task. Markers (ANC-009): red when the task's step has no top_epic or a top_epic other than the root; yellow when the task has no bead.\n2. Dispatch (`dispatch.py`): candidates are ready sanity/QA steps, not anchor, not quick_fix, no open task with the bead id; recipient `RepoConfig.sanity_member` or `.qa_member`. Holds (ANC-004), each one flat check: not ready, branch not in remote refs, no worktree, merge state conflict. A held bead is a Section row with its reason; a sent one is an `assign` Action with `spec(DispatchContext)` built per bh-4's field-source table; an `Err` from `spec` is a Snapshot error and no Action. PR and CI never hold.\n3. Problems (ANC-010): holds, merge conflicts (to the step's assignee, naming the files; ANC-015), a pushed step with no matching PR (to the assignee; ANC-006) — only from a GitHub read that returned `Ok` this cycle, never when mode is `off` or the read is `Err` (ANC-017) — and CI failure on the stack top's head only (to the lead; ANC-016). Each problem has one recipient. Each new problem -\u003e its own `send` to its recipient at once; per recipient, unresolved ones -\u003e one `batch` 10 min after that recipient's first send of the cycle and every 10 min (`State.batch_due`); resolved ones drop out. Agent status never makes a problem.\n4. `due`: `fetch` and `github` true once per 10-min cycle (github false in `off` mode), fetch also when a candidate's branch is not in `State.remotes`; `merges` = every pushed step branch per cycle plus each candidate. Stack top = the open phase PR whose head is no other open phase PR's base; PR match by branch. `Snapshot.prs` = one PrRow per open phase PR in layer order (layer and bead from the matched step, `top`, last Merge).\n5. Stops (ANC-011): root closed -\u003e `stopped=\"closed\"`, no actions; no ready and no in_progress step for 60 min -\u003e `stopped=\"idle\"`, no actions; the clock restarts on any ready or in_progress step. A stopped snapshot is the only notice (it shows in `show`, the app and the cron's JSON line).\n6. Metrics (ANC-019): done = closed dev+fix steps; total = all dev+fix steps + for each unfinished sprint max(0, round(avg findings per closed sprint) - its findings); pct; active_s = union of step claimed_at..closed_at (now when open) intervals. `Snapshot.sprints` and Mermaid `graph TD` source of the sprints (icon ✅ closed, 🌀 in progress, 📥 ready, ⏳ not ready; id, title, current step and assignee; one edge per depends_on). `Snapshot.sent` = the last 5 Actions; `bead_prefix` from RepoConfig.\n7. Every read error in Inputs and every `Phase.step_errors` entry becomes a Snapshot error (a rejected bead is never dispatched); the tick still returns a snapshot (ANC-014).\n\n## Does Not Close\n- reading Inputs or running Actions (bh-9); drawing (bh-8, bh-10).\n",
+        "design": "## Constants (model.py, not flags)\n`CYCLE = 10 min`, `IDLE_STOP = 60 min`. Times are UTC datetimes; nothing here formats local time.\n\n## Headless JSON line (bh-1 `ActionLine`, one per Action/hold/dry_run; errors as `{\"at\",\"kind\":\"error\",\"text\"}`; written by bh-9)\n```json\n{\"at\":\"2026-10-14T16:31:02Z\",\"kind\":\"hold\",\"to\":null,\"bead\":\"atm-bh-6.group-qa\",\"text\":\"merge conflict with sprint/bh-5-git-github-source: model.py\"}\n```\n\nTick goldens (tests/fixtures/tick/) are this sprint's own, written by hand from the rules above.\n",
+        "acceptance_criteria": "- [ ] (D1) Roster fixture with one member per AgentStatus yields that status; planted foreign-epic, broken-chain and no-bead tasks get the right markers; a sprint container task gets none.\n- [ ] (D2) Each hold alone holds a candidate with its reason; a red CI, a missing PR and a layer above hold nothing; a fake `spec` returning `Err` gives a Snapshot error and no Action; the assign Action goes to the configured sanity or QA member.\n- [ ] (D3) Problems at 1m/2m/3m for the lead and one at 2m for an assignee -\u003e sends at 1m, 2m, 2m, 3m; batches at 11m and 21m to the lead and at 12m to the assignee; resolved ones drop; restoring State from JSON neither resends nor resets.\n- [ ] (D3) Only the stack top's failing CI makes a problem, addressed to the lead; a failing lower layer makes none; a conflict message names the files and goes to the assignee; a pushed step without a PR makes a problem after an `Ok` read and none with mode `off` or an `Err` read.\n- [ ] (D4) `due` at t=0, 5m, 10m with and without a candidate missing its remote ref; `github=False` in off mode; Snapshot.prs lists the fixture PRs in layer order with exactly one `top`.\n- [ ] (D5) Root closed -\u003e stopped closed, no actions; 61 min idle -\u003e stopped idle, no actions; one step in progress for 2 h -\u003e keeps ticking (injected `now`, runs in ms).\n- [ ] (D6) Metrics on a fixture of 4 sprints (2 closed with 3 and 1 findings) give the expected N/M, pct and active_s; Mermaid source equals a golden written by hand; `sent` holds the last 5 actions.\n- [ ] (D7) An `Err` in every Inputs field and a `Phase.step_errors` entry each yield a Snapshot with that error, no Action for the rejected bead, and no exception.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:03Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-6-tick-rules",
+          "closure_type": "boundary",
+          "difficulty": "hard",
+          "layer": 6,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/model.py",
+            "apps/atm-bd-console/src/atm_bd_console/dispatch.py",
+            "apps/atm-bd-console/tests/test_model.py",
+            "apps/atm-bd-console/tests/test_dispatch.py",
+            "apps/atm-bd-console/tests/fixtures/tick/"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-6",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console model.py and dispatch.py: every business rule, pure",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-6-tick-rules"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      },
+      {
+        "id": "atm-bh-6.group-dev",
+        "title": "bh-6: dev",
+        "description": "Dev work for sprint bh-6. The deliverables and acceptance criteria are on the sprint container atm-bh-6.",
+        "notes": "Parallel Quick Fix fix/bh-1-tick-context (solar): Inputs.repo, Inputs.interval_s, Sprint.stack added to bh-1 types\nlayer PR #136 https://github.com/randlee/atm-bd-orchestration/pull/136",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "solar",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-15T01:13:11Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:28:29Z",
+        "started_at": "2026-10-15T02:14:15Z",
+        "closed_at": "2026-10-15T02:28:20Z",
+        "close_reason": "dev complete at c157e04",
+        "metadata": {
+          "difficulty": "hard",
+          "layer": 6,
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "role": "dev",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+            "mode": "attach",
+            "parent": "atm-bh-6",
+            "ref": "group",
+            "revision": "sha256:376ad14077be112f4cb5626262f3eda9a0416bc8cd1eeafc1d720d714e8252e9",
+            "step": "dev",
+            "v": 1
+          },
+          "sprint": "bh-6",
+          "sprint_bead": "atm-bh-6",
+          "stack": "phase-bh"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev"
+        ],
+        "dependency_type": "blocks"
+      }
+    ],
+    "parent": "atm-bh-6",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "8478527777472144738"
+  },
+  {
+    "id": "atm-bh-7.group-dev",
+    "title": "bh-7: dev",
+    "description": "Dev work for sprint bh-7. The deliverables and acceptance criteria are on the sprint container atm-bh-7.",
+    "notes": "DEV_CANNOT_COMPLETE; escalation 01M4YPG8PXWHKHGCC6GS4QT5DS: gh_stack_view.py --phase bh failed because GitHub GraphQL API rate limit is exhausted. HEAD d1f1ec0 is pushed.\nlayer PR #141 https://github.com/randlee/atm-bd-orchestration/pull/141",
+    "status": "closed",
+    "priority": 2,
+    "issue_type": "task",
+    "owner": "randlee@users.noreply.github.com",
+    "created_at": "2026-10-15T01:13:12Z",
+    "created_by": "fenix",
+    "updated_at": "2026-10-15T02:40:47Z",
+    "started_at": "2026-10-15T02:30:53Z",
+    "closed_at": "2026-10-15T02:40:46Z",
+    "close_reason": "dev work by arch-ctm pushed; refusal was external-quota only; lead rebased onto sprint/bh-5-git-github-source and opened PR #141 at 51701f3c",
+    "metadata": {
+      "difficulty": "normal",
+      "layer": 7,
+      "phase": "bh",
+      "pr_target": "sprint/bh-1-contract",
+      "role": "dev",
+      "sc_compose_graph": {
+        "formula": "sprint-group",
+        "inputs": "sha256:1a0eef25ccac2df5d763e98b1c2781bbd3ea2f40347d7db20eac75c8ae36d214",
+        "mode": "attach",
+        "parent": "atm-bh-7",
+        "ref": "group",
+        "revision": "sha256:142699ccdca834bf84dd0b4950a33945c4bc870ae656a2cf0eeb5ed735e58053",
+        "step": "dev",
+        "v": 1
+      },
+      "sprint": "bh-7",
+      "sprint_bead": "atm-bh-7",
+      "stack": "phase-bh"
+    },
+    "labels": [
+      "phase-bh",
+      "stack:phase-bh",
+      "stage:dev"
+    ],
+    "dependencies": [
+      {
+        "id": "atm-bh-1.group-sanity",
+        "title": "bh-1: sanity check",
+        "description": "Sanity check of atm-bh-1.group-dev (sprint bh-1): each numbered deliverable is written and lint passes. This is not QA. Close on PASS only; on FAIL reopen the dev bead and leave this bead open.",
+        "status": "closed",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "atm-sanity",
+        "owner": "randlee@users.noreply.github.com",
+        "created_at": "2026-10-14T23:27:16Z",
+        "created_by": "fenix",
+        "updated_at": "2026-10-15T02:11:02Z",
+        "started_at": "2026-10-15T02:07:55Z",
+        "closed_at": "2026-10-15T02:11:02Z",
+        "close_reason": "PASS at 8bfc413c251704addd33f35bc998703e40004cf3",
+        "metadata": {
+          "dev_bead": "atm-bh-1.group-dev",
+          "difficulty": "hard",
+          "sc_compose_graph": {
+            "formula": "sprint-group",
+            "inputs": "sha256:c555da6a6ab61b344604754c3292047b0b8c736af7bdae3bc0cc52065aa425ef",
+            "mode": "attach",
+            "parent": "atm-bh-1",
+            "ref": "group",
+            "revision": "sha256:102667d08dd2c9660e00d83edf101f5c465b8f8d7da55e8edebc9d68eb3d6600",
+            "step": "sanity",
+            "v": 1
+          }
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:dev-sanity"
+        ],
+        "dependency_type": "blocks"
+      },
+      {
+        "id": "atm-bh-7",
+        "title": "bh-7: runtime files: JSON state, lock, config, logging",
+        "description": "Repository: randlee/atm-bd-orchestration. Code, worktrees, sprint branches and PRs live there, on its `integrate/phase-bh`; atm-core's `integrate/phase-bh` holds only this plan.\n\n## Goal\nEverything the app shows lives in JSON files oversight can read (ANC-022), written safely by one process; settings and logging in one place each.\n\n## Deliverables\n1. `state.py`: folder `.atm-bd/atm-bd-console/\u003croot\u003e/` (`\u003croot\u003e` = the phase root bead id; writes `.atm-bd/atm-bd-console/.gitignore` containing `*` once): `lock`, `snapshot.json`, `state.json`, `merge.json`, `prs.json` written temp+rename with `to_json`, each exactly bh-1's detail-file type; `actions.jsonl` appended one `ActionLine` per line. Every writer returns `Result[None]` (`Err(IoFailed)` with the path and fix, never raises). `acquire_lock()` takes an OS advisory lock (`fcntl.flock`, non-blocking; macOS and Linux) on `lock`, held for the process's life and released by the OS when it dies, so a held lock always means a live holder: no stale-lock takeover exists. It returns `Ok` or `Err(LockHeld(snapshot_age_s))` (None when no snapshot exists); only the holder writes. Readers (`load_snapshot`, `load_state`, `load_prs`, `load_merges`) return `Result`; a missing file is `Err(NotFound)`.\n2. `config.py` builds bh-1's `Config` from `.atm-bd/console.toml` `[console]` with `github = \"graphql\" | \"rest\" | \"off\"` (default graphql) and `interval` seconds (default 60, minimum 10); a missing file means all defaults; CLI flags `--github`, `--interval`, `--dry-run`, `--no-fetch` override it; returns `Result[Config]`, `Err(ConfigInvalid)` naming the key, the value and the allowed values (ANC-018).\n3. `log.py`: one sc-observability logger per process under `.atm-bd/atm-bd-console/logs/` (`create_logger(LoggerConfig(service=\"atm-bd-console\", log_root=...))`); `event(action, **fields)` with actions `tick_start`, `tick_end`, `read` (source, duration_ms, ok), `github_read` (mode, ok), `action`, `hold`, `error`; times UTC; never writes to stdout or stderr.\n\n## Does Not Close\n- what goes in the files (bh-6); when they are written (bh-9).\n",
+        "design": "## Files\nTypes are bh-1's detail-file table (frozen there); this sprint writes them and adds nothing. Written: snapshot.json and state.json every tick; merge.json on each merge check; prs.json on each GitHub read; actions.jsonl appended per line. merge.json and prs.json are the runner's caches between cycles.\n",
+        "acceptance_criteria": "- [ ] (D1) A second process gets `Err(LockHeld)` with the snapshot age (None with no snapshot); after the holder process is killed (SIGKILL) the next `acquire_lock` succeeds; a crash mid-write (temp left behind) leaves the previous snapshot.json readable.\n- [ ] (D1) Every writer's file round-trips through `from_json` into its bh-1 type and equals the written instance; all times end in `Z`; two `actions.jsonl` appends give two parseable lines; `.gitignore` contains `*`.\n- [ ] (D1) A write into a read-only folder returns `Err(IoFailed)` naming the path; a missing snapshot returns `Err(NotFound)`.\n- [ ] (D2) No console.toml -\u003e defaults graphql/60; file values apply; flags override the file; bad `github` value and interval 5 -\u003e `Err(ConfigInvalid)` naming the key and allowed values.\n- [ ] (D3) A test reads the log back with sc-observability `query` and finds each event kind; captured stdout and stderr are empty.\n\n## Validation\n- `cd apps/atm-bd-console \u0026\u0026 uv run pytest -q \u0026\u0026 uv run ruff check src tests`",
+        "status": "open",
+        "priority": 2,
+        "issue_type": "task",
+        "created_at": "2026-10-15T01:13:01Z",
+        "updated_at": "2026-10-15T02:12:09Z",
+        "metadata": {
+          "adrs": [
+            "NONE"
+          ],
+          "branch": "sprint/bh-7-runtime-files",
+          "closure_type": "boundary",
+          "difficulty": "normal",
+          "layer": 7,
+          "model_class": "",
+          "owned_paths": [
+            "apps/atm-bd-console/src/atm_bd_console/state.py",
+            "apps/atm-bd-console/src/atm_bd_console/config.py",
+            "apps/atm-bd-console/src/atm_bd_console/log.py",
+            "apps/atm-bd-console/tests/test_state.py",
+            "apps/atm-bd-console/tests/test_config.py",
+            "apps/atm-bd-console/tests/test_log.py"
+          ],
+          "phase": "bh",
+          "pr_target": "sprint/bh-1-contract",
+          "relation": "parallel_safe",
+          "release_train": "",
+          "requirements": [
+            "NONE"
+          ],
+          "sprint": "bh-7",
+          "stack": "phase-bh",
+          "target_boundary": "apps/atm-bd-console state.py, config.py and log.py",
+          "worktree": "/Users/randlee/github/atm-bd-orchestration-worktrees/sprint/bh-7-runtime-files"
+        },
+        "labels": [
+          "phase-bh",
+          "stack:phase-bh",
+          "stage:sprint"
+        ],
+        "dependency_type": "parent-child"
+      }
+    ],
+    "parent": "atm-bh-7",
+    "dependent_count": 2,
+    "dependency_count": 2,
+    "comment_count": 0,
+    "revision": "5226169523866402724"
+  }
+]
