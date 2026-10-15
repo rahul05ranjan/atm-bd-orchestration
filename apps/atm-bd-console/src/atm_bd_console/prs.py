@@ -3,6 +3,7 @@ from __future__ import annotations
 from rich.text import Text
 
 from .ids import short_id
+from .render import _fit
 from .types import PrRow, Snapshot
 
 
@@ -33,9 +34,4 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
 
 
 def render_prs(snapshot: Snapshot, width: int) -> Text:
-    lines: list[Text] = []
-    for value in snapshot.prs:
-        line = _row(value, snapshot)
-        line.truncate(max(0, width), overflow="ellipsis")
-        lines.append(line)
-    return Text("\n").join(lines)
+    return Text("\n").join(_fit(_row(value, snapshot), width) for value in snapshot.prs)
