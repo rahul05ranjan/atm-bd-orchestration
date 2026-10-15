@@ -3,19 +3,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .log import create_console_logger
 from .result import Err, Ok
-from .state import acquire_lock, load_merges, load_prs
+from .state import StateStore, acquire_lock, load_merges, load_prs
 from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, PrsFile, State
 
 
-def _gh(mode: str) -> GhStatus:
-    return GhStatus(mode, None, None, None, False)  # type: ignore[arg-type]
+def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
+    return GhStatus(mode, None, None, None, False)
 
 
-def _run_actions(config: Config, actions: tuple[Action, ...], store, now: datetime):
+def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore, now: datetime):
     """Return boundary errors so they are visible in the persisted snapshot."""
     errors = []
     for action in actions:
@@ -67,7 +68,14 @@ def step(config: Config, state: State, force_github: bool, store=None):
     opened, ready = beads_source.open_beads(file.value.label), beads_source.ready(file.value.label)
     known = opened.value if isinstance(opened, Ok) else ()
     shown = beads_source.show(atm_bd.closed_show_ids(file.value, known))
-    phase = atm_bd.phase(file.value, root_bead, known, ready.value if isinstance(ready, Ok) else (), shown.value if isinstance(shown, Ok) else ())
+    if isinstance(opened, Err):
+        phase = opened
+    elif isinstance(ready, Err):
+        phase = ready
+    elif isinstance(shown, Err):
+        phase = shown
+    else:
+        phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
     members, tasks, worktrees = atm_source.members(config.lead), atm_source.tasks(config.lead), git_source.worktrees(config.repo_root)
     task_beads = beads_source.show(tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ())
     due = model.due(state, phase.value, repo.value.bead_prefix, config.github, now) if isinstance(phase, Ok) else None
