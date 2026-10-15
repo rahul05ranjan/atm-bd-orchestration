@@ -78,4 +78,4 @@ def main(argv: list[str] | None = None) -> int:
     from .app import run
 
     startup_error = saved.error if isinstance(saved, Err) and not isinstance(saved.error, NotFound) else None
-    return run(loaded.value, runner.step, state, startup_error)
+    return run(loaded.value, None, state, startup_error, runner_step=runner.step)

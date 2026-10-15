@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
@@ -17,7 +18,7 @@ from textual.widgets.option_list import Option
 
 from . import prs, render, status
 from .result import Err, Error, IoFailed
-from .state import acquire_lock
+from .state import StateStore, acquire_lock
 from .types import Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
@@ -177,7 +178,10 @@ class ConsoleApp(App[int]):
         self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
 
 
-def run(config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> int:
+RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]
+
+
+def run(config: Config, step: StepFn | None, state: State, startup_error: Error | None = None, *, runner_step: RunnerStep | None = None) -> int:
     """Take the console lock, then run the app until q; a held lock exits 1 before drawing."""
     root_id = Path(config.state_dir).name
     lock = acquire_lock(config.repo_root, root_id)
@@ -185,5 +189,7 @@ def run(config: Config, step: StepFn, state: State, startup_error: Error | None 
         print(_lock_message(lock.error), file=sys.stderr)
         return 1
     with lock.value:
-        result = ConsoleApp(config, step, state, startup_error).run()
+        bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value)
+        assert bound_step is not None
+        result = ConsoleApp(config, bound_step, state, startup_error).run()
     return result or 0
