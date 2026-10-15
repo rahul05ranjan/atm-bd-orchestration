@@ -10,6 +10,7 @@ from contract_samples import CONFIG, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
 
 from atm_bd_console import __version__, cli
 from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.state import acquire_lock
 
 
 def test_missing_as_uses_documented_message(capsys) -> None:
@@ -129,4 +130,17 @@ def test_headless_lock_failure_is_a_json_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(TIMEOUT))
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run")))
     assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert '"kind": "error"' in capsys.readouterr().out
+
+
+def test_headless_real_lock_held_is_a_json_error(monkeypatch, capsys, tmp_path) -> None:
+    config = replace(CONFIG, repo_root=str(tmp_path))
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(config))
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    held = acquire_lock(tmp_path, "atm-phase-bh")
+    assert isinstance(held, Ok)
+    with held.value:
+        assert cli.main(["--headless", "--phase", "bh", "--as", "fenix"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
