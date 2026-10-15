@@ -111,14 +111,17 @@ class ConsoleApp(App[int]):
 
     @work(thread=True, group="tick", exclusive=True, exit_on_error=False)
     def tick(self, force_github: bool) -> None:
+        if not self._step_lock.acquire(blocking=False):
+            return
         try:
-            with self._step_lock:
-                snapshot, state = self.step(self.config, self.state, force_github)
-                self.state = state
-                text, error = status.status_text(snapshot)
+            snapshot, state = self.step(self.config, self.state, force_github)
+            self.state = state
+            text, error = status.status_text(snapshot)
         except Exception as error:  # noqa: BLE001
             self.call_from_thread(self._show_tick_error, IoFailed("io_failed", "console tick", str(error), "retry the console tick"))
             return
+        finally:
+            self._step_lock.release()
         self.call_from_thread(self._show, snapshot, text, error)
 
     def _show_tick_error(self, error: Error) -> None:

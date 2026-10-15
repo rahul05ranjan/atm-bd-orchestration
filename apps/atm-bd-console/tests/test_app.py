@@ -105,9 +105,11 @@ def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
             await asyncio.wait_for(asyncio.to_thread(step.started.wait), timeout=1)
             app._on_interval()
             app._on_interval()
+            app.action_refresh()
+            await settle(pilot)
+            assert step.calls == [False]
             step.release.set()
             await settle(pilot)
-            assert len(step.calls) <= 2
 
     run_scenario(scenario())
 
