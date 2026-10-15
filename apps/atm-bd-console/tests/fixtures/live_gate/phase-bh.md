@@ -18,6 +18,18 @@ cd /Users/randlee/github/atm-core && TERM=xterm-256color \
   /tmp/atm-bh10-f1-r4-bin/atm-bd-console --phase bh --as arch-ctm --interval 60 --dry-run
 ```
 
+Exact controlled tmux interaction after the initial tick completed:
+
+```text
+tmux send-keys -t bh10r3clean -l $'\033[<0;17;1M\033[<0;17;1m'  # Status
+tmux send-keys -t bh10r3clean -l $'\033[<0;20;14M\033[<0;20;14m'  # select atm-bh-10
+tmux send-keys -t bh10r3clean -l $'\033[<0;23;1M\033[<0;23;1m'  # PRs, once
+tmux send-keys -t bh10r3clean r                                      # refresh, once
+tmux send-keys -t bh10r3clean q                                      # quit
+```
+
+No tab switch occurred after PRs activation.
+
 ## Dispatch tab
 
 ```text
@@ -115,16 +127,14 @@ gh: graphql ✅ 07:24 | 10/11 [████████░] 91% | active 0h00m |
 
 ## Raw GitHub reads and interaction sequence
 
-These are verbatim `github_read` log lines from
+These are every verbatim `github_read` log lines from the controlled capture
+window in
 `/Users/randlee/github/atm-core/.atm-bd/atm-bd-console/logs/atm-bd-console.log.jsonl`.
-The first follows opening the PRs tab; the second follows the single `r` key.
-After recording that refreshed PR pane, the tmux mouse clicked Dispatch once
-to capture the Dispatch tab shown above. That separate tab activation caused
-the third forced read after the `14:24:09` tick start; it is not part of the
-PRs-tab activation plus `r` count.
+The initial tick is the sole non-forced read. The following two reads are,
+in order, the one PRs activation and the one `r`; the session then quit.
 
 ```text
-{"version":"v1","timestamp":"2026-10-15T14:23:59.288232Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
-{"version":"v1","timestamp":"2026-10-15T14:24:08.769444Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
-{"version":"v1","timestamp":"2026-10-15T14:24:12.256137Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
+{"version":"v1","timestamp":"2026-10-15T14:58:41.261137Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":false,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
+{"version":"v1","timestamp":"2026-10-15T14:58:53.269933Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
+{"version":"v1","timestamp":"2026-10-15T14:58:57.465984Z","level":"Info","service":"atm-bd-console","target":"atm_bd_console","action":"github_read","message":null,"identity":{"hostname":null,"pid":null},"trace":null,"request_id":null,"correlation_id":null,"outcome":null,"diagnostic":null,"state_transition":null,"fields":{"forced":true,"sc_observability.binding.channel":"pyo3","sc_observability.binding.language":"python"}}
 ```
