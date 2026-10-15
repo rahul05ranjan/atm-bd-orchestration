@@ -22,5 +22,5 @@ def test_logger_writes_into_the_log_directory(tmp_path) -> None:
     created = create_console_logger(tmp_path)
     assert isinstance(created, Ok)
     assert created.value.event("tick_start", source="test", ok=True) == Ok(None)
-    assert created.value.native.flush().kind == "ok"
+    assert created.value.flush() == Ok(None)
     assert [path.name for path in log_directory(tmp_path).glob("*.jsonl")] == ["atm-bd-console.log.jsonl"]

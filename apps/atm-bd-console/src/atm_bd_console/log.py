@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from sc_observability import Err as ObservabilityErr
-from sc_observability import LogEvent, Logger, LoggerConfig, create_logger
+from sc_observability import LogEvent, Logger, LoggerConfig, LogQuery, create_logger
 
 from .paths import CONSOLE_NAME, console_root
 from .result import Err, IoFailed, Ok, Result
@@ -17,15 +17,24 @@ class ConsoleLogger:
     def __init__(self, logger: Logger) -> None:
         self._logger = logger
 
-    @property
-    def native(self) -> Logger:
-        return self._logger
-
     def event(self, action: EventAction, **fields: object) -> Result[None]:
         admitted = self._logger.log(LogEvent("info", "atm_bd_console", action, fields=fields))
         if isinstance(admitted, ObservabilityErr):
             return Err(IoFailed("io_failed", "logs", str(admitted.error), "inspect the console log directory"))
         return Ok(None)
+
+    def flush(self) -> Result[None]:
+        flushed = self._logger.flush()
+        if isinstance(flushed, ObservabilityErr):
+            return Err(IoFailed("io_failed", "logs", str(flushed.error), "inspect the console log directory"))
+        return Ok(None)
+
+    def query(self) -> Result[tuple[Any, ...]]:
+        """The stored events this console logged, each with its action and UTC timestamp."""
+        queried = self._logger.query(LogQuery(service=CONSOLE_NAME))
+        if isinstance(queried, ObservabilityErr):
+            return Err(IoFailed("io_failed", "logs", str(queried.error), "inspect the console log directory"))
+        return Ok(queried.value.events)
 
 
 def create_console_logger(repo_root: str | Path) -> Result[ConsoleLogger]:
