@@ -52,6 +52,17 @@ def step(config: Config, state: State, force_github: bool, store=None):
         phase = atm_bd.phase(file.value, root_bead, (), (), ())
         empty = Ok(())
         snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
+        lock = None if store is not None else acquire_lock(config.repo_root, file.value.root_id)
+        active_store = store if store is not None else (lock.value if isinstance(lock, Ok) else None)
+        if active_store is not None:
+            persisted = replace(snapshot, files={"snapshot": str(active_store.directory / "snapshot.json"), "state": str(active_store.directory / "state.json")})
+            if store is not None:
+                active_store.write_state(next_state); active_store.write_snapshot(persisted)
+            else:
+                with active_store:
+                    active_store.write_state(next_state); active_store.write_snapshot(persisted)
+            snapshot = persisted
+        if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
         return snapshot, next_state
     opened, ready = beads_source.open_beads(file.value.label), beads_source.ready(file.value.label)
     known = opened.value if isinstance(opened, Ok) else ()
