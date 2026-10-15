@@ -3,7 +3,18 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 
-from .result import Error
+from .result import (
+    CommandFailed,
+    ConfigInvalid,
+    Error,
+    IoFailed,
+    LockHeld,
+    NotFound,
+    ParseFailed,
+    Rejected,
+    Timeout,
+    Unreachable,
+)
 from .types import Action, AgentView, Row, Snapshot
 
 _STATUSES = {
@@ -94,10 +105,26 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
 
 
 def _error_text(error: Error) -> str:
-    message = getattr(error, "message", None) or getattr(error, "stderr", None) or getattr(error, "what", None)
-    if not message:
-        message = " ".join(getattr(error, "argv", ())) or error.kind
-    return f"{error.kind}: {message}; {error.fix}"
+    if isinstance(error, CommandFailed):
+        detail = f"{' '.join(error.argv)} (exit {error.code}): {error.stderr}"
+    elif isinstance(error, Timeout):
+        detail = f"{' '.join(error.argv)} timed out after {error.seconds}s"
+    elif isinstance(error, Rejected):
+        detail = f"{' '.join(error.argv)} (status {error.status}): {error.message}"
+    elif isinstance(error, Unreachable):
+        detail = f"{' '.join(error.argv)}: {error.message}"
+    elif isinstance(error, ParseFailed):
+        detail = f"{error.source}: {error.message}"
+    elif isinstance(error, NotFound):
+        detail = error.what
+    elif isinstance(error, ConfigInvalid):
+        detail = f"{error.key}={error.value}"
+    elif isinstance(error, LockHeld):
+        age = "unknown" if error.snapshot_age_s is None else f"{error.snapshot_age_s}s"
+        detail = f"snapshot age {age}"
+    elif isinstance(error, IoFailed):
+        detail = f"{error.path}: {error.message}"
+    return f"{error.kind}: {detail}; {error.fix}"
 
 
 def _pr_link(line: Text, number: int, snapshot: Snapshot) -> None:

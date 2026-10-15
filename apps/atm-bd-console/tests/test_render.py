@@ -9,8 +9,19 @@ from pathlib import Path
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
-from atm_bd_console.render import _age, dashboard, status_bar
-from atm_bd_console.result import Ok, Timeout
+from atm_bd_console.render import _age, _error_text, dashboard, status_bar
+from atm_bd_console.result import (
+    CommandFailed,
+    ConfigInvalid,
+    IoFailed,
+    LockHeld,
+    NotFound,
+    Ok,
+    ParseFailed,
+    Rejected,
+    Timeout,
+    Unreachable,
+)
 from atm_bd_console.types import (
     Action,
     AgentView,
@@ -106,8 +117,9 @@ def test_sections_error_first_sent_last_height_and_links() -> None:
         assert any("link https://example/pr/553" in str(span.style) for span in rendered.spans)
         clipped = dashboard(value, 80, 10).plain.splitlines()
         assert len(clipped) == 10 and clipped[-1].startswith("… ") and "more rows" in clipped[-1]
-        for line in dashboard(value, 80, 40).plain.splitlines():
-            assert cell_len(line) <= 80
+        for width in (80, 120):
+            for line in dashboard(value, width, 40).plain.splitlines():
+                assert cell_len(line) <= width
 
     pacific_test(check)
 
@@ -119,12 +131,36 @@ def test_status_bar_formats_and_cell_width() -> None:
     def check() -> None:
         expected = (FIXTURES / "render" / "status-bar-ok.txt").read_text().rstrip("\n")
         assert status_bar(value, 120).plain == expected
-        assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain.startswith("gh: off |")
+        assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain == (
+            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+        )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
-        assert status_bar(failed, 120).plain.startswith("gh: graphql ⛔ timeout 14:04 100+ |")
-        assert cell_len(status_bar(value, 80).plain) <= 80
+        assert status_bar(failed, 120).plain == (
+            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+        )
+        for width in (80, 120):
+            assert cell_len(status_bar(value, width).plain) <= width
+            assert cell_len(status_bar(failed, width).plain) <= width
 
     pacific_test(check)
+
+
+def test_error_details_preserve_variant_fields() -> None:
+    cases = (
+        (CommandFailed("command_failed", ("gh", "pr"), 2, "denied", "retry"), "gh pr (exit 2): denied"),
+        (Timeout("timeout", ("gh", "pr"), 20, "retry"), "gh pr timed out after 20s"),
+        (Rejected("rejected", ("atm",), 403, "forbidden", "reauth"), "atm (status 403): forbidden"),
+        (Unreachable("unreachable", ("atm",), "offline", "retry"), "atm: offline"),
+        (ParseFailed("parse_failed", "snapshot.json", "bad JSON", "repair"), "snapshot.json: bad JSON"),
+        (NotFound("not_found", "mmdflux", "install"), "mmdflux"),
+        (ConfigInvalid("config_invalid", "interval_s", "zero", "configure"), "interval_s=zero"),
+        (LockHeld("lock_held", 47, "wait"), "snapshot age 47s"),
+        (LockHeld("lock_held", None, "wait"), "snapshot age unknown"),
+        (IoFailed("io_failed", "state.json", "permission denied", "repair"), "state.json: permission denied"),
+    )
+    for error, detail in cases:
+        rendered = _error_text(error)
+        assert rendered == f"{error.kind}: {detail}; {error.fix}"
 
 
 def test_stopped_lines_and_age_boundaries() -> None:
