@@ -77,7 +77,7 @@ def dispatch(
         if not step.worktree or not any(
             worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
         ):
-            reasons.append(f"no worktree for {step.branch}")
+            reasons.append(f"no worktree for {step.branch or '<missing>'}")
         if target and (merge := merge_by_pair.get((step.branch, target))) and merge.state == "conflict":
             reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
 

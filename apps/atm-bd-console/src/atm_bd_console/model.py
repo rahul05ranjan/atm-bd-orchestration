@@ -328,8 +328,7 @@ def _problems(
         step = by_id[row.bead_id]
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
     for merge in merges:
-        if (merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
-                and not any(problem.key == f"hold:{step.bead_id}" for problem in problems)):
+        if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None:
             problems.append(Problem(
                 f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
                 f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,

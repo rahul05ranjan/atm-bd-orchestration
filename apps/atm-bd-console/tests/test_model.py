@@ -437,8 +437,9 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
                     worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
     conflict = Merge("sprint/bh-1", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
     snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
-    assert "model.py" in snapshot.problems[0].text
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar"), ("send", "solar")]
+    assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:sprint/bh-1"]
+    assert "model.py" in snapshot.problems[1].text
 
     error = NotFound("not_found", "checked_bead", "repair metadata")
     snapshot, actions, _ = tick(common, STATE, NOW, lambda context: Err(error))
