@@ -10,6 +10,8 @@ from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeo
 from .types import DispatchSpec, Member, Task
 
 TIMEOUT_S = 20
+TASK_KEYS = frozenset({"id", "agent", "state", "assigned_at", "updated_at", "description"})
+TASK_STATES = frozenset({"assigned", "active"})
 
 
 def _run(argv: list[str], stdin: str | None = None, timeout_s: int | None = None) -> Result[str]:
@@ -42,7 +44,14 @@ def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]
     result = _run(["atm", "task", "list", "--all", "--json", "--team", team], timeout_s=timeout_s)
     if isinstance(result, Err): return result
     try:
-        return Ok(tuple(Task(item["id"], item["agent"], item["state"], index, _time(item["assigned_at"]), _time(item["updated_at"]), item.get("description", "")) for index, item in enumerate(json.loads(result.value))))
+        items = json.loads(result.value)
+        if not isinstance(items, list):
+            return Err(ParseFailed("parse_failed", "atm tasks", "atm tasks must be a list", "repair ATM JSON"))
+        if any(not isinstance(item, dict) or not TASK_KEYS <= item.keys() for item in items):
+            return Err(ParseFailed("parse_failed", "atm tasks", f"atm tasks must include {sorted(TASK_KEYS)}", "repair ATM JSON"))
+        if any(item["state"] not in TASK_STATES for item in items):
+            return Err(ParseFailed("parse_failed", "atm tasks", f"atm task states must be one of {sorted(TASK_STATES)}", "repair ATM JSON"))
+        return Ok(tuple(Task(item["id"], item["agent"], item["state"], index, _time(item["assigned_at"]), _time(item["updated_at"]), item["description"]) for index, item in enumerate(items)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "atm tasks", str(error), "repair ATM JSON"))
 

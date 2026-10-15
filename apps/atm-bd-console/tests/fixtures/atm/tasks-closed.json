@@ -1,0 +1,10 @@
+[
+  {
+    "id": "atm-bh-3.group-dev",
+    "agent": "trinity",
+    "state": "closed",
+    "assigned_at": "2026-10-15T09:10:00Z",
+    "updated_at": "2026-10-15T09:11:00Z",
+    "description": "Build the adapter"
+  }
+]

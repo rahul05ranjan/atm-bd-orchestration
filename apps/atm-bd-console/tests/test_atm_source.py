@@ -48,6 +48,16 @@ def test_tasks_preserve_position_and_use_updated_at_for_state_since(fake_bin, mo
     assert fake_bin.argv() == [("atm", "task", "list", "--all", "--json", "--team", "atm-dev")]
 
 
+def test_tasks_rejects_recorded_closed_state(fake_bin, monkeypatch) -> None:
+    monkeypatch.setenv("ATM_BODY", _fixture("tasks-closed.json"))
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+
+    result = atm_source.tasks("atm-dev")
+
+    assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
+    assert result.error.source == "atm tasks"
+
+
 def test_send_and_assign_use_exact_argv_stdin_and_temporary_vars_file(fake_bin, monkeypatch, tmp_path) -> None:
     stdin_log = tmp_path / "stdin"
     vars_log = tmp_path / "vars.json"
