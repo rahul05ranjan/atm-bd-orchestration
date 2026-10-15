@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
-from .result import CommandFailed, Err, Ok, ParseFailed, Result
+from . import command
+from .result import Err, Ok, ParseFailed, Result
 from .types import Bead
-
-
-def _error(argv: list[str], completed: subprocess.CompletedProcess[str]) -> Err:
-    return Err(CommandFailed("command_failed", tuple(argv), completed.returncode, completed.stderr, "inspect bd output"))
 
 
 def _bead(raw: dict[str, Any]) -> Bead:
@@ -21,11 +17,11 @@ def _bead(raw: dict[str, Any]) -> Bead:
 
 
 def _run(argv: list[str]) -> Result[tuple[Bead, ...]]:
-    completed = subprocess.run(argv, check=False, capture_output=True, text=True)
-    if completed.returncode:
-        return _error(argv, completed)
+    completed = command.run(argv, "inspect bd output")
+    if isinstance(completed, Err):
+        return completed
     try:
-        raw = json.loads(completed.stdout)
+        raw = json.loads(completed.value.stdout)
         return Ok(tuple(_bead(item) for item in raw))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))

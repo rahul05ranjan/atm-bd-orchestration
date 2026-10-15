@@ -1,35 +1,34 @@
 """Git reads for the console; every command result is converted at this boundary."""
 from __future__ import annotations
 
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .result import CommandFailed, Err, NotFound, Ok, Result
+from . import command
+from .result import Err, NotFound, Ok, Result
 from .types import Merge, RemoteRef, Worktree
 
+# git fetch talks to the remote; local reads get the default timeout.
+FETCH_TIMEOUT_S = 60
+FIX = "check the git repository and retry"
 
-def _run(repo: str | Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(("git", *args), cwd=repo, capture_output=True, text=True, check=False)
 
-
-def _failed(command: tuple[str, ...], result: subprocess.CompletedProcess[str]) -> Err:
-    return Err(CommandFailed("command_failed", command, result.returncode, result.stderr.strip(), "check the git repository and retry"))
+def _run(repo: str | Path, *args: str, timeout_s: int = command.DEFAULT_TIMEOUT_S,
+         ok_codes: tuple[int, ...] = (0,)) -> Result[command.Output]:
+    return command.run(("git", *args), FIX, cwd=repo, timeout_s=timeout_s, ok_codes=ok_codes)
 
 
 def fetch(repo: str | Path) -> Result[None]:
-    command = ("git", "fetch", "origin", "--prune")
-    result = _run(repo, *command[1:])
-    return Ok(None) if result.returncode == 0 else _failed(command, result)
+    result = _run(repo, "fetch", "origin", "--prune", timeout_s=FETCH_TIMEOUT_S)
+    return result if isinstance(result, Err) else Ok(None)
 
 
 def remote_refs(repo: str | Path) -> Result[tuple[RemoteRef, ...]]:
-    command = ("git", "for-each-ref", "--format=%(refname:lstrip=3) %(objectname)", "refs/remotes/origin")
-    result = _run(repo, *command[1:])
-    if result.returncode:
-        return _failed(command, result)
+    result = _run(repo, "for-each-ref", "--format=%(refname:lstrip=3) %(objectname)", "refs/remotes/origin")
+    if isinstance(result, Err):
+        return result
     rows = []
-    for line in result.stdout.splitlines():
+    for line in result.value.stdout.splitlines():
         branch, sha = line.split(maxsplit=1)
         if branch != "HEAD":
             rows.append(RemoteRef(branch, sha))
@@ -37,12 +36,11 @@ def remote_refs(repo: str | Path) -> Result[tuple[RemoteRef, ...]]:
 
 
 def worktrees(repo: str | Path) -> Result[tuple[Worktree, ...]]:
-    command = ("git", "worktree", "list", "--porcelain")
-    result = _run(repo, *command[1:])
-    if result.returncode:
-        return _failed(command, result)
+    result = _run(repo, "worktree", "list", "--porcelain")
+    if isinstance(result, Err):
+        return result
     rows, current = [], {}
-    for line in [*result.stdout.splitlines(), ""]:
+    for line in [*result.value.stdout.splitlines(), ""]:
         if not line:
             # A bare repository's record has no HEAD line: it has no working tree, so it is not a worktree row.
             if "head" in current:
@@ -74,18 +72,17 @@ def _conflict_output(stdout: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 def merge(repo: str | Path, branch: str, target: str) -> Result[Merge]:
     for ref in (f"origin/{target}", f"origin/{branch}"):
-        verify = ("git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
-        found = _run(repo, *verify[1:])
-        if found.returncode == 1:
+        found = _run(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", ok_codes=(0, 1))
+        if isinstance(found, Err):
+            return found
+        if found.value.code == 1:
             return Err(NotFound("not_found", ref, "fetch the named branch and retry"))
-        if found.returncode:
-            return _failed(verify, found)
-    command = ("git", "merge-tree", "--write-tree", "--name-only", "-z", f"origin/{target}", f"origin/{branch}")
-    result = _run(repo, *command[1:])
-    if result.returncode not in (0, 1):
-        return _failed(command, result)
+    result = _run(repo, "merge-tree", "--write-tree", "--name-only", "-z", f"origin/{target}", f"origin/{branch}",
+                  ok_codes=(0, 1))
+    if isinstance(result, Err):
+        return result
     checked_at = datetime.now(UTC)
-    if result.returncode == 0:
+    if result.value.code == 0:
         return Ok(Merge(branch, target, "clean", (), (), checked_at))
-    files, messages = _conflict_output(result.stdout)
+    files, messages = _conflict_output(result.value.stdout)
     return Ok(Merge(branch, target, "conflict", files, messages, checked_at))

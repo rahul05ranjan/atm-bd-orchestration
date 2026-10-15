@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from datetime import UTC, datetime
 
+from . import command
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
@@ -53,15 +53,14 @@ def open_prs(mode: str):
     if mode == "off":
         return Ok(()), _status("off", None)
     argv = ("gh", "api", "graphql", "-f", f"query={GRAPHQL}") if mode == "graphql" else ("gh", "api", "repos/randlee/atm-bd-orchestration/pulls?state=open&per_page=100")
+    completed = command.run(argv, "check GitHub connectivity and retry", timeout_s=REQUEST_TIMEOUT_S)
+    if isinstance(completed, Err):
+        failure = completed.error
+        if isinstance(failure, CommandFailed):
+            return _error(mode, argv, failure.code, failure.stderr)
+        return completed, _status(mode, False, failure)
     try:
-        completed = subprocess.run(argv, capture_output=True, text=True, timeout=REQUEST_TIMEOUT_S, check=False)
-    except subprocess.TimeoutExpired:
-        error = Timeout("timeout", argv, REQUEST_TIMEOUT_S, "check GitHub connectivity and retry")
-        return Err(error), _status(mode, False, error)
-    if completed.returncode:
-        return _error(mode, argv, completed.returncode, (completed.stderr or completed.stdout).strip())
-    try:
-        body = json.loads(completed.stdout)
+        body = json.loads(completed.value.stdout)
         if mode == "graphql":
             pulls = body["data"]["repository"]["pullRequests"]
             rows = tuple(_from_graphql(node) for node in pulls["nodes"])

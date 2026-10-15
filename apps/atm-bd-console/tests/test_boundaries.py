@@ -5,7 +5,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "atm_bd_console"
 # Paths relative to the package root: only these modules may run tools.
-SOURCES = frozenset({"atm_source.py", "beads_source.py", "git_source.py", "github_source.py", "status.py"})
+SOURCES = frozenset({"atm_source.py", "beads_source.py", "command.py", "git_source.py", "github_source.py", "status.py"})
 # Pure modules that must never import a *_source module.
 FORBIDDEN_IMPORTERS = frozenset({"model.py", "dispatch.py", "render.py", "prs.py"})
 MAX_LINES = 1000
