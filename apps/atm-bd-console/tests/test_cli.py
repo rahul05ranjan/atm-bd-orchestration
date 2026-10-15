@@ -7,10 +7,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from contract_samples import ACTION, BEAD, CONFIG, PHASE, PHASE_FILE, REPO_CONFIG, SNAPSHOT
+from contract_samples import ACTION, BEAD, CONFIG, LOCK_HELD, PHASE, PHASE_FILE, REPO_CONFIG, SNAPSHOT
 
 from atm_bd_console import cli, runner
-from atm_bd_console.result import Ok
+from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.state import load_snapshot, load_state
 
 
@@ -94,3 +94,55 @@ def test_once_headless_matches_two_direct_runner_ticks(parity_runtime, monkeypat
         assert actual_state == expected_state
         assert output == cli.to_json({"at": ACTION.at, "kind": ACTION.kind, "to": ACTION.to,
                                       "bead": ACTION.bead_ids[0], "text": ACTION.text})
+
+
+def test_headless_held_lock_is_quiet_when_snapshot_is_fresh(monkeypatch, capsys) -> None:
+    class Clock:
+        @staticmethod
+        def now(_timezone): return SNAPSHOT.generated_at
+
+    monkeypatch.setattr(cli, "datetime", Clock)
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(LOCK_HELD))
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(SNAPSHOT))
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (_ for _ in ()).throw(AssertionError("step")))
+    assert cli.main(["--once", "--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_headless_held_lock_reports_stale_snapshot_with_injected_clock(monkeypatch, capsys) -> None:
+    class Clock:
+        @staticmethod
+        def now(_timezone): return SNAPSHOT.generated_at.replace(year=SNAPSHOT.generated_at.year + 1)
+
+    monkeypatch.setattr(cli, "datetime", Clock)
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(LOCK_HELD))
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(SNAPSHOT))
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    assert cli.main(["--once", "--headless", "--phase", "bh", "--as", "fenix"]) == 0
+    assert "stopped updating" in capsys.readouterr().out
+
+
+def test_show_missing_snapshot_never_starts_runner(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run a console tick")))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: (_ for _ in ()).throw(AssertionError("step")))
+    assert cli.main(["show", "--phase", "bh"]) == 2
+    assert "is not running for phase bh" in capsys.readouterr().out
+
+
+def test_snapshot_runs_a_dry_tick_without_headless_output(monkeypatch, capsys) -> None:
+    seen = []
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **kwargs: Ok(replace(CONFIG, dry_run=kwargs["dry_run"])))
+    monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(type("Lock", (), {"__enter__": lambda s: s, "__exit__": lambda *_: None})()))
+    monkeypatch.setattr(cli.runner, "step", lambda config, *_: (seen.append(config) or (SNAPSHOT, cli.EMPTY)))
+    assert cli.main(["snapshot", "--phase", "bh", "--as", "fenix"]) == 0
+    assert seen[0].dry_run and capsys.readouterr().out == ""
