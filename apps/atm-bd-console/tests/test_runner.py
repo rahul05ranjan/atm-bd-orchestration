@@ -585,6 +585,12 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
     assert ("read", {"source": "git.fetch", "outcome": "failed", "error": asdict(TIMEOUT)}) in events
+    assert not any(fields.get("source") == "git.merge" for _, fields in events)
+
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok(()))
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
+
     assert ("read", {"source": "git.merge", "outcome": "failed", "error": asdict(COMMAND_FAILED),
                      "branch": "topic", "target": "base"}) in events
 

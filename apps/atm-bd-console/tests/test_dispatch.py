@@ -40,11 +40,31 @@ def phase(*steps: Step) -> Phase:
     return Phase("atm-phase-bh", "phase-bh", "Phase BH", False, (SPRINT,), tuple(steps), ())
 
 
-def run(value: Step, *, remotes=None, worktrees=None, merges=(), prs=(), spec=None):
+def run(value: Step, *, remotes=None, worktrees=None, merges=None, prs=(), spec=None):
     remote_values = (RemoteRef("sprint/bh-6", "abc123"),) if remotes is None else remotes
     worktree_values = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),) if worktrees is None else worktrees
     renderer = spec or (lambda context: Ok(DispatchSpec("qa", {"checked_bead": context.step.checked_bead})))
+    if merges is None:
+        merges = (Merge("sprint/bh-6", "sprint/bh-1", "clean", (), (), NOW),)
     return dispatch(phase(value), (), worktree_values, remote_values, merges, prs, REPO, "fenix", NOW, renderer)
+
+
+def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
+    unavailable = Merge("sprint/bh-6", "sprint/bh-1", "error", (), ("timeout; retry the merge check",), NOW)
+    wrong_target = replace(unavailable, target="other", state="clean")
+    for merges in ((), (unavailable,), (wrong_target,)):
+        outcome = run(step(), merges=merges)
+        assert outcome.actions == ()
+        assert "merge verification unavailable" in outcome.held[0].reason
+    assert run(step()).actions[0].kind == "assign"
+
+
+def test_missing_target_holds_with_actionable_reason() -> None:
+    value = replace(phase(step(target=None)), sprints=(replace(SPRINT, target=None),))
+    outcome = dispatch(value, (), (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
+                       (RemoteRef("sprint/bh-6", "abc123"),), (), (), REPO, "fenix", NOW, dispatch_spec)
+    assert outcome.actions == ()
+    assert "set the step or sprint PR target" in outcome.held[0].reason
 
 
 def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:

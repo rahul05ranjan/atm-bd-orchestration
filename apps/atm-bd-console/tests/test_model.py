@@ -4,12 +4,15 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
 from atm_bd_console.model import _reconcile_problems, _sprint_views, due, tick
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.result import CommandFailed, Err, NotFound, Ok, Timeout
 from atm_bd_console.types import (
     Bead,
+    DispatchSpec,
     GhStatus,
     Inputs,
     Member,
@@ -442,9 +445,42 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
     assert "model.py" in snapshot.problems[1].text
 
     error = NotFound("not_found", "checked_bead", "repair metadata")
-    snapshot, actions, _ = tick(common, STATE, NOW, lambda context: Err(error))
+    verified = replace(common, merges=(Ok(replace(conflict, state="clean", files=())),))
+    snapshot, actions, _ = tick(verified, STATE, NOW, lambda context: Err(error))
     assert actions == ()
     assert error in snapshot.errors
+
+
+@pytest.mark.parametrize("error", (
+    NotFound("not_found", "origin/base", "fetch the named branch and retry"),
+    Timeout("timeout", ("git", "merge-tree"), 30, "retry the merge check"),
+    CommandFailed("command_failed", ("git", "merge-tree"), 129, "unknown option write-tree", "upgrade git"),
+))
+def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base")
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)), merges=(Err(error),))
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+    assert error in snapshot.errors
+    assert not any(action.kind == "assign" for action in actions)
+    assert error.kind in snapshot.sections[0].rows[0].reason
+    assert error.fix in snapshot.problems[0].text
+    if isinstance(error, NotFound):
+        assert error.what in snapshot.problems[0].text
+    elif isinstance(error, CommandFailed):
+        assert error.stderr in snapshot.problems[0].text
+    elif isinstance(error, Timeout):
+        assert "timed out after 30s" in snapshot.problems[0].text
+    verified = replace(supplied, merges=(Ok(Merge("topic", "base", "clean", (), (), NOW)),))
+    recovered, actions, _ = tick(verified, state, NOW, lambda context: Ok(DispatchSpec("qa", {})))
+    assert [action.kind for action in actions] == ["assign"]
+    assert recovered.sections == () and recovered.problems == ()
+
+
+def test_ready_candidate_refreshes_even_when_origin_ref_is_cached() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base")
+    state = replace(STATE, last_cycle=NOW, remotes=(RemoteRef("topic", "cached"),))
+    assert due(state, phase(candidate), "atm", "off", NOW).fetch
 
 
 def test_pure_modules_contain_no_source_calls_or_imports() -> None:

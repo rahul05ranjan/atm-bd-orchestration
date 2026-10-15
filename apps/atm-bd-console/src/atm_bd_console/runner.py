@@ -6,10 +6,11 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
+from .dispatch import verification_reason
 from .log import TickLog, create_console_logger
 from .result import Err, Ok
 from .state import StateStore
-from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, Metrics, PrsFile, Snapshot, State
+from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
 
 
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
@@ -178,6 +179,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     remotes = None
     if due and due.fetch and not config.no_fetch:
         fetched = logger.result("git.fetch", git_source.fetch(config.repo_root))
+        remotes = fetched if isinstance(fetched, Err) else None
         if isinstance(fetched, Ok):
             remotes = logger.result("git.remote_refs", git_source.remote_refs(config.repo_root))
             if isinstance(remotes, Ok) and isinstance(phase, Ok):
@@ -192,9 +194,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     merge_results = []
     if due:
         for branch, target in due.merges:
-            checked = logger.result("git.merge", git_source.merge(config.repo_root, branch, target), branch=branch, target=target)
-            merge_results.append(checked)
-            if isinstance(checked, Ok): merges[branch] = checked.value
+            checked = remotes if isinstance(remotes, Err) else logger.result(
+                "git.merge", git_source.merge(config.repo_root, branch, target), branch=branch, target=target,
+            )
+            if not isinstance(remotes, Err):
+                merge_results.append(checked)
+            if isinstance(checked, Ok):
+                merges[branch] = checked.value
+            else:
+                unavailable = Merge(branch, target, "error", (), (verification_reason(checked.error),), now)
+                merges[branch] = unavailable
+                merge_results.append(Ok(unavailable))
     cached_prs = saved_prs.value if config.github != "off" and isinstance(saved_prs, Ok) else None
     gh = cached_prs.gh if cached_prs is not None else _gh(config.github)
     prs = cached_prs.prs if cached_prs is not None else ()

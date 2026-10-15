@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from .dispatch import candidates, dispatch, sprint_of
+from .dispatch import candidates, dispatch, sprint_of, verification_reason
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -45,7 +45,7 @@ def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: dat
     cycle_due = _cycle_due(state, now)
     ready = tuple(step for step in candidates(phase, tasks) if step.ready)
     pushed = {remote.branch for remote in state.remotes}
-    fetch = cycle_due or any(step.branch not in pushed for step in ready)
+    fetch = cycle_due or bool(ready)
     pairs: list[tuple[str, str]] = []
     for step in phase.steps:
         target = _target(step, phase, bead_prefix)
@@ -76,7 +76,21 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     tasks = inputs.tasks.value if isinstance(inputs.tasks, Ok) else ()
     worktrees = inputs.worktrees.value if isinstance(inputs.worktrees, Ok) else ()
     remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
+    if isinstance(inputs.remotes, Err):
+        remotes = ()
     merges = tuple(result.value for result in inputs.merges or () if isinstance(result, Ok))
+    merge_errors = tuple(result.error for result in inputs.merges or () if isinstance(result, Err))
+    if phase is not None and merge_errors:
+        checked_pairs = {(merge.branch, merge.target) for merge in merges}
+        unavailable = {
+            (step.branch, target)
+            for step in candidates(phase, tasks)
+            if step.branch and (target := _target(step, phase, inputs.repo.bead_prefix))
+            and (step.branch, target) not in checked_pairs
+        }
+        merges += tuple(Merge(branch, target, "error", (), tuple(
+            verification_reason(error) for error in merge_errors
+        ), now) for branch, target in sorted(unavailable))
     prs = inputs.prs.value if isinstance(inputs.prs, Ok) else ()
     if phase is not None:
         errors.extend(error for _, error in phase.step_errors)
@@ -98,7 +112,10 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     assigned: tuple[Action, ...] = ()
     if (phase is not None and stopped is None and isinstance(inputs.tasks, Ok)
             and isinstance(inputs.worktrees, Ok)):
-        outcome = dispatch(phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec)
+        outcome = dispatch(
+            phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec,
+            inputs.remotes.error if isinstance(inputs.remotes, Err) else None,
+        )
         held = outcome.held
         assigned = outcome.actions
         errors.extend(outcome.errors)
@@ -357,7 +374,7 @@ def _problems(
             inputs.lead, f"top PR #{top_pr.number} CI failed: {checks}", now,
         ))
     current_keys = {problem.key for problem in problems}
-    refreshed_merges = {merge.branch for merge in merges}
+    refreshed_merges = {merge.branch for merge in merges if merge.state != "error"}
     for previous in state.problems:
         if previous.key in current_keys:
             continue

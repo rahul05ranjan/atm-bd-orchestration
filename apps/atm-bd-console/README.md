@@ -1,5 +1,22 @@
 # Console operational logs
 
+## Dispatch verification
+
+Ready sanity and QA assignments require a successful merge check for their
+branch and target. Missing results, missing targets, timeouts, and unsupported
+git commands hold assignment with an actionable problem until verification
+succeeds. The persisted merge states remain `clean` (verified), `conflict`, and
+`error` (verification unavailable); a failed probe replaces any cached clean
+result. PR and CI status never hold assignment.
+
+Each tick with a ready assignment candidate refreshes origin before pinning a
+commit. A fetch or remote-ref read failure appears in the snapshot and logs,
+holds assignment, and clears eligible cached refs so recovery retries safely.
+`--no-fetch` explicitly skips refresh and permits the saved remote refs, while
+still requiring a successful current merge check.
+
+## Operational events
+
 The console owns one `sc-observability` logger for its repository for the life
 of the process. All ticks reuse it, including stopped and failed ticks. Logs
 live under `.atm-bd/atm-bd-console/logs/`; the console sink is disabled. Each
