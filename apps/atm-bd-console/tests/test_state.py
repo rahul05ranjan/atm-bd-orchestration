@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from dataclasses import replace
@@ -43,6 +44,18 @@ def test_detail_files_are_atomic_round_trips_and_actions_are_lines(tmp_path: Pat
     lines = (tmp_path / ".atm-bd/atm-bd-console/atm-bh/actions.jsonl").read_text().splitlines()
     assert len(lines) == 2 and all(isinstance(from_json(ActionLine, line), Ok) for line in lines)
     assert (tmp_path / ".atm-bd/atm-bd-console/.gitignore").read_text() == "*\n"
+
+
+def test_written_files_store_datetimes_only_in_utc_z_form(tmp_path: Path) -> None:
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        assert store.write_snapshot(fixture("snapshot-running.json", Snapshot)) == Ok(None)
+        assert store.append_action(ActionLine(datetime.now(UTC), "hold", "fenix", "atm-bh", "wait")) == Ok(None)
+    directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
+    text = (directory / "snapshot.json").read_text() + (directory / "actions.jsonl").read_text()
+    stamps = re.findall(r'"(\d{4}-\d{2}-\d{2}T[^"]*)"', text)
+    assert stamps and all(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp) for stamp in stamps)
 
 
 def test_read_only_state_directory_returns_io_failed_naming_the_path(tmp_path: Path) -> None:
