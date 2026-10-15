@@ -6,7 +6,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .result import CommandFailed, Err, Ok, ParseFailed, Result, Timeout, Unreachable
+from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeout, Unreachable
 from .types import DispatchSpec, Member, Task
 
 TIMEOUT_S = 20
@@ -52,10 +52,20 @@ def send(to: str, text: str, as_: str) -> Result[None]:
 
 
 def assign(agent: str, task_id: str, spec: DispatchSpec, as_: str) -> Result[None]:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
-        json.dump(spec.vars, handle); vars_file = Path(handle.name)
+    vars_file: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+            vars_file = Path(handle.name)
+            json.dump(spec.vars, handle)
         result = _run(["atm", "task", "assign", agent, "--as", as_, "--task-id", task_id, "--template", spec.template, "--vars", str(vars_file)])
         return result if isinstance(result, Err) else Ok(None)
+    except (TypeError, ValueError) as error:
+        return Err(ParseFailed("parse_failed", "dispatch vars", str(error), "use JSON-serializable template variables"))
+    except OSError as error:
+        return Err(IoFailed("io_failed", str(vars_file or "<temporary file>"), str(error), "check temporary directory permissions"))
     finally:
-        vars_file.unlink(missing_ok=True)
+        if vars_file is not None:
+            try:
+                vars_file.unlink(missing_ok=True)
+            except OSError:
+                pass

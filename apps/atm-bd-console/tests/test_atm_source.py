@@ -110,3 +110,13 @@ def test_decode_error_is_a_typed_error(monkeypatch) -> None:
     result = atm_source._run(["atm", "members", "--json"])
 
     assert isinstance(result, Err) and isinstance(result.error, Unreachable)
+
+
+def test_assign_with_non_serializable_vars_returns_error_and_removes_tempfile(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(atm_source.tempfile, "tempdir", str(tmp_path))
+
+    result = atm_source.assign("aria", "atm-bh-3.group-dev", DispatchSpec("dev.md.j2", {"bad": object()}), "trinity")
+
+    assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
+    assert result.error.fix == "use JSON-serializable template variables"
+    assert list(tmp_path.iterdir()) == []
