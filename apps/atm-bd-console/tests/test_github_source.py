@@ -71,7 +71,7 @@ def test_graphql_is_one_call_and_maps_rollups(fake_bin, monkeypatch, state, expe
     result, status = github_source.open_prs("graphql")
     assert result.value[0].ci == expected
     assert result.value[0].failed_checks == (() if state is None else ("bad",))
-    assert status.ok is True and [argv[:3] for argv in calls.argv()] == [("gh", "api", "graphql")]
+    assert status.ok is True and calls.argv() == [github_source.GRAPHQL_ARGV]
 
 
 
@@ -104,7 +104,7 @@ def test_rest_truncation_and_off_make_only_the_allowed_calls(fake_bin, monkeypat
     calls = fake_gh(fake_bin, monkeypatch, rows)
     result, status = github_source.open_prs("rest")
     assert len(result.value) == 100 and status.truncated
-    assert calls.argv() == [("gh", "api", "repos/randlee/atm-bd-orchestration/pulls?state=open&per_page=100")]
+    assert calls.argv() == [("gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100")]
     calls.log.unlink()
     off, off_status = github_source.open_prs("off")
     assert off.value == () and off_status.ok is None and calls.argv() == []
@@ -172,3 +172,13 @@ def test_gh_reported_timeout_carries_the_request_timeout(fake_bin, monkeypatch) 
     result, status = github_source.open_prs("graphql")
     assert isinstance(result, Err) and isinstance(result.error, Timeout) and result.error.seconds == 7
     assert (status.ok, status.error) == (False, result.error)
+
+
+def test_no_repository_slug_is_hard_coded(fake_bin, monkeypatch, tmp_path) -> None:
+    source = (Path(github_source.__file__)).read_text()
+    assert "randlee" not in source and "atm-bd-orchestration" not in source
+    assert github_source.GRAPHQL_ARGV[3:7] == ("-F", "owner={owner}", "-F", "name={repo}")
+    assert "repository(owner: $owner, name: $name)" in github_source.GRAPHQL
+    fake_bin.make("gh", 'printf "%s" "$PWD" >&2\nexit 1\n')
+    result, _ = github_source.open_prs("rest", tmp_path)
+    assert isinstance(result, Err) and result.error.stderr == str(tmp_path)

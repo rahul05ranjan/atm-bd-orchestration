@@ -4,12 +4,16 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 from . import command
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
-GRAPHQL = """query { repository(owner: \"randlee\", name: \"atm-bd-orchestration\") { pullRequests(states: OPEN, first: 100) { totalCount nodes { number url headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
+GRAPHQL = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 100) { totalCount nodes { number url headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
+# The repository is the checkout gh runs in: gh fills {owner} and {repo} from it (or from GH_REPO).
+GRAPHQL_ARGV = ("gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={GRAPHQL}")
+REST_ARGV = ("gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100")
 FAILURES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}
 REQUEST_TIMEOUT_S = 20
 
@@ -49,11 +53,12 @@ def _from_graphql(node: dict) -> PullRequest:
     return PullRequest(node["number"], node["url"], node["headRefName"], node["baseRefName"], node["headRefOid"], _ci(rollup.get("state")), failed)
 
 
-def open_prs(mode: str):
+def open_prs(mode: str, repo_root: str | Path | None = None):
+    """Open pull requests of the repository checked out at `repo_root` (default: the current directory)."""
     if mode == "off":
         return Ok(()), _status("off", None)
-    argv = ("gh", "api", "graphql", "-f", f"query={GRAPHQL}") if mode == "graphql" else ("gh", "api", "repos/randlee/atm-bd-orchestration/pulls?state=open&per_page=100")
-    completed = command.run(argv, "check GitHub connectivity and retry", timeout_s=REQUEST_TIMEOUT_S)
+    argv = GRAPHQL_ARGV if mode == "graphql" else REST_ARGV
+    completed = command.run(argv, "check GitHub connectivity and retry", cwd=repo_root, timeout_s=REQUEST_TIMEOUT_S)
     if isinstance(completed, Err):
         failure = completed.error
         if isinstance(failure, CommandFailed):
