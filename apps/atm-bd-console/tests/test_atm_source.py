@@ -42,11 +42,11 @@ def test_tasks_preserve_position_and_use_updated_at_for_state_since(fake_bin, mo
     result = atm_source.tasks("atm-dev")
 
     assert isinstance(result, Ok)
-    assert [(task.id, task.position) for task in result.value] == [
-        ("atm-bh-3.group-dev", 0),
-        ("atm-bh-3.group-qa", 1),
+    assert [(task.id, task.agent, task.position) for task in result.value] == [
+        ("CI-1844-lint", "arch-ctm", 0),
+        ("atm-bh-3.f4-r2-fix", "cipher", 1),
     ]
-    assert result.value[0].state_since == datetime(2026, 10, 15, 9, 11, tzinfo=UTC)
+    assert result.value[0].state_since == datetime(2026, 10, 15, 4, 17, 56, 150697, tzinfo=UTC)
     assert fake_bin.argv() == [("atm", "task", "list", "--all", "--json", "--team", "atm-dev")]
 
 
@@ -66,8 +66,8 @@ def test_tasks_rejects_recorded_closed_state(fake_bin, monkeypatch) -> None:
         ("members", '[{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00"}]', "atm members"),
         ("members", '[{"name": "aria", "state": "active", "state_changed_at": null}]', "atm members"),
         ("members", '{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"}', "atm members"),
-        ("tasks", '[{"id": "t", "agent": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]', "atm task list"),
-        ("tasks", '[{"id": "t", "agent": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": null, "description": ""}]', "atm task list"),
+        ("tasks", '[{"task_id": "t", "assignee": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]', "atm task list"),
+        ("tasks", '[{"task_id": "t", "assignee": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": null, "description": ""}]', "atm task list"),
     ],
 )
 def test_naive_null_and_non_list_timestamps_are_rejected_not_read_as_local(fake_bin, monkeypatch, command, body, source) -> None:

@@ -14,7 +14,7 @@ from .types import DispatchSpec, Member, Task
 # shell's ATM_TEAM when `--team` is absent (docs/requirements.md §4.1). `task assign`
 # also takes no team; §4.1 has no row for it, so that resolution is unconfirmed.
 TIMEOUT_S = 20
-TASK_KEYS = frozenset({"id", "agent", "state", "assigned_at", "updated_at", "description"})
+TASK_KEYS = frozenset({"task_id", "assignee", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
 MEMBER_STATES = frozenset({"active", "idle", "offline", "blocked"})
 
@@ -50,7 +50,7 @@ def _member(item: dict, time: datetime) -> Member:
 
 
 def _task(index: int, item: dict, assigned: datetime, updated: datetime) -> Task:
-    return Task(item["id"], item["agent"], item["state"], index, assigned, updated, item["description"])
+    return Task(item["task_id"], item["assignee"], item["state"], index, assigned, updated, item["description"])
 
 
 def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, ...]]:
