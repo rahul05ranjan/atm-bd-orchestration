@@ -44,7 +44,7 @@ def step(config: Config, state: State, force_github: bool):
     if root_bead is not None and root_bead.status == "closed":
         phase = atm_bd.phase(file.value, root_bead, (), (), ())
         empty = Ok(())
-        snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
+        snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
         return snapshot, next_state
     opened, ready = beads_source.open_beads(file.value.label), beads_source.ready(file.value.label)
     known = opened.value if isinstance(opened, Ok) else ()
