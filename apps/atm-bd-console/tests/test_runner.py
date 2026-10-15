@@ -43,10 +43,23 @@ class Store:
 
 @pytest.fixture(autouse=True)
 def isolate_console_logger(monkeypatch: pytest.MonkeyPatch):
+    calls: list[tuple[object, ...]] = []
+
     class Logger:
         def event(self, _action, **_fields): return Ok(None)
 
-    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
+    def fake_factory(*args):
+        calls.append(args)
+        return Ok(Logger())
+
+    monkeypatch.setattr(runner, "create_console_logger", fake_factory)
+    yield calls
+
+
+def test_isolated_runner_uses_fake_logger_factory(isolate_console_logger):
+    runner.step(CONFIG, STATE, False, Store())
+
+    assert isolate_console_logger == [(CONFIG.repo_root,)]
 
 
 @pytest.fixture
