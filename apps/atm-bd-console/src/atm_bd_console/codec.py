@@ -8,28 +8,19 @@ from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from .result import (
-    CommandFailed,
-    ConfigInvalid,
     Err,
     Error,
-    IoFailed,
-    LockHeld,
-    NotFound,
     Ok,
     ParseFailed,
-    Rejected,
     Result,
-    Timeout,
-    Unreachable,
 )
 from .types import Snapshot
 
+_ERROR_TYPES = get_args(Error)
 _ERRORS: dict[str, type[Any]] = {
-    "command_failed": CommandFailed, "timeout": Timeout, "rejected": Rejected, "unreachable": Unreachable,
-    "parse_failed": ParseFailed, "not_found": NotFound, "config_invalid": ConfigInvalid,
-    "lock_held": LockHeld, "io_failed": IoFailed,
+    get_args(get_type_hints(error_type)["kind"])[0]: error_type
+    for error_type in _ERROR_TYPES
 }
-_ERROR_TYPES = frozenset(_ERRORS.values())
 
 
 def to_json(obj: Any) -> str:

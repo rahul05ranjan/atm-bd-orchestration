@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
-from typing import get_type_hints
+from typing import get_args, get_type_hints
 
 import pytest
 from contract_samples import ERRORS, NOT_FOUND, PLUS_TWO, SAMPLES, SNAPSHOT, TASK
 
 from atm_bd_console import result, types
-from atm_bd_console.codec import from_json, snapshot_stale, to_json
+from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
@@ -139,3 +139,11 @@ def test_each_error_kind_round_trips_inside_result() -> None:
     )
     for error in errors:
         assert from_json(Err, to_json(Err(error))) == Ok(Err(error))
+
+
+def test_error_kind_decoder_map_matches_error_union() -> None:
+    expected = {
+        get_args(get_type_hints(error_type)["kind"])[0]: error_type
+        for error_type in get_args(result.Error)
+    }
+    assert _ERRORS == expected
