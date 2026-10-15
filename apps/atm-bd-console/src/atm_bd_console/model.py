@@ -311,6 +311,8 @@ def _problems(
     by_id = {step.bead_id: step for step in phase.steps}
     problems: list[Problem] = []
     for row in held:
+        if row.reason == "not ready":
+            continue
         step = by_id[row.bead_id]
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
     for merge in merges:

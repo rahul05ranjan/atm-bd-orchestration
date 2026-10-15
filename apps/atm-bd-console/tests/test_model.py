@@ -348,6 +348,20 @@ def test_hold_is_shown_and_sent_once_then_batched() -> None:
     assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
 
 
+def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=False, assignee=None, branch="missing")
+    supplied = inputs(phase(candidate))
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+    assert len(snapshot.sections) == 1
+    assert snapshot.sections[0].label == "Held"
+    assert snapshot.sections[0].rows[0].reason == "not ready"
+    assert snapshot.problems == () and actions == () and state.batch_due == {}
+
+    snapshot, actions, state = tick(supplied, state, NOW + timedelta(minutes=10), render)
+    assert snapshot.sections[0].rows[0].reason == "not ready"
+    assert snapshot.problems == () and actions == () and state.batch_due == {}
+
+
 def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="sprint/bh-1",
                      worktree="/worktrees/atm-bh-1")
