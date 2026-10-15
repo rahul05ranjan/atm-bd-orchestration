@@ -272,6 +272,7 @@ class Action:
     bead_ids: tuple[str, ...]
     text: str
     spec: DispatchSpec | None
+    outcome: str | None = None
 
 
 @dataclass(frozen=True)

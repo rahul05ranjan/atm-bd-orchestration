@@ -16,14 +16,16 @@ def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
     return GhStatus(mode, None, None, None, False)
 
 
-def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore, now: datetime):
-    """Return boundary errors so they are visible in the persisted snapshot."""
+def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore, now: datetime) -> tuple[tuple[Action, ...], tuple]:
+    """Run actions and retain their actual delivery outcome for reporting."""
     errors = []
+    reported = []
     for action in actions:
         bead = action.bead_ids[0] if action.bead_ids else None
         if config.dry_run:
             logged = store.append_action(ActionLine(now, "dry_run", action.to, bead, action.text))
             if isinstance(logged, Err): errors.append(logged.error)
+            reported.append(replace(action, outcome="dry_run"))
             continue
         if action.kind == "assign" and action.spec is not None and bead:
             result = atm_source.assign(action.to, bead, action.spec, config.lead, config.team)
@@ -35,7 +37,51 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore,
             errors.append(result.error)
             held = store.append_action(ActionLine(now, "hold", action.to, bead, result.error.fix))
             if isinstance(held, Err): errors.append(held.error)
-    return tuple(errors)
+            reported.append(replace(action, outcome=f"failed {result.error.kind}"))
+        else:
+            reported.append(replace(action, outcome="sent"))
+    return tuple(reported), tuple(errors)
+
+
+def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], reported: tuple[Action, ...]) -> State:
+    """Commit only effects whose boundary call actually succeeded.
+
+    A new problem is a delivery obligation, not merely an observation.  A
+    failed first send must therefore be absent from durable state so the next
+    tick proposes it again; a failed batch keeps its previous due time.
+    """
+    successful = tuple(action for action in reported if action.outcome == "sent")
+    failed = tuple(action for action in reported if action.outcome and action.outcome.startswith("failed "))
+    previous = {problem.key: problem for problem in state.problems}
+    failed_new = {
+        action.bead_ids[0]
+        for action in failed
+        if action.kind == "send" and action.bead_ids
+    }
+    problems = tuple(
+        problem
+        for problem in proposed.problems
+        if problem.key in previous or problem.bead_id not in failed_new
+    )
+    failed_batches = {action.to for action in failed if action.kind == "batch"}
+    batch_due = dict(proposed.batch_due)
+    for recipient in failed_batches:
+        if recipient in state.batch_due:
+            batch_due[recipient] = state.batch_due[recipient]
+        else:
+            batch_due.pop(recipient, None)
+    for recipient in tuple(batch_due):
+        if not any(problem.to == recipient for problem in problems):
+            batch_due.pop(recipient)
+    notices_succeeded = any(action.kind in ("send", "batch") for action in successful)
+    return replace(
+        proposed,
+        problems=problems,
+        cycle_first_send=proposed.cycle_first_send if notices_succeeded else state.cycle_first_send,
+        last_batch=proposed.last_batch if any(action.kind == "batch" for action in successful) else state.last_batch,
+        sent=(*state.sent, *successful)[-5:],
+        batch_due=batch_due,
+    )
 
 
 def step(config: Config, state: State, force_github: bool, store: StateStore):
@@ -100,14 +146,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
     snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
     def persist(store: StateStore):
-            errors = list(_run_actions(config, actions, store, now))
-            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
+            reported, action_errors = _run_actions(config, actions, store, now)
+            errors = list(action_errors)
+            durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
+            reported_sent = (*state.sent, *reported)[-5:]
+            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(durable)):
                 if isinstance(written, Err): errors.append(written.error)
-            persisted = replace(snapshot, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+            persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             snapshot_written = store.write_snapshot(persisted)
             if isinstance(snapshot_written, Err):
                 persisted = replace(persisted, errors=(*persisted.errors, snapshot_written.error))
-            return persisted
-    snapshot = persist(store)
+            return persisted, durable
+    snapshot, next_state = persist(store)
     if isinstance(logger, Ok): logger.value.event("tick_end", actions=len(actions))
     return snapshot, next_state

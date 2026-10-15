@@ -21,7 +21,7 @@ from contract_samples import (
 from atm_bd_console import runner
 from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock
-from atm_bd_console.types import Due, GhStatus
+from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem
 
 
 class Store:
@@ -175,8 +175,57 @@ def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
             return Ok(None)
 
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: Err(COMMAND_FAILED))
-    errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at)
+    reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at)
     assert errors == (COMMAND_FAILED,)
+    assert reported == (replace(ACTION, outcome="failed command_failed"),)
+
+
+def test_failed_notice_is_not_committed_and_remains_pending() -> None:
+    action = replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
+    problem = Problem("missing_pr:branch", "atm-bh-6.fix", "fenix", "missing PR", ACTION.at)
+    proposed = replace(STATE, problems=(problem,), cycle_first_send=ACTION.at, sent=(action,), batch_due={"fenix": ACTION.at})
+
+    durable = runner._durable_state(STATE, proposed, (action,), (replace(action, outcome="failed command_failed"),))
+
+    assert durable.problems == () and durable.sent == STATE.sent and durable.batch_due == {}
+    assert durable.cycle_first_send == STATE.cycle_first_send
+
+
+def test_dry_run_reports_actions_without_advancing_durable_state(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    writes = []
+    store.write_state = lambda value: writes.append(value) or Ok(None)
+    candidate = replace(STATE, last_cycle=ACTION.at, sent=(ACTION,))
+    monkeypatch.setattr(runner.model, "tick", lambda _inputs, _state, _now, _spec: (SNAPSHOT, (ACTION,), candidate))
+
+    snapshot, next_state = runner.step(CONFIG, STATE, False, store)
+
+    assert next_state == STATE and writes == [STATE]
+    assert snapshot.sent == (*STATE.sent, replace(ACTION, outcome="dry_run"))
+    sent = []
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: sent.append(ACTION) or Ok(None))
+    _, live_state = runner.step(replace(CONFIG, dry_run=False), next_state, False, store)
+    assert sent == [ACTION] and live_state.sent[-1].outcome == "sent"
+
+
+def test_failed_delivery_is_retried_on_the_next_tick(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    attempts = []
+    action = replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
+    problem = Problem("missing_pr:branch", "atm-bh-6.fix", "fenix", "missing PR", ACTION.at)
+
+    def tick(_inputs, state, now, _spec):
+        candidate = replace(state, problems=(problem,), cycle_first_send=now, sent=(*state.sent, action)[-5:], batch_due={"fenix": now})
+        return SNAPSHOT, (action,), candidate
+
+    monkeypatch.setattr(runner.model, "tick", tick)
+    monkeypatch.setattr(runner.atm_source, "send", lambda *_: attempts.append(1) or Err(COMMAND_FAILED))
+
+    _, after_first = runner.step(replace(CONFIG, dry_run=False), INITIAL_STATE, False, store)
+    _, after_second = runner.step(replace(CONFIG, dry_run=False), after_first, False, store)
+
+    assert attempts == [1, 1]
+    assert after_first.problems == after_second.problems == ()
 
 
 def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> None:
