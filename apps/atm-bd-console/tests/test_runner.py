@@ -9,6 +9,7 @@ from contract_samples import (
     BEAD,
     COMMAND_FAILED,
     CONFIG,
+    IO_FAILED,
     PHASE,
     PHASE_FILE,
     REPO_CONFIG,
@@ -106,6 +107,20 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
     assert [name for name, _ in writes] == ["state", "snapshot"]
     assert writes[0][1] == next_state and writes[1][1] == snapshot
     assert ("tick_end", {"actions": 0}) in events
+
+
+def test_closed_root_write_failure_is_returned_in_snapshot(monkeypatch, tmp_path) -> None:
+    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
+    class Store:
+        directory = tmp_path
+        def write_state(self, _value): return Err(IO_FAILED)
+        def write_snapshot(self, _value): return Err(IO_FAILED)
+
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    snapshot, _ = runner.step(CONFIG, STATE, False, Store())
+    assert snapshot.errors.count(IO_FAILED) == 2
 
 
 def test_github_off_never_calls_github(monkeypatch) -> None:
