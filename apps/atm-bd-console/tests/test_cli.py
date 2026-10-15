@@ -21,10 +21,19 @@ def test_missing_phase_is_a_launch_check(capsys) -> None:
     assert "--phase <phase> is required" in capsys.readouterr().out
 
 
-def test_cli_import_does_not_load_textual() -> None:
+def test_headless_and_show_do_not_load_textual(tmp_path) -> None:
     check = subprocess.run(
-        [sys.executable, "-c", "import sys; import atm_bd_console.cli; assert 'textual' not in sys.modules"],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from atm_bd_console.cli import main; "
+                "main(['--phase', 'x', '--as', 'y', '--headless']); "
+                "main(['show', '--phase', 'x']); "
+                "assert 'textual' not in sys.modules"
+            ),
+        ],
+        capture_output=True, text=True, check=False, cwd=tmp_path,
     )
     assert check.returncode == 0, check.stderr
 
