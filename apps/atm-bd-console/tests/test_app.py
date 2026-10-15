@@ -88,6 +88,21 @@ def test_stopped_snapshot_stops_step_calls_until_r() -> None:
     asyncio.run(scenario())
 
 
+def test_tick_that_lands_after_quit_is_ignored() -> None:
+    # A tick in flight when q tears the screen down must not query the unmounted widgets.
+    async def scenario() -> ConsoleApp:
+        app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await pilot.press("q")
+            await pilot.pause()
+        return app
+
+    app = asyncio.run(scenario())
+    assert not app.is_running
+    app._show(RUNNING, "", None)
+
+
 def test_held_lock_exits_1_with_its_message_before_drawing(tmp_path, monkeypatch, capsys) -> None:
     config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console/bh"))
     holder = acquire_lock(config.repo_root, "bh")

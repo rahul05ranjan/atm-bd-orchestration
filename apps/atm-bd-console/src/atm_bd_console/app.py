@@ -117,6 +117,9 @@ class ConsoleApp(App[int]):
         self.call_from_thread(self._show, snapshot, text, error)
 
     def _show(self, snapshot: Snapshot, text: str, error: Error | None) -> None:
+        # A tick can finish after q has begun shutdown; its screen is gone, so there is nothing to draw.
+        if not self.is_running:
+            return
         if self.startup_error is not None:
             snapshot = replace(snapshot, errors=(self.startup_error, *snapshot.errors))
         self.snapshot, self.status_text, self.status_error = snapshot, text, error
