@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, REPO_CONFIG, SAMPLES, SNAPSHOT, TASK
+from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, SAMPLES, SNAPSHOT, TASK
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
@@ -24,11 +24,16 @@ from atm_bd_console.result import (
     Timeout,
     Unreachable,
 )
-from atm_bd_console.types import Config, Inputs, Snapshot, Sprint
+from atm_bd_console.types import Config, Inputs, RepoConfig, Snapshot, Sprint
+
+TEST_LEAD = "test-lead"
+TEST_SANITY_MEMBER = "test-sanity"
+TEST_QA_MEMBER = "test-qa"
+TEST_REVIEWER = "test-reviewer"
 
 
 def test_config_round_trip_and_literal_rejection() -> None:
-    value = Config("bh", "fenix", "rest", 60, False, False, "/repo", "/state")
+    value = Config("bh", TEST_LEAD, "rest", 60, False, False, "/repo", "/state")
     decoded = from_json(Config, to_json(value))
     assert decoded == Ok(value)
     invalid = from_json(Config, to_json(value).replace('"rest"', '"wrong"'))
@@ -94,9 +99,13 @@ def test_non_utc_aware_datetime_is_written_as_utc_z() -> None:
 
 def test_tick_context_round_trip() -> None:
     sprint = PHASE.sprints[0]
-    inputs = replace(INPUTS, repo=REPO_CONFIG, phase=Ok(PHASE))
+    repo = RepoConfig(
+        "atm", TEST_SANITY_MEMBER, TEST_QA_MEMBER, "/repo", "/worktrees", "just lint", "/policy",
+        (TEST_REVIEWER,), "/plans",
+    )
+    inputs = replace(INPUTS, lead=TEST_LEAD, repo=repo, phase=Ok(PHASE))
     assert sprint.stack == "phase-bh"
-    assert REPO_CONFIG.reviewers_round1
+    assert repo.reviewers_round1 == (TEST_REVIEWER,)
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     assert from_json(Inputs, to_json(inputs)) == Ok(inputs)
 
