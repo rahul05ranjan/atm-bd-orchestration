@@ -85,22 +85,21 @@ def test_q_quits_and_restores_the_terminal() -> None:
 
 def test_stopped_snapshot_stops_step_calls_until_r() -> None:
     step = FakeStep(replace(RUNNING, stopped="idle"))
-    fast = replace(CONFIG, interval_s=0.05)
+    slow = replace(CONFIG, interval_s=3600)
 
     async def scenario() -> None:
-        app = ConsoleApp(fast, step, STATE)
+        app = ConsoleApp(slow, step, STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
-            await pilot.pause(0.3)
+            app._on_interval()
             await settle(pilot)
             assert step.calls == [False]
             step.snapshot = RUNNING
             await pilot.press("r")
             await settle(pilot)
-            await pilot.pause(0.3)
+            app._on_interval()
             await settle(pilot)
-            assert step.calls[:2] == [False, True]
-            assert len(step.calls) > 2 and set(step.calls[2:]) == {False}
+            assert step.calls == [False, True, False]
 
     asyncio.run(scenario())
 
