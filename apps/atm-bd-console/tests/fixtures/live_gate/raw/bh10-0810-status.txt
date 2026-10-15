@@ -1,0 +1,19 @@
+ Dispatch  Status  PRs
+━━━━━━━━━━╸━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+sprints 9/10 · ✅ 9 · 🌀 1 · ⏳ 0
+▊ atm-bh-1  bh-1: contract: Result, source and tick types, JSON codec
+▊ atm-bh-2  bh-2: bead-queues as a snapshot viewer, install check
+▊ atm-bh-3  bh-3: ATM source: members, tasks, presence, send, assign
+▊ atm-bh-4  bh-4: beads source and the atm-bd phase and formula mapping
+▊ atm-bh-5  bh-5: git and GitHub sources: refs, merge check, worktrees, open PRs
+▊ atm-bh-6  bh-6: tick rules: snapshot, holds, problems, agent status, metrics, stops
+▊ atm-bh-7  bh-7: runtime files: JSON state, lock, config, logging
+▊ atm-bh-8  bh-8: renderers: dashboard, status bar, Status DAG, PRs
+▊ atm-bh-9  bh-9: runner.py, cli.py (headless, show), MVP gates
+▊ atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
+atm-bh-10  bh-10: Textual app: Dispatch, Status DAG, PRs tabs
+  dev    atm-bh-10.group-dev  closed  arch-ctm
+  qa     atm-bh-10.group-qa  closed  quality-mgr
+  fix    atm-bh-10.qa1-f1-r3-fix  open  arch-ctm
+  qa     atm-bh-10.qa1-f1-r3-qa  open  unassigned
+gh: graphql ✅ 08:09 | 10/11 [████████░] 91% | active 0h00m | tick 08:09:36

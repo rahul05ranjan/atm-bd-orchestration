@@ -1,0 +1,79 @@
+"""Load the console's small, explicit runtime configuration."""
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+from .paths import console_config_path, state_directory
+from .result import ConfigInvalid, Err, IoFailed, Ok, Result
+from .types import Config
+
+_GITHUB = frozenset(("graphql", "rest", "off"))
+
+
+def repo_root() -> Path:
+    """Resolve the repository root used by every command-line mode."""
+    return Path.cwd().resolve()
+
+
+def _team(root: Path) -> Result[str]:
+    path = root / ".atm.toml"
+    try:
+        values = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as error:
+        return Err(IoFailed("io_failed", str(path), str(error), "restore the repository .atm.toml"))
+    except tomllib.TOMLDecodeError as error:
+        return Err(ConfigInvalid("config_invalid", str(path), str(error), "correct the repository .atm.toml syntax"))
+    atm = values.get("atm") if isinstance(values, dict) else None
+    team = atm.get("default_team") if isinstance(atm, dict) else None
+    if not isinstance(team, str) or not team:
+        return Err(ConfigInvalid("config_invalid", "atm.default_team", repr(team), "set atm.default_team in .atm.toml to a nonempty team name"))
+    return Ok(team)
+
+
+def load_config(
+    repo_root: str | Path,
+    phase: str,
+    lead: str,
+    *,
+    github: str | None = None,
+    interval_s: int | None = None,
+    dry_run: bool = False,
+    no_fetch: bool = False,
+) -> Result[Config]:
+    """Return TOML settings with explicit command-line overrides.
+
+    A missing configuration file is deliberately unremarkable: the console is
+    usable with its documented graphql/60 defaults.
+    """
+    root = Path(repo_root)
+    team = _team(root)
+    if isinstance(team, Err):
+        return team
+    config_path = console_config_path(root)
+    values: object = {}
+    if config_path.exists():
+        try:
+            values = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as error:
+            return Err(IoFailed("io_failed", str(config_path), str(error), "correct or restore console.toml"))
+        except tomllib.TOMLDecodeError as error:
+            return Err(ConfigInvalid("config_invalid", str(config_path), str(error),
+                                     "correct the TOML syntax; console.github is graphql, rest, or off and console.interval is an integer of at least 10 seconds"))
+    if not isinstance(values, dict):
+        return Err(ConfigInvalid("config_invalid", "console", repr(values), "use a [console] table"))
+    console = values.get("console", {})
+    if not isinstance(console, dict):
+        return Err(ConfigInvalid("config_invalid", "console", repr(console), "use a [console] table"))
+
+    configured_github = console.get("github", "graphql")
+    configured_interval = console.get("interval", 60)
+    chosen_github = github if github is not None else configured_github
+    chosen_interval = interval_s if interval_s is not None else configured_interval
+    if not isinstance(chosen_github, str) or chosen_github not in _GITHUB:
+        return Err(ConfigInvalid("config_invalid", "github", repr(chosen_github), "use graphql, rest, or off"))
+    if not isinstance(chosen_interval, int) or isinstance(chosen_interval, bool) or chosen_interval < 10:
+        return Err(ConfigInvalid("config_invalid", "interval", repr(chosen_interval), "use an integer of at least 10 seconds"))
+
+    state_dir = state_directory(root, f"atm-phase-{phase}")
+    return Ok(Config(phase, lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))

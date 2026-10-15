@@ -1,0 +1,113 @@
+"""Impure tick boundary; scheduling and decisions remain in :mod:`model`."""
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime
+from typing import Literal
+
+from . import atm_bd, atm_source, beads_source, git_source, github_source, model
+from .log import create_console_logger
+from .result import Err, Ok
+from .state import StateStore, load_merges, load_prs
+from .types import Action, ActionLine, Config, GhStatus, Inputs, MergeFile, Metrics, PrsFile, Snapshot, State
+
+
+def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
+    return GhStatus(mode, None, None, None, False)
+
+
+def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore, now: datetime):
+    """Return boundary errors so they are visible in the persisted snapshot."""
+    errors = []
+    for action in actions:
+        bead = action.bead_ids[0] if action.bead_ids else None
+        if config.dry_run:
+            logged = store.append_action(ActionLine(now, "dry_run", action.to, bead, action.text))
+            if isinstance(logged, Err): errors.append(logged.error)
+            continue
+        if action.kind == "assign" and action.spec is not None and bead:
+            result = atm_source.assign(action.to, bead, action.spec, config.lead, config.team)
+        else:
+            result = atm_source.send(action.to, action.text, config.lead, config.team)
+        logged = store.append_action(ActionLine(now, action.kind, action.to, bead, action.text))
+        if isinstance(logged, Err): errors.append(logged.error)
+        if isinstance(result, Err):
+            errors.append(result.error)
+            held = store.append_action(ActionLine(now, "hold", action.to, bead, result.error.fix))
+            if isinstance(held, Err): errors.append(held.error)
+    return tuple(errors)
+
+
+def step(config: Config, state: State, force_github: bool, store: StateStore):
+    """Run one best-effort tick using the caller-owned lock-backed store."""
+    now = datetime.now(UTC)
+    file, repo = atm_bd.phase_file(config.repo_root, config.phase), atm_bd.repo_config(config.repo_root)
+    if isinstance(file, Err) or isinstance(repo, Err):
+        errors = tuple(item.error for item in (file, repo) if isinstance(item, Err))
+        snapshot = Snapshot(1, now, config.phase, False, None, (), (), (), errors, Metrics(0, 0, 0, 0),
+                            _gh(config.github), None, None, "graph TD", (), config.interval_s, config.lead,
+                            "", (), (), {})
+        logger = create_console_logger(config.repo_root)
+        if isinstance(logger, Ok):
+            logger.value.event("tick_start", phase=config.phase)
+            logger.value.event("tick_end", actions=0)
+        return snapshot, state
+    logger = create_console_logger(config.repo_root)
+    if isinstance(logger, Ok): logger.value.event("tick_start", phase=config.phase)
+    root = beads_source.show((file.value.root_id,))
+    root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
+    # This is deliberately the sole read on a closed phase.
+    if root_bead is not None and root_bead.status == "closed":
+        phase = atm_bd.phase(file.value, root_bead, (), (), ())
+        empty = Ok(())
+        snapshot, _, next_state = model.tick(Inputs(now, config.lead, repo.value, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty), state, now, atm_bd.dispatch_spec)
+        persisted = replace(snapshot, files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+        writes = (store.write_state(next_state), store.write_snapshot(persisted))
+        snapshot = replace(persisted, errors=(*persisted.errors, *(item.error for item in writes if isinstance(item, Err))))
+        if isinstance(logger, Ok): logger.value.event("tick_end", actions=0)
+        return snapshot, next_state
+    opened, ready = beads_source.open_beads(file.value.label), beads_source.ready(file.value.label)
+    known = opened.value if isinstance(opened, Ok) else ()
+    shown = beads_source.show(atm_bd.closed_show_ids(file.value, known))
+    if isinstance(opened, Err):
+        phase = opened
+    elif isinstance(ready, Err):
+        phase = ready
+    elif isinstance(shown, Err):
+        phase = shown
+    else:
+        phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
+    members, tasks, worktrees = atm_source.members(config.team), atm_source.tasks(config.team), git_source.worktrees(config.repo_root)
+    task_beads = beads_source.show(tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ())
+    due = model.due(state, phase.value, repo.value.bead_prefix, config.github, now) if isinstance(phase, Ok) else None
+    if due and due.fetch and not config.no_fetch: git_source.fetch(config.repo_root)
+    remotes = git_source.remote_refs(config.repo_root) if due and due.fetch else None
+    saved_merges, saved_prs = load_merges(config.repo_root, file.value.root_id), load_prs(config.repo_root, file.value.root_id)
+    merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
+    merge_results = []
+    if due:
+        for branch, target in due.merges:
+            checked = git_source.merge(config.repo_root, branch, target)
+            merge_results.append(checked)
+            if isinstance(checked, Ok): merges[branch] = checked.value
+    gh = saved_prs.value.gh if isinstance(saved_prs, Ok) else _gh(config.github)
+    prs = saved_prs.value.prs if isinstance(saved_prs, Ok) else ()
+    prs_input = Ok(prs) if isinstance(saved_prs, Ok) else None
+    if config.github != "off" and (force_github or (due and due.github)):
+        prs_input, gh = github_source.open_prs(config.github)
+        prs = prs_input.value if isinstance(prs_input, Ok) else ()
+        if isinstance(logger, Ok): logger.value.event("github_read", forced=force_github)
+    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
+    snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
+    def persist(store: StateStore):
+            errors = list(_run_actions(config, actions, store, now))
+            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(now, gh, tuple(prs)),), store.write_state(next_state)):
+                if isinstance(written, Err): errors.append(written.error)
+            persisted = replace(snapshot, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+            snapshot_written = store.write_snapshot(persisted)
+            if isinstance(snapshot_written, Err):
+                persisted = replace(persisted, errors=(*persisted.errors, snapshot_written.error))
+            return persisted
+    snapshot = persist(store)
+    if isinstance(logger, Ok): logger.value.event("tick_end", actions=len(actions))
+    return snapshot, next_state

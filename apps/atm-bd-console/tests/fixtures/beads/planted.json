@@ -1,0 +1,126 @@
+[
+  {
+    "id": "zz-phase-other",
+    "title": "Foreign epic outside phase-bh",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "scope:epic"
+    ],
+    "metadata": {},
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z"
+  },
+  {
+    "id": "zz-other-1",
+    "title": "Foreign sprint container",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "stage:sprint"
+    ],
+    "metadata": {
+      "layer": 1,
+      "branch": "sprint/other-1",
+      "pr_target": "develop",
+      "stack": "phase-other"
+    },
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z",
+    "parent": "zz-phase-other"
+  },
+  {
+    "id": "zz-other-1.group-dev",
+    "title": "Foreign quick-fix anchor dev step",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "stage:dev",
+      "anchor"
+    ],
+    "metadata": {
+      "quick_fix": true,
+      "sprint": "other-1",
+      "branch": "fix/other-1",
+      "pr_target": "develop",
+      "layer": 1,
+      "difficulty": "fast"
+    },
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z",
+    "parent": "zz-other-1"
+  },
+  {
+    "id": "atm-bh-7.plan-review",
+    "title": "Planted plan review",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "phase-bh",
+      "stage:plan-review"
+    ],
+    "metadata": {},
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z",
+    "parent": "atm-phase-bh"
+  },
+  {
+    "id": "atm-bh-7.orphan-dev",
+    "title": "Planted dev whose parent is not shown",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "phase-bh",
+      "stage:dev"
+    ],
+    "metadata": {
+      "sprint": "bh-7"
+    },
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z",
+    "parent": "atm-bh-gone"
+  },
+  {
+    "id": "atm-bh-7.qa-no-round",
+    "title": "Planted QA without round",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "phase-bh",
+      "stage:qa"
+    ],
+    "metadata": {
+      "checked_bead": "atm-bh-7.group-dev",
+      "sprint_bead": "atm-bh-7",
+      "sprint": "bh-7"
+    },
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z",
+    "parent": "atm-bh-7"
+  },
+  {
+    "id": "atm-bh-7.qa-no-checked",
+    "title": "Planted QA without checked_bead",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "labels": [
+      "phase-bh",
+      "stage:qa"
+    ],
+    "metadata": {
+      "round": 1,
+      "sprint_bead": "atm-bh-7",
+      "sprint": "bh-7"
+    },
+    "created_at": "2026-10-15T04:00:00Z",
+    "updated_at": "2026-10-15T04:00:00Z",
+    "parent": "atm-bh-7"
+  }
+]

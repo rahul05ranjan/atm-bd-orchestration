@@ -1,0 +1,9 @@
+{
+  "members": [
+  {"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"},
+  {"name": "boris", "state": "idle", "state_changed_at": "2026-10-15T09:01:00Z"},
+  {"name": "cy", "state": "offline", "state_changed_at": "2026-10-15T09:02:00Z"},
+  {"name": "dara", "state": "blocked", "state_changed_at": "2026-10-15T09:03:00Z"},
+  {"name": "eli", "state": "unexpected", "state_changed_at": "2026-10-15T09:04:00Z"}
+  ]
+}
