@@ -26,11 +26,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("command", choices=("show", "snapshot"), nargs="?")
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--phase", required=True); parser.add_argument("--as", dest="lead")
+    parser.add_argument("--phase"); parser.add_argument("--as", dest="lead")
     parser.add_argument("--github", choices=("graphql", "rest", "off")); parser.add_argument("--interval", type=int)
     parser.add_argument("--dry-run", action="store_true"); parser.add_argument("--no-fetch", action="store_true")
     parser.add_argument("--once", action="store_true"); parser.add_argument("--headless", action="store_true")
     args = parser.parse_args(argv)
+    if not args.phase:
+        print(f"{CONSOLE_NAME}: --phase <phase> is required; name the phase to run")
+        return 3
     root_id = f"atm-phase-{args.phase}"
     if args.command == "show":
         snapshot = load_snapshot(Path.cwd(), root_id)
