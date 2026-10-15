@@ -1,9 +1,27 @@
-"""D5: dispatch_spec fills the production templates exactly; each spec renders with sc-compose --strict."""
+"""atm_bd tests (bh-4 owned path).
+
+D2: phase_file and repo_config on copies of atm-core's real phase-bh files.
+
+tests/fixtures/beads/repo/ holds verbatim copies of atm-core's `.atm-bd/phase-bh.toml`,
+`docs/plans/phase-bh.jsonl` and `.claude/project/atm-bd-orchestration.yaml` (2026-10-14).
+
+D3: phase() over recorded `bd --json` output of real phase-bh beads (atm-core, 2026-10-14).
+
+Fixtures in tests/fixtures/beads/, captured read-only from atm-core:
+- list-open.json: `bd list -l phase-bh --json`, kept to the root, the plan's open sprint containers and
+  group beads, the findings atm-bh-4.group-dev.3/.4 and atm-bh-6.group-qa-f1, and the QA bead atm-bh-6.group-qa-f1-qa.
+- ready.json: `bd ready -l phase-bh --json`, kept to the same ids.
+- show-closed.json: `bd show <the 12 plan-derived ids absent from the open list> --json`, verbatim.
+The fake `bd` below only replays those files; beads_source and atm_bd run unchanged.
+
+D5: dispatch_spec fills the production templates exactly; each spec renders with sc-compose --strict.
+"""
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
@@ -11,8 +29,17 @@ from typing import get_args
 import pytest
 
 from atm_bd_console import beads_source
-from atm_bd_console.atm_bd import dispatch_spec, group_suffix, phase, phase_file, step
-from atm_bd_console.result import ConfigInvalid, Err, NotFound, Ok
+from atm_bd_console.atm_bd import (
+    closed_show_ids,
+    dispatch_spec,
+    group_ids,
+    group_suffix,
+    phase,
+    phase_file,
+    repo_config,
+    step,
+)
+from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.types import (
     Bead,
     DispatchContext,
@@ -25,9 +52,423 @@ from atm_bd_console.types import (
     StepKind,
 )
 
+# D2: phase_file and repo_config.
+REPO = Path(__file__).parent / "fixtures" / "beads" / "repo"
+TOML = ".atm-bd/phase-bh.toml"
+PLAN = "docs/plans/phase-bh.jsonl"
+CONFIG = ".claude/project/atm-bd-orchestration.yaml"
+
+# Hand-mapped from docs/plans/phase-bh.jsonl: sprint <name> -> container atm-<name> (prefix of root atm-phase-bh).
+EXPECTED_PHASE_FILE = PhaseFile(
+    "bh", "atm-phase-bh", "phase-bh",
+    tuple(f"atm-bh-{n}" for n in range(1, 11)),
+    {
+        "atm-bh-1": (), "atm-bh-2": (),
+        **{f"atm-bh-{n}": ("atm-bh-1",) for n in range(3, 9)},
+        "atm-bh-9": ("atm-bh-3", "atm-bh-4", "atm-bh-5", "atm-bh-6", "atm-bh-7", "atm-bh-8"),
+        "atm-bh-10": ("atm-bh-9",),
+    },
+)
+REVIEWERS = (
+    "req-qa", "arch-qa", "ruthless-boundary-qa", "rust-qa-agent", "rust-best-practices-agent",
+    "rust-service-hardening-agent",
+)
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    shutil.copytree(REPO, root)
+    return root
+
+
+def _err(result: object) -> object:
+    assert isinstance(result, Err), result
+    assert result.error.fix, result.error
+    return result.error
+
+
+def test_phase_file_reads_the_real_toml_and_its_plan() -> None:
+    assert phase_file(str(REPO), "bh") == Ok(EXPECTED_PHASE_FILE)
+
+
+def test_phase_file_root_comes_from_the_toml_and_sprints_from_the_plan(repo: Path) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace('"atm-phase-bh"', '"zz-phase-bh"'))
+    (repo / PLAN).write_text('{"sprint": "bh-1"}\n\n{"sprint": "bh-2", "depends_on": ["bh-1"]}\n')
+    result = phase_file(str(repo), "bh")
+    assert result == Ok(PhaseFile("bh", "zz-phase-bh", "phase-bh", ("zz-bh-1", "zz-bh-2"),
+                                  {"zz-bh-1": (), "zz-bh-2": ("zz-bh-1",)}))
+
+
+def test_phase_file_plan_path_is_the_toml_plan_key(repo: Path) -> None:
+    (repo / "elsewhere.jsonl").write_text('{"sprint": "only"}\n')
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace(PLAN, "elsewhere.jsonl"))
+    result = phase_file(str(repo), "bh")
+    assert isinstance(result, Ok)
+    assert result.value.sprints == ("atm-only",)
+
+
+def test_missing_phase_file_is_not_found(tmp_path: Path) -> None:
+    error = _err(phase_file(str(tmp_path), "bh"))
+    assert isinstance(error, NotFound)
+    assert error.what == str(tmp_path / TOML)
+
+
+def test_invalid_phase_id_is_config_invalid() -> None:
+    error = _err(phase_file(str(REPO), "../bh"))
+    assert isinstance(error, ConfigInvalid)
+    assert (error.key, error.value) == ("phase", "../bh")
+
+
+def test_malformed_toml_is_parse_failed(repo: Path) -> None:
+    (repo / TOML).write_text("plan = \n")
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ParseFailed)
+    assert error.source == str(repo / TOML)
+
+
+def test_unreadable_phase_file_is_io_failed(repo: Path) -> None:
+    (repo / TOML).unlink()
+    (repo / TOML).mkdir()
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, IoFailed)
+    assert error.path == str(repo / TOML)
+
+
+@pytest.mark.parametrize("key", ["plan", "root", "integration_branch"])
+def test_each_missing_phase_key_is_not_found_naming_it(repo: Path, key: str) -> None:
+    toml = repo / TOML
+    toml.write_text("".join(line + "\n" for line in toml.read_text().splitlines() if not line.startswith(key)))
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, NotFound)
+    assert error.what == f"{repo / TOML}: key {key}"
+
+
+def test_empty_phase_key_is_config_invalid(repo: Path) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace('"integrate/phase-bh"', '""'))
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ConfigInvalid)
+    assert error.key == "integration_branch"
+
+
+def test_root_of_another_phase_is_config_invalid(repo: Path) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace('"atm-phase-bh"', '"atm-phase-bg"'))
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ConfigInvalid)
+    assert (error.key, error.value) == ("root", "atm-phase-bg")
+
+
+def test_missing_plan_file_is_not_found_naming_it(repo: Path) -> None:
+    (repo / PLAN).unlink()
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, NotFound)
+    assert error.what == str(repo / PLAN)
+
+
+def test_unreadable_plan_file_is_io_failed(repo: Path) -> None:
+    (repo / PLAN).unlink()
+    (repo / PLAN).mkdir()
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, IoFailed)
+    assert error.path == str(repo / PLAN)
+
+
+@pytest.mark.parametrize(
+    ("plan", "source_suffix", "message"),
+    [
+        ('{"sprint": "bh-1"}\nnot json\n', ":2", "Expecting value"),
+        ('{"name": "bh-1"}\n', ":1", "not a plan row"),
+        ('{"sprint": "bh-1", "extra": 1}\n', ":1", "not a plan row"),
+        ('{"sprint": "BH 1"}\n', ":1", "is not a lowercase name"),
+        ('{"sprint": "bh-1", "depends_on": "bh-0"}\n', ":1", "depends_on is not a list"),
+        ('{"sprint": "bh-1"}\n{"sprint": "bh-1"}\n', ":2", "listed twice"),
+        ("\n", "", "the plan lists no sprints"),
+        ('{"sprint": "bh-2", "depends_on": ["bh-9"]}\n', "", "bh-2 depends_on unknown sprint(s): bh-9"),
+    ],
+)
+def test_bad_plan_rows_are_parse_failed(repo: Path, plan: str, source_suffix: str, message: str) -> None:
+    (repo / PLAN).write_text(plan)
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ParseFailed)
+    assert error.source == f"{repo / PLAN}{source_suffix}"
+    assert message in error.message
+
+
+def test_repo_config_on_the_real_file_is_ok_and_primary_checkout_is_repo_root() -> None:
+    # Plan-owner ruling (atm-bh-4): primary_checkout is the repo_root passed in, never read from the yaml.
+    assert repo_config(str(REPO)) == Ok(RepoConfig(
+        "atm", "atm-sanity", "quality-mgr", str(REPO), "../atm-core-worktrees", "just lint",
+        ".claude/project/quality-policy.md", REVIEWERS, "docs/plans",
+    ))
+
+
+def test_repo_config_ignores_a_primary_checkout_key_in_the_file(repo: Path) -> None:
+    config = repo / CONFIG
+    config.write_text(config.read_text() + 'primary_checkout: "/elsewhere"\n')
+    result = repo_config(str(repo))
+    assert isinstance(result, Ok)
+    assert result.value.primary_checkout == str(repo)
+
+
+def test_repo_config_without_qa_member_is_not_found_naming_it(repo: Path) -> None:
+    config = repo / CONFIG
+    config.write_text("".join(line + "\n" for line in config.read_text().splitlines()
+                              if not line.startswith("qa_member:")))
+    error = _err(repo_config(str(repo)))
+    assert isinstance(error, NotFound)
+    assert error.what == f"{config}: key qa_member"
+
+
+def test_repo_config_reads_a_block_reviewer_list(repo: Path) -> None:
+    config = repo / CONFIG
+    lines = [line for line in config.read_text().splitlines() if not line.startswith("reviewers_round1:")]
+    config.write_text("\n".join([*lines, "reviewers_round1:", "  - req-qa", '  - "arch-qa"']) + "\n")
+    result = repo_config(str(repo))
+    assert isinstance(result, Ok)
+    assert result.value.reviewers_round1 == ("req-qa", "arch-qa")
+
+
+def test_repo_config_reviewers_not_a_list_is_config_invalid(repo: Path) -> None:
+    config = repo / CONFIG
+    lines = [line for line in config.read_text().splitlines() if not line.startswith("reviewers_round1:")]
+    config.write_text("\n".join([*lines, 'reviewers_round1: "req-qa"']) + "\n")
+    error = _err(repo_config(str(repo)))
+    assert isinstance(error, ConfigInvalid)
+    assert error.key == "reviewers_round1"
+
+
+def test_repo_config_missing_file_is_not_found(tmp_path: Path) -> None:
+    error = _err(repo_config(str(tmp_path)))
+    assert isinstance(error, NotFound)
+    assert error.what == str(tmp_path / CONFIG)
+
+
+# D3: phase() over recorded bd output.
+FIXTURES = Path(__file__).parent / "fixtures" / "beads"
+PLAN_FILE = phase_file(str(FIXTURES / "repo"), "bh")
+# Hand-derived from docs/plans/phase-bh.jsonl: each container and its group-{dev,sanity,qa}, minus the open ones.
+CLOSED_IDS = (
+    "atm-bh-1.group-dev", "atm-bh-1.group-sanity", "atm-bh-1.group-qa", "atm-bh-2.group-dev",
+    "atm-bh-3.group-dev", "atm-bh-3.group-sanity", "atm-bh-3.group-qa", "atm-bh-5.group-dev",
+    "atm-bh-6.group-dev", "atm-bh-6.group-sanity", "atm-bh-6.group-qa", "atm-bh-7.group-dev",
+)
+PLAN_DEPENDS_ON = {
+    "atm-bh-1": (), "atm-bh-2": (), **{f"atm-bh-{n}": ("atm-bh-1",) for n in range(3, 9)},
+    "atm-bh-9": ("atm-bh-3", "atm-bh-4", "atm-bh-5", "atm-bh-6", "atm-bh-7", "atm-bh-8"), "atm-bh-10": ("atm-bh-9",),
+}
+
+
+def _replay_bd(fake_bin) -> None:
+    fake_bin.make("bd", (
+        'case "$1" in\n'
+        f'  list) cat "{FIXTURES / "list-open.json"}" ;;\n'
+        f'  ready) cat "{FIXTURES / "ready.json"}" ;;\n'
+        f'  show) cat "{FIXTURES / "show-closed.json"}" ;;\n'
+        "  *) exit 9 ;;\n"
+        "esac\n"
+    ))
+
+
+def _ok(result):
+    assert isinstance(result, Ok), result
+    return result.value
+
+
+def _read(fake_bin) -> tuple[tuple[Bead, ...], tuple[Bead, ...], tuple[Bead, ...]]:
+    """One tick's bead reads: open and ready by label, then one batched show of the plan-derived closed ids."""
+    _replay_bd(fake_bin)
+    file = _ok(PLAN_FILE)
+    open_beads = _ok(beads_source.open_beads(file.label))
+    ready = _ok(beads_source.ready(file.label))
+    shown = _ok(beads_source.show(closed_show_ids(file, open_beads + ready)))
+    return open_beads, ready, shown
+
+
+def _root(beads: tuple[Bead, ...]) -> Bead:
+    return next(bead for bead in beads if bead.id == "atm-phase-bh")
+
+
+def _phase(open_beads, ready, shown) -> Phase:
+    return _ok(phase(_ok(PLAN_FILE), _root(open_beads), open_beads, ready, shown))
+
+
+def test_closed_ids_are_derived_from_the_plan_and_shown_in_one_batched_call(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+    assert closed_show_ids(_ok(PLAN_FILE), open_beads + ready) == CLOSED_IDS
+    assert fake_bin.argv() == [
+        ("bd", "list", "-l", "phase-bh", "--json"),
+        ("bd", "ready", "-l", "phase-bh", "--json"),
+        ("bd", "show", *CLOSED_IDS, "--json"),
+    ]
+    # The recording was made with the ids in sorted order; bd returns them in request order.
+    assert sorted(bead.id for bead in shown) == sorted(CLOSED_IDS)
+    assert {bead.status for bead in shown} == {"closed"}
+
+
+def test_closed_ids_cover_every_container_and_group_when_nothing_is_open() -> None:
+    file = _ok(PLAN_FILE)
+    ids = closed_show_ids(file, ())
+    assert len(ids) == 40
+    assert ids[:4] == ("atm-bh-1", "atm-bh-1.group-dev", "atm-bh-1.group-sanity", "atm-bh-1.group-qa")
+    assert group_ids("atm-bh-10") == ("atm-bh-10.group-dev", "atm-bh-10.group-sanity", "atm-bh-10.group-qa")
+
+
+def test_phase_bh_yields_ten_sprints_from_their_bead_metadata_and_the_plan(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+    result = _phase(open_beads, ready, shown)
+    raw = {item["id"]: item for item in json.loads((FIXTURES / "list-open.json").read_text())}
+    assert [sprint.id for sprint in result.sprints] == [f"atm-bh-{n}" for n in range(1, 11)]
+    for sprint in result.sprints:
+        meta = raw[sprint.id]["metadata"]
+        assert (sprint.layer, sprint.branch, sprint.target, sprint.stack) == (
+            meta["layer"], meta["branch"], meta["pr_target"], meta["stack"])
+        assert sprint.depends_on == PLAN_DEPENDS_ON[sprint.id]
+        assert sprint.title == raw[sprint.id]["title"]
+        assert sprint.closed is False
+    bh4 = next(sprint for sprint in result.sprints if sprint.id == "atm-bh-4")
+    assert (bh4.layer, bh4.branch, bh4.target) == (4, "sprint/bh-4-beads-source", "sprint/bh-1-contract")
+    assert result.step_errors == ()
+    assert (result.root_id, result.label, result.closed) == ("atm-phase-bh", "phase-bh", False)
+
+
+def test_findings_count_the_sprints_finding_beads(fake_bin) -> None:
+    result = _phase(*_read(fake_bin))
+    findings = {sprint.id: sprint.findings for sprint in result.sprints}
+    # atm-bh-4.group-dev.3/.4 hang under atm-bh-4.group-dev; atm-bh-6.group-qa-f1 is under the root with sprint_bead.
+    assert findings == {**{f"atm-bh-{n}": 0 for n in range(1, 11)}, "atm-bh-4": 2, "atm-bh-6": 1}
+
+
+def test_shown_closed_groups_are_steps_and_ready_marks_steps(fake_bin) -> None:
+    result = _phase(*_read(fake_bin))
+    steps = {step.bead_id: step for step in result.steps}
+    for bead_id in CLOSED_IDS:
+        assert steps[bead_id].status == "closed"
+    assert steps["atm-bh-1.group-qa"].kind == "qa"
+    assert steps["atm-bh-8.group-dev"].ready is True
+    assert steps["atm-bh-4.group-qa"].ready is False
+    assert not {"atm-phase-bh", *(f"atm-bh-{n}" for n in range(1, 11))} & set(steps)
+
+
+def test_without_the_batched_show_closed_groups_are_absent(fake_bin) -> None:
+    open_beads, ready, _ = _read(fake_bin)
+    steps = {step.bead_id for step in _phase(open_beads, ready, ()).steps}
+    assert not set(CLOSED_IDS) & steps
+
+
+def test_planted_missing_sprint_is_reported_not_dropped(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+    gone = "atm-bh-5"
+    result = _phase(tuple(b for b in open_beads if b.id != gone), tuple(b for b in ready if b.id != gone), shown)
+    assert [sprint.id for sprint in result.sprints] == [f"atm-bh-{n}" for n in range(1, 11) if n != 5]
+    assert [bead_id for bead_id, _ in result.step_errors] == [gone]
+    error = result.step_errors[0][1]
+    assert isinstance(error, NotFound)
+    assert error.what == f"sprint bead {gone} listed in the plan"
+    assert "closed_show_ids" in error.fix
+
+
+def test_planted_closed_sprint_comes_from_the_batched_show(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+    bh2 = next(bead for bead in open_beads if bead.id == "atm-bh-2")
+    open_beads = tuple(bead for bead in open_beads if bead.id != "atm-bh-2")
+    ready = tuple(bead for bead in ready if bead.id != "atm-bh-2")
+    assert "atm-bh-2" in closed_show_ids(_ok(PLAN_FILE), open_beads + ready)
+    result = _phase(open_beads, ready, (*shown, replace(bh2, status="closed")))
+    bh2_sprint = next(sprint for sprint in result.sprints if sprint.id == "atm-bh-2")
+    assert bh2_sprint.closed is True
+    assert bh2_sprint.layer == 2
+    assert result.step_errors == ()
+
+
+def test_planted_sprint_without_layer_metadata_is_a_step_error(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+
+    def strip(bead: Bead) -> Bead:
+        return replace(bead, metadata={k: v for k, v in bead.metadata.items() if k != "layer"}) \
+            if bead.id == "atm-bh-3" else bead
+    result = _phase(tuple(map(strip, open_beads)), tuple(map(strip, ready)), shown)
+    assert "atm-bh-3" not in {sprint.id for sprint in result.sprints}
+    assert len(result.sprints) == 9
+    assert [(bead_id, error.what) for bead_id, error in result.step_errors] == [
+        ("atm-bh-3", "atm-bh-3.metadata.layer")]
+
+
+def test_unusable_root_is_err(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+    file = _ok(PLAN_FILE)
+    missing = phase(file, None, open_beads, ready, shown)
+    assert isinstance(missing, Err) and isinstance(missing.error, NotFound)
+    assert missing.error.what == "atm-phase-bh (no root bead)"
+    wrong = phase(file, next(b for b in open_beads if b.id == "atm-bh-4"), open_beads, ready, shown)
+    assert isinstance(wrong, Err) and isinstance(wrong.error, NotFound)
+    assert wrong.error.what == "atm-phase-bh (root bead atm-bh-4)"
+    unlabelled = replace(_root(open_beads), labels=("scope:epic",))
+    mislabelled = phase(file, unlabelled, open_beads, ready, shown)
+    assert isinstance(mislabelled, Err) and isinstance(mislabelled.error, ConfigInvalid)
+    assert mislabelled.error.key == "atm-phase-bh.labels"
+    for result in (missing, wrong, mislabelled):
+        assert result.error.fix
+
+
+def _bead(bead_id: str, parent: str | None, labels: tuple[str, ...] = (), metadata: dict | None = None) -> Bead:
+    from datetime import UTC, datetime
+
+    return Bead(bead_id, bead_id, "open", labels, parent, (), None, metadata or {}, datetime(2026, 10, 15, tzinfo=UTC), None, None)
+
+
+def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
+    from atm_bd_console.atm_bd import step
+
+    root = _bead("atm-phase-bh", None, ("scope:epic",))
+    sprint = _bead("atm-bh-4", "atm-phase-bh", ("stage:sprint",))
+    dev = _bead("atm-bh-4.group-dev", "atm-bh-4", ("stage:dev",), {"sprint": "bh-4", "branch": "b", "pr_target": "t", "layer": 4, "difficulty": "normal"})
+    result = step(dev, {root.id: root, sprint.id: sprint})
+    assert isinstance(result, Ok)
+    assert (result.value.kind, result.value.top_epic, result.value.tag) == ("dev", "atm-phase-bh", "phase-bh")
+    assert (result.value.branch, result.value.target, result.value.layer, result.value.difficulty) == ("b", "t", 4, "normal")
+
+
+def test_step_top_epic_is_none_when_the_chain_is_broken_anywhere() -> None:
+    from atm_bd_console.atm_bd import step
+
+    sprint = _bead("atm-bh-4", "atm-phase-bh", ("stage:sprint",))
+    dev = _bead("atm-bh-4.group-dev", "atm-bh-4", ("stage:dev",), {"sprint": "bh-4"})
+    partway = step(dev, {sprint.id: sprint})  # parent present, grandparent referenced but missing
+    assert isinstance(partway, Ok) and partway.value.top_epic is None
+    first = step(dev, {})  # parent itself missing
+    assert isinstance(first, Ok) and first.value.top_epic is None
+    orphan = step(_bead("atm-phase-bh", None), {})
+    assert isinstance(orphan, Ok) and orphan.value.top_epic is None and orphan.value.tag == "phase-bh"
+
+
+def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
+    from atm_bd_console.atm_bd import step
+
+    sanity = _bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",), {"dev_bead": "atm-bh-4.group-dev", "sprint": "bh-4"})
+    assert step(sanity, {}).value.checked_bead == "atm-bh-4.group-dev"
+    qa = _bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.group-dev", "round": 1, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
+    got = step(qa, {}).value
+    assert (got.kind, got.checked_bead, got.qa_round, got.sprint_bead, got.carry_forward) == ("qa", "atm-bh-4.group-dev", 1, "atm-bh-4", None)
+    fix_qa = _bead("atm-bh-4.f1-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.f1", "round": 2, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
+    fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",), {"round": 1})
+    fixed = step(fix_qa, {fix.id: fix}).value
+    assert (fixed.carry_forward, fixed.qa_round) == ("atm-bh-4.f1", 2)
+    no_checked = step(_bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",)), {})
+    assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.dev_bead" in no_checked.error.what
+    no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})
+    assert isinstance(no_round, Err) and "metadata.round" in no_round.error.what
+    no_sprint = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "round": 1}), {})
+    assert isinstance(no_sprint, Err) and "metadata.sprint_bead" in no_sprint.error.what
+
+
+# D4/D5: step mapping and dispatch_spec.
 TEMPLATES = Path(__file__).resolve().parents[3] / "plugins/atm-bd-orchestration/skills/atm-bd-orchestration/templates"
 NOW = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
-REPO = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", ".claude/project/quality-policy.md",
+DISPATCH_REPO = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", ".claude/project/quality-policy.md",
                   ("req-qa", "arch-qa"), "docs/plans")
 SPRINT = Sprint("atm-bh-5", "git and GitHub sources", 5, "sprint/bh-5-git-github-source", "sprint/bh-1-contract",
                 "phase-bh", ("atm-bh-1",), False, 2)
@@ -65,7 +506,7 @@ def mapped(value: Bead) -> Step:
 
 def context(value: Step, pr: PullRequest | None) -> DispatchContext:
     return DispatchContext(value, SPRINT, "atm-phase-bh", "atm-bd-console", "fenix", COMMIT,
-                           pr.base if pr else value.target or SPRINT.target, value.worktree or "", pr, LAYER_PRS, REPO)
+                           pr.base if pr else value.target or SPRINT.target, value.worktree or "", pr, LAYER_PRS, DISPATCH_REPO)
 
 
 def expected(kind: str, pr: PullRequest | None) -> tuple[str, dict]:
