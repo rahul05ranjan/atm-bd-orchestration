@@ -39,6 +39,17 @@ async def settle(pilot) -> None:
     await pilot.pause()
 
 
+async def _bounded(coro):
+    try:
+        return await asyncio.wait_for(coro, timeout=5)
+    except TimeoutError as error:
+        raise AssertionError("Textual test scenario did not complete within 5 seconds") from error
+
+
+def run_scenario(coro):
+    return asyncio.run(_bounded(coro))
+
+
 @dataclass(frozen=True)
 class FakeBin:
     """Fake executables on a controlled PATH; each invocation's argv is appended to `log`."""

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 
-from conftest import FakeStep, settle
+from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
 
@@ -17,17 +16,6 @@ from atm_bd_console.types import Snapshot, State
 class RaisingStep:
     def __call__(self, *_args) -> tuple[Snapshot, State]:
         raise RuntimeError("step exploded")
-
-
-async def _bounded(coro):
-    try:
-        return await asyncio.wait_for(coro, timeout=5)
-    except TimeoutError as error:
-        raise AssertionError("Textual test scenario did not complete within 5 seconds") from error
-
-
-def run_scenario(coro):
-    return asyncio.run(_bounded(coro))
 
 
 def test_error_snapshot_keeps_the_app_running_and_shows_the_error() -> None:

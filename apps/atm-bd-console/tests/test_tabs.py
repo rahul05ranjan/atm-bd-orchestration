@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 
-from conftest import FakeStep, settle
+from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
@@ -59,7 +58,7 @@ def test_three_tabs_render_the_running_snapshot_with_the_status_bar() -> None:
             assert lines(app, "#status-header") == ["sprints 1/4 · ✅ 1 · 🌀 1 · ⏳ 2"]
             assert WIDE in str(app.query_one("#status-text").render())
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
 
 
 def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
@@ -86,7 +85,7 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
             await settle(pilot)
             assert lines(app, "#sprint-steps")[1].split()[:2] == [STEP_VIEW.kind, STEP_VIEW.bead_id]
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
 
 
 def test_resizing_to_80_columns_rerenders_without_wide_lines() -> None:
@@ -109,4 +108,4 @@ def test_resizing_to_80_columns_rerenders_without_wide_lines() -> None:
             assert app.query_one("#status-text").size.height == 2
             assert app.query_one("#status-panel").max_scroll_x > 0
 
-    asyncio.run(scenario())
+    run_scenario(scenario())
