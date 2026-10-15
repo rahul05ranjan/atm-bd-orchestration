@@ -334,6 +334,9 @@ class State:
     batch_due: Mapping[str, datetime]
 
 
+INITIAL_STATE = State((), None, None, None, None, (), (), {})
+
+
 @dataclass(frozen=True)
 class PhaseFile:
     phase: str

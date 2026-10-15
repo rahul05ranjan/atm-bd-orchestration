@@ -133,7 +133,7 @@ def test_run_takes_the_lock_and_returns_the_app_code(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(console, "ConsoleApp", Recorder)
     step = FakeStep(RUNNING)
     assert run(config, step) == 0
-    assert seen[0][2] == console.EMPTY_STATE and seen[0][3] is None
+    assert seen[0][2] == console.INITIAL_STATE and seen[0][3] is None
     assert isinstance(acquire_lock(config.repo_root, "bh"), Ok)
 
 

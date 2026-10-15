@@ -13,13 +13,12 @@ from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
 from .result import Err, Ok
 from .state import acquire_lock, load_snapshot, load_state
-from .types import State
+from .types import INITIAL_STATE
 
 MISSING_AS = f"""{CONSOLE_NAME}: --as <phase lead> is required: the ATM identity that leads this phase.
 Tasks are assigned as that identity, and escalations go to it when no escalation recipient is set.
 The phase lead varies by phase, so it is never inferred from $ATM_IDENTITY or the repository's lead.
 Example: {CONSOLE_NAME} --phase <x> --as fenix"""
-EMPTY = State((), None, None, None, None, (), (), {})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{CONSOLE_NAME}: not_found: install {command} and retry")
             return 3
     saved = load_state(loaded.value.repo_root, root_id)
-    state = saved.value if isinstance(saved, Ok) else EMPTY
+    state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
     if args.once and not args.headless and args.command != "snapshot":
         from .app import run
 

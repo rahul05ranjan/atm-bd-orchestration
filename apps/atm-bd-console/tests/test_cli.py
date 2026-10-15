@@ -78,7 +78,7 @@ def test_once_headless_matches_two_direct_runner_ticks(parity_runtime, monkeypat
     """ANC-003: cron preserves both dispatch output and state over consecutive ticks."""
     direct = parity_runtime("direct")
     expected = []
-    state = cli.EMPTY
+    state = cli.INITIAL_STATE
     for _ in range(2):
         snapshot, state = runner.step(direct, state, False)
         expected.append((snapshot, state))
@@ -153,6 +153,6 @@ def test_snapshot_runs_a_dry_tick_without_headless_output(monkeypatch, capsys) -
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(type("Lock", (), {"__enter__": lambda s: s, "__exit__": lambda *_: None})()))
-    monkeypatch.setattr(cli.runner, "step", lambda config, *_: (seen.append(config) or (SNAPSHOT, cli.EMPTY)))
+    monkeypatch.setattr(cli.runner, "step", lambda config, *_: (seen.append(config) or (SNAPSHOT, cli.INITIAL_STATE)))
     assert cli.main(["snapshot", "--phase", "bh", "--as", "fenix"]) == 0
     assert seen[0].dry_run and capsys.readouterr().out == ""

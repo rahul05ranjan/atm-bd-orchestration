@@ -18,9 +18,8 @@ from textual.widgets.option_list import Option
 from . import prs, render, status
 from .result import Err, Error, NotFound, Ok
 from .state import acquire_lock, load_state
-from .types import Config, Snapshot, SprintView, State, StepFn
+from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
 
-EMPTY_STATE = State((), None, None, None, None, (), (), {})
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 
 
@@ -174,7 +173,7 @@ def run(config: Config, step: StepFn) -> int:
         print(_lock_message(lock.error), file=sys.stderr)
         return 1
     loaded = load_state(config.repo_root, root_id)
-    state = loaded.value if isinstance(loaded, Ok) else EMPTY_STATE
+    state = loaded.value if isinstance(loaded, Ok) else INITIAL_STATE
     # A missing state file is a first run; any other read failure starts empty and stays shown in == Errors.
     startup_error = loaded.error if isinstance(loaded, Err) and not isinstance(loaded.error, NotFound) else None
     with lock.value:
