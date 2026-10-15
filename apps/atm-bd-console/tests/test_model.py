@@ -108,6 +108,9 @@ def test_due_cycle_fetch_missing_ref_and_merge_pairs() -> None:
     assert at_ten.fetch and not at_ten.github
     no_missing = due(replace(state, last_cycle=NOW), phase(pushed), "graphql", NOW + timedelta(minutes=5))
     assert not no_missing.fetch and not no_missing.github
+    inherited = due(STATE, phase(step("qa", "bh-1", kind="qa", ready=True, branch="branch", target=None)),
+                    "graphql", NOW)
+    assert inherited.merges == (("branch", "sprint/bh-1"),)
 
 
 def test_per_recipient_problem_batches_survive_state_round_trip() -> None:

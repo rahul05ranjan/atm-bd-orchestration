@@ -88,7 +88,7 @@ def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
         step(), SPRINT, "atm-phase-bh", "Phase BH", "phase-bh", "fenix", "abc123",
         "sprint/bh-1", "/worktrees/bh-6", pr, (pr,), REPO,
     )
-    sanity = run(step(kind="sanity"))
+    sanity = run(step(kind="sanity", sprint="bh-6", sprint_bead=None))
     assert sanity.actions[0].to == "dev-sanity"
 
 

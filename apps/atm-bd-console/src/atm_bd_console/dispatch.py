@@ -52,6 +52,7 @@ def dispatch(
     merge_by_pair = {(merge.branch, merge.target): merge for merge in merges}
     pr_by_branch = {pr.head: pr for pr in prs}
     sprint_by_id = {sprint.id: sprint for sprint in phase.sprints}
+    sprint_by_id.update({sprint.id.removeprefix(f"{repo.bead_prefix}-"): sprint for sprint in phase.sprints})
     actions: list[Action] = []
     held: list[SectionRow] = []
     errors: list[Error] = []

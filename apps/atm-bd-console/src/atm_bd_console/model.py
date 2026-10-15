@@ -22,6 +22,7 @@ from .types import (
     SpecFn,
     SprintView,
     State,
+    Step,
     StepView,
     Task,
 )
@@ -37,16 +38,26 @@ def due(state: State, phase: Phase, github_mode: str, now: datetime) -> Due:
     fetch = cycle_due or any(step.branch not in pushed for step in ready)
     pairs: list[tuple[str, str]] = []
     for step in phase.steps:
-        if step.branch and step.target and step.branch in pushed and cycle_due:
-            pair = (step.branch, step.target)
+        target = _target(step, phase)
+        if step.branch and target and step.branch in pushed and cycle_due:
+            pair = (step.branch, target)
             if pair not in pairs:
                 pairs.append(pair)
     for step in ready:
-        if step.branch and step.target:
-            pair = (step.branch, step.target)
+        target = _target(step, phase)
+        if step.branch and target:
+            pair = (step.branch, target)
             if pair not in pairs:
                 pairs.append(pair)
     return Due(fetch, tuple(pairs), cycle_due and github_mode != "off")
+
+
+def _target(step: Step, phase: Phase) -> str | None:
+    if step.target:
+        return step.target
+    sprint = next((sprint for sprint in phase.sprints if sprint.id == step.sprint_bead or sprint.id == step.sprint
+                   or (step.sprint is not None and sprint.id.endswith(f"-{step.sprint}"))), None)
+    return sprint.target if sprint else None
 
 
 def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Snapshot, tuple[Action, ...], State]:
@@ -103,7 +114,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         remotes=remotes,
         batch_due=batch_due,
     )
-    sprint_views, mermaid = _sprint_views(phase)
+    sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix)
     sections = (Section("Held", held),) if held else ()
     snapshot = Snapshot(
         schema=1,
@@ -187,14 +198,14 @@ def _agent_views(members, tasks: tuple[Task, ...], phase: Phase | None, now: dat
     return tuple(views)
 
 
-def _sprint_views(phase: Phase | None) -> tuple[tuple[SprintView, ...], str]:
+def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintView, ...], str]:
     if phase is None:
         return (), "graph TD"
     views: list[SprintView] = []
     lines = ["graph TD"]
     icons = {"closed": "✅", "in_progress": "🌀", "ready": "📥", "not_ready": "⏳"}
     for sprint in phase.sprints:
-        steps = tuple(step for step in phase.steps if step.sprint in (sprint.id, sprint.id.removeprefix("atm-")))
+        steps = tuple(step for step in phase.steps if step.sprint in (sprint.id, sprint.id.removeprefix(f"{bead_prefix}-")))
         state = "closed" if sprint.closed else (
             "in_progress" if any(step.status == "in_progress" for step in steps) else (
                 "ready" if any(step.ready for step in steps) else "not_ready"
