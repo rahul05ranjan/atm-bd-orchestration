@@ -203,7 +203,7 @@ def _agent_views(
                 description=task.description,
             ))
         active = next((task for task in mine if task.state == "active"), None)
-        views.append(AgentView(member.name, status, active.state_since if active else member.presence_since, len(mine), tuple(rows)))
+        views.append(AgentView(member.name, status, active.state_since if active else member.presence_since or now, len(mine), tuple(rows)))
     return tuple(views)
 
 

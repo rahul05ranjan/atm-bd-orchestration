@@ -17,7 +17,7 @@ AgentStatus: TypeAlias = Literal["busy", "stalling", "blocked", "offline", "idle
 class Member:
     name: str
     presence: Presence
-    presence_since: datetime
+    presence_since: datetime | None
 
 
 @dataclass(frozen=True)

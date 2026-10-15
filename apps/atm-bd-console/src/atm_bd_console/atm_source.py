@@ -44,7 +44,7 @@ def _time(value: object) -> datetime | None:
     return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
 
 
-def _member(item: dict, time: datetime) -> Member:
+def _member(item: dict, time: datetime | None) -> Member:
     state = item.get("state")
     return Member(item["name"], state if state in MEMBER_STATES else "unknown", time)
 
@@ -63,8 +63,9 @@ def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, 
         items = body.get("members") if isinstance(body, dict) else None
         if not isinstance(items, list):
             return Err(ParseFailed("parse_failed", "atm members", "atm members must contain a members list", fix))
-        times = tuple(_time(item["state_changed_at"]) for item in items)
-        if None in times:
+        raw_times = tuple(item.get("state_changed_at") for item in items)
+        times = tuple(_time(time) for time in raw_times)
+        if any(raw_time is not None and time is None for raw_time, time in zip(raw_times, times)):
             return Err(ParseFailed("parse_failed", "atm members", "atm member timestamps must be ISO-8601 with a UTC offset", fix))
         return Ok(tuple(_member(item, time) for item, time in zip(items, times)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:

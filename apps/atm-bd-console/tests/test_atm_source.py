@@ -35,6 +35,15 @@ def test_members_maps_every_presence_and_records_presence_since(fake_bin, monkey
     assert fake_bin.argv() == [("atm", "members", "--team", "atm-dev", "--json")]
 
 
+def test_members_accept_missing_optional_timestamps(fake_bin, monkeypatch) -> None:
+    monkeypatch.setenv("ATM_BODY", '{"members": [{"name": "teammate", "state": "unknown"}]}')
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+
+    result = atm_source.members("atm-dev")
+
+    assert result == Ok((atm_source.Member("teammate", "unknown", None),))
+
+
 def test_tasks_preserve_position_and_use_updated_at_for_state_since(fake_bin, monkeypatch) -> None:
     monkeypatch.setenv("ATM_BODY", _fixture("tasks.json"))
     fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
@@ -66,7 +75,6 @@ def test_tasks_rejects_a_complete_state_as_unknown(fake_bin, monkeypatch) -> Non
     ("command", "body", "source"),
     [
         ("members", '{"members": [{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00"}]}', "atm members"),
-        ("members", '{"members": [{"name": "aria", "state": "active", "state_changed_at": null}]}', "atm members"),
         ("members", '[{"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"}]', "atm members"),
         ("tasks", '[{"task_id": "t", "assignee": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]', "atm task list"),
         ("tasks", '[{"task_id": "t", "assignee": "aria", "state": "assigned", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": null, "description": ""}]', "atm task list"),
