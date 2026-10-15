@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from atm_bd_console.codec import from_json
-from atm_bd_console.result import Err, LockHeld, NotFound, Ok
+from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_merges, load_prs, load_snapshot, load_state
 from atm_bd_console.types import ActionLine, MergeFile, PrsFile, Snapshot, State
 
@@ -41,6 +41,25 @@ def test_detail_files_are_atomic_round_trips_and_actions_are_lines(tmp_path: Pat
     lines = (tmp_path / ".atm-bd/atm-bd-console/atm-bh/actions.jsonl").read_text().splitlines()
     assert len(lines) == 2 and all(isinstance(from_json(ActionLine, line), Ok) for line in lines)
     assert (tmp_path / ".atm-bd/atm-bd-console/.gitignore").read_text() == "*\n"
+
+
+def test_read_only_state_directory_returns_io_failed_naming_the_path(tmp_path: Path) -> None:
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
+    snapshot = fixture("snapshot-running.json", Snapshot)
+    action = ActionLine(datetime.now(UTC), "hold", "fenix", "atm-bh", "wait")
+    with acquired.value as store:
+        directory.chmod(0o500)
+        try:
+            written = store.write_snapshot(snapshot)
+            appended = store.append_action(action)
+        finally:
+            directory.chmod(0o700)
+    assert isinstance(written, Err) and isinstance(written.error, IoFailed)
+    assert written.error.path == str(directory / "snapshot.json")
+    assert isinstance(appended, Err) and isinstance(appended.error, IoFailed)
+    assert appended.error.path == str(directory / "actions.jsonl")
 
 
 def test_missing_data_and_live_process_lock_are_typed(tmp_path: Path) -> None:
