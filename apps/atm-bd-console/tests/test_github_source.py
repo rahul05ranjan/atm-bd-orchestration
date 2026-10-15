@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -25,16 +26,49 @@ def fake_gh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, *, ex
     return calls
 
 
+# Recorded from randlee/atm-bd-orchestration on 2026-10-15 with GRAPHQL and the REST pulls URL, trimmed to
+# PRs #2 (no rollup), #147 (SUCCESS) and #148 (PENDING, one check still running), two contexts each.
+FIXTURES = Path(__file__).parent / "fixtures" / "github"
+RECORDED_GRAPHQL = json.loads((FIXTURES / "graphql-open-prs.json").read_text())
+RECORDED_REST = json.loads((FIXTURES / "rest-open-prs.json").read_text())
+
+
 def graphql(state: str | None = "SUCCESS", total: int = 1) -> dict:
-    rollup = None if state is None else {
-        "state": state,
-        "contexts": {"nodes": [{"name": "bad", "conclusion": "FAILURE"}]},
-    }
-    node = {
-        "number": 7, "url": "https://x/7", "headRefName": "head", "baseRefName": "base", "headRefOid": "abc",
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": rollup}}]},
-    }
-    return {"data": {"repository": {"pullRequests": {"totalCount": total, "nodes": [node]}}}}
+    """The recorded #147 node with its rollup state set (None removes the rollup) and one failed check."""
+    body = copy.deepcopy(RECORDED_GRAPHQL)
+    pulls = body["data"]["repository"]["pullRequests"]
+    node = next(item for item in pulls["nodes"] if item["number"] == 147)
+    commit = node["commits"]["nodes"][-1]["commit"]
+    if state is None:
+        commit["statusCheckRollup"] = None
+    else:
+        commit["statusCheckRollup"]["state"] = state
+        commit["statusCheckRollup"]["contexts"]["nodes"] = [{"name": "bad", "conclusion": "FAILURE"}]
+    pulls["nodes"], pulls["totalCount"] = [node], total
+    return body
+
+
+def test_recorded_graphql_maps_every_pull_request(tmp_path, monkeypatch) -> None:
+    fake_gh(tmp_path, monkeypatch, RECORDED_GRAPHQL)
+    result, status = github_source.open_prs("graphql")
+    assert isinstance(result, Ok) and status.ok is True and status.truncated is False
+    assert [(pr.number, pr.head, pr.base, pr.ci, pr.failed_checks) for pr in result.value] == [
+        (2, "feat/four-job-beads-workflow", "main", "none", ()),
+        (147, "sprint/bh-10-textual-tabs", "fix/bh-4-sanity-r4", "success", ()),
+        (148, "fix/bh-5-qa-r1", "sprint/bh-10-textual-tabs", "pending", ()),
+    ]
+    assert result.value[2].head_sha == "481eba418048db6c206bd5c043e29ce216b731ef"
+    assert result.value[2].url == "https://github.com/randlee/atm-bd-orchestration/pull/148"
+
+
+def test_recorded_rest_maps_every_pull_request_without_ci(tmp_path, monkeypatch) -> None:
+    fake_gh(tmp_path, monkeypatch, RECORDED_REST)
+    result, status = github_source.open_prs("rest")
+    assert isinstance(result, Ok) and status.ok is True and status.truncated is False
+    assert [(pr.number, pr.head, pr.base, pr.head_sha, pr.ci) for pr in result.value] == [
+        (row["number"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none") for row in RECORDED_REST
+    ]
+    assert {pr.number for pr in result.value} == {2, 147, 148}
 
 
 @pytest.mark.parametrize(("state", "expected"), [("SUCCESS", "success"), ("PENDING", "pending"), ("EXPECTED", "pending"), ("FAILURE", "failure"), ("ERROR", "failure"), (None, "none")])
@@ -72,7 +106,7 @@ def test_graphql_total_count_over_100_sets_truncated(tmp_path, monkeypatch, tota
     assert isinstance(result, Ok) and status.ok is True and status.truncated is truncated
 
 def test_rest_truncation_and_off_make_only_the_allowed_calls(tmp_path, monkeypatch) -> None:
-    rows = [{"number": i, "html_url": f"https://x/{i}", "head": {"ref": "h", "sha": "s"}, "base": {"ref": "b"}} for i in range(100)]
+    rows = [{**RECORDED_REST[0], "number": i} for i in range(100)]
     calls = fake_gh(tmp_path, monkeypatch, rows)
     result, status = github_source.open_prs("rest")
     assert len(result.value) == 100 and status.truncated and len(calls.read_text().splitlines()) == 2
