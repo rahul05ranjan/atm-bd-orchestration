@@ -32,8 +32,12 @@ CYCLE = timedelta(minutes=10)
 IDLE_STOP = timedelta(minutes=60)
 
 
+def _cycle_due(state: State, now: datetime) -> bool:
+    return state.last_cycle is None or now - state.last_cycle >= CYCLE
+
+
 def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime) -> Due:
-    cycle_due = state.last_cycle is None or now - state.last_cycle >= CYCLE
+    cycle_due = _cycle_due(state, now)
     ready = tuple(step for step in candidates(phase, ()) if step.ready)
     pushed = {remote.branch for remote in state.remotes}
     fetch = cycle_due or any(step.branch not in pushed for step in ready)
@@ -102,7 +106,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     )
     actions = assigned + notices if stopped is None else ()
     sent = (state.sent + actions)[-5:]
-    cycle_due = state.last_cycle is None or now - state.last_cycle >= CYCLE
+    cycle_due = _cycle_due(state, now)
     new_state = replace(
         state,
         problems=problems,
