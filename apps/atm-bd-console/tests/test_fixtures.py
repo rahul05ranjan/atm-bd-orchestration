@@ -2,27 +2,80 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import get_args, get_type_hints
 
-from atm_bd_console.codec import from_json
-from atm_bd_console.result import Ok
+import pytest
+from contract_fixtures import SNAPSHOTS, fixtures
+
+from atm_bd_console.codec import from_json, to_json
+from atm_bd_console.result import Ok, Rejected
 from atm_bd_console.types import ActionLine, MergeFile, PrsFile, Snapshot
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
 
 
-def test_contract_fixtures_parse() -> None:
-    types = {
-        "merge.json": MergeFile,
-        "prs.json": PrsFile,
-        "snapshot-running.json": Snapshot,
-        "snapshot-stopped-closed.json": Snapshot,
-        "snapshot-stopped-idle.json": Snapshot,
-        "snapshot-gh-off.json": Snapshot,
-        "snapshot-gh-err.json": Snapshot,
-    }
-    for name, cls in types.items():
-        assert isinstance(from_json(cls, (FIXTURES / name).read_text()), Ok), name
-    assert isinstance(from_json(ActionLine, (FIXTURES / "actions.jsonl").read_text()), Ok)
+def _load(name: str, cls: type) -> object:
+    decoded = from_json(cls, (FIXTURES / name).read_text())
+    assert isinstance(decoded, Ok), (name, decoded)
+    return decoded.value
+
+
+def test_committed_fixtures_are_the_to_json_output() -> None:
+    expected = fixtures()
+    assert sorted(path.name for path in FIXTURES.iterdir()) == sorted(expected)
+    for name, text in expected.items():
+        assert (FIXTURES / name).read_text() == text, f"{name}: run tests/contract_fixtures.py"
+
+
+@pytest.mark.parametrize("name", sorted(SNAPSHOTS))
+def test_snapshot_fixtures_are_populated(name: str) -> None:
+    snapshot = _load(name, Snapshot)
+    assert isinstance(snapshot, Snapshot)
+    for field in ("agents", "sections", "problems", "sprints", "prs", "sent", "files", "errors"):
+        assert len(getattr(snapshot, field)) > 0, f"{name}: {field} is empty"
+    assert snapshot.agents[0].rows and snapshot.sections[0].rows and snapshot.sprints[0].steps
+    assert snapshot.prs[0].merge is not None and snapshot.sent[0].spec is not None
+
+
+def test_each_snapshot_shape_has_its_distinguishing_field() -> None:
+    running = _load("snapshot-running.json", Snapshot)
+    assert (running.stopped, running.root_closed, running.gh.mode, running.gh.ok) == (None, False, "graphql", True)
+    closed = _load("snapshot-stopped-closed.json", Snapshot)
+    assert (closed.stopped, closed.root_closed, closed.metrics.pct) == ("closed", True, 100)
+    idle = _load("snapshot-stopped-idle.json", Snapshot)
+    assert (idle.stopped, idle.root_closed) == ("idle", False)
+    off = _load("snapshot-gh-off.json", Snapshot)
+    assert (off.gh.mode, off.gh.ok, off.gh.at, off.top_ci) == ("off", None, None, None)
+    err = _load("snapshot-gh-err.json", Snapshot)
+    assert (err.gh.mode, err.gh.ok) == ("graphql", False)
+    assert isinstance(err.gh.error, Rejected) and err.gh.error in err.errors
+    shapes = [running, closed, idle, off, err]
+    assert len({to_json(shape) for shape in shapes}) == len(shapes)
+    assert running != off
+
+
+def test_cache_fixtures_are_populated() -> None:
+    merge = _load("merge.json", MergeFile)
+    assert {item.state for item in merge.merges.values()} == {"clean", "conflict"}
+    assert all(key == item.branch for key, item in merge.merges.items())
+    prs = _load("prs.json", PrsFile)
+    assert [pr.ci for pr in prs.prs] == ["failure", "success"]
+    assert prs.prs[0].failed_checks and prs.gh.ok is True
+
+
+def test_actions_jsonl_has_one_line_per_kind_parsed_line_by_line() -> None:
+    lines = (FIXTURES / "actions.jsonl").read_text().splitlines()
+    parsed = [_load_line(line) for line in lines]
+    assert [line.kind for line in parsed] == list(get_args(get_type_hints(ActionLine)["kind"]))
+    dry_run = parsed[-1]
+    assert dry_run.kind == "dry_run" and dry_run.to is None
+    assert parsed[0].bead == "atm-bh-6.qa"
+
+
+def _load_line(line: str) -> ActionLine:
+    decoded = from_json(ActionLine, line)
+    assert isinstance(decoded, Ok), (line, decoded)
+    return decoded.value
 
 
 def test_fake_bin_records_argv(fake_bin, monkeypatch, tmp_path: Path) -> None:

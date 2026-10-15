@@ -1,1 +1,5 @@
-{"at":"2026-10-14T12:00:00Z","bead":null,"kind":"dry_run","text":"no action","to":null}
+{"at":"2026-10-14T12:00:00Z","bead":"atm-bh-6.qa","kind":"assign","text":"QA bh-6 round 2","to":"quality-mgr"}
+{"at":"2026-10-14T12:00:00Z","bead":"atm-bh-6","kind":"send","text":"atm-bh-6 has been assigned for 30m without a start","to":"arch-ctm"}
+{"at":"2026-10-14T12:00:00Z","bead":null,"kind":"batch","text":"2 problems: CI red on #1850; merge conflict on sprint/bh-6-tick-rules","to":"fenix"}
+{"at":"2026-10-14T12:00:00Z","bead":"atm-bh-7","kind":"hold","text":"holding: CI red on the layer below","to":"arch-ctm"}
+{"at":"2026-10-14T12:00:00Z","bead":null,"kind":"dry_run","text":"would assign atm-bh-6.qa to quality-mgr","to":null}

@@ -1,1 +1,1 @@
-{"checked_at":"2026-10-14T12:00:00Z","merges":{}}
+{"checked_at":"2026-10-14T12:00:00Z","merges":{"sprint/bh-4-dispatch":{"branch":"sprint/bh-4-dispatch","checked_at":"2026-10-14T12:00:00Z","files":[],"messages":[],"state":"clean","target":"integrate/phase-bh"},"sprint/bh-6-tick-rules":{"branch":"sprint/bh-6-tick-rules","checked_at":"2026-10-14T12:00:00Z","files":["src/atm_bd_console/types.py"],"messages":["CONFLICT (content): Merge conflict in src/atm_bd_console/types.py"],"state":"conflict","target":"integrate/phase-bh"}}}
