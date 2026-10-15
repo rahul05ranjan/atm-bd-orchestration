@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, REPO_CONFIG, SAMPLES, SNAPSHOT, TASK
+from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, REPO_CONFIG, SAMPLES, SNAPSHOT, TASK
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
@@ -99,6 +99,10 @@ def test_tick_context_round_trip() -> None:
     assert REPO_CONFIG.reviewers_round1
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     assert from_json(Inputs, to_json(inputs)) == Ok(inputs)
+
+
+def test_inputs_interval_matches_config_interval() -> None:
+    assert INPUTS.interval_s == CONFIG.interval_s
 
 
 def test_tick_context_missing_contract_fields_report_paths() -> None:

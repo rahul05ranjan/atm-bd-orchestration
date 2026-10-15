@@ -190,7 +190,7 @@ class Inputs:
     now: datetime
     lead: str
     repo: RepoConfig
-    interval_s: int
+    interval_s: int  # Always copied from Config.interval_s by the bh-9 runner.
     phase: Result[Phase]
     members: Result[tuple[Member, ...]]
     tasks: Result[tuple[Task, ...]]
