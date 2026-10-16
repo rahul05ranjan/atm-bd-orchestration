@@ -240,3 +240,17 @@ def test_running_contract_snapshot_renders_its_rows_unmodified() -> None:
     assert "== Blocked (1)" in rendered
     assert "CI failing on the top layer PR #1850" in rendered
     assert "bh-6.qa → quality-mgr" in rendered
+
+
+def test_stopped_snapshot_renders_beads_and_pr_history() -> None:
+    decoded = from_json(Snapshot, (FIXTURES / "contract" / "snapshot-stopped-closed.json").read_text())
+    assert isinstance(decoded, Ok)
+
+    rendered = dashboard(decoded.value, 120, 40).plain
+
+    assert "stopped: phase closed" in rendered
+    assert "== Beads (1)" in rendered
+    assert "bh-6.qa" in rendered
+    assert "== PRs (1)" in rendered
+    assert "PR #1850" in rendered
+    assert "== Sent" in rendered

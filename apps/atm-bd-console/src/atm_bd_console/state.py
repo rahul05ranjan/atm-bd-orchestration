@@ -34,6 +34,24 @@ class StateStore:
     def load_prs(self) -> Result[PrsFile]:
         return self._load_runtime("prs.json", PrsFile)
 
+    def load_actions(self) -> Result[tuple[ActionLine, ...]]:
+        path = self.directory / "actions.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return Err(NotFound("not_found", str(path), "run an active console tick before viewing action history"))
+        except OSError as error:
+            return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
+        actions: list[ActionLine] = []
+        for number, line in enumerate(lines, start=1):
+            decoded = from_json(ActionLine, line)
+            if isinstance(decoded, Err):
+                self.load_errors.append(ParseFailed("parse_failed", f"{path}:{number}", decoded.error.message,
+                                                    "repair the action history JSON"))
+                continue
+            actions.append(decoded.value)
+        return Ok(tuple(actions))
+
     def _load_runtime(self, name: str, cls: type[Any]) -> Result[Any]:
         if name in self._blocked_writes:
             return self._blocked_writes[name]
