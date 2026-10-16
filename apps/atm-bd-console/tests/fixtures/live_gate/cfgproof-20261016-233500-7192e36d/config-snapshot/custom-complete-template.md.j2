@@ -1,0 +1,20 @@
+---
+name: cfgproof-sanity-complete-cfgproof-20261016-233500-7192e36d
+version: 1.0.0
+description: Actual receiver observations for the isolated delivery proof
+format: markdown
+required_variables:
+  - task_id
+  - sprint
+  - evidence
+metadata:
+  type: cfgproof-sanity-complete
+  workflow:
+    scope:
+      kind: sprint
+      variable: sprint
+    state: dev-sanity-complete
+    stage: dev-sanity
+    transition: complete
+---
+Task {{ task_id }} (sprint {{ sprint }}): {{ evidence }}

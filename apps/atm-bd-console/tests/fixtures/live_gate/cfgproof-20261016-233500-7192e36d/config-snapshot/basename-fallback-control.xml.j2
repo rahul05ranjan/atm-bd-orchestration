@@ -1,0 +1,37 @@
+---
+name: cfgproof-basename-fallback-cfgproof-20261016-233500-7192e36d
+version: 1.0.0
+description: Basename fallback control - should NOT be delivered
+format: xml
+required_variables:
+  - task_id
+  - checked_bead
+  - sprint
+  - worktree_path
+  - branch
+  - commit
+  - base
+  - pr_number
+  - pr_url
+  - primary_checkout
+  - lint_command
+defaults:
+  layer_prs: []
+metadata:
+  type: cfgproof-basename-fallback
+  workflow:
+    scope:
+      kind: sprint
+      variable: sprint
+    state: dev-sanity-start
+    stage: dev-sanity
+    transition: start
+---
+<atm-task id="{{ task_id }}" sprint="{{ sprint }}" mode="dev-sanity">
+  <description>CFGPROOF_BASENAME_FALLBACK_cfgproof-20261016-233500-7192e36d: this should NOT appear in delivery.</description>
+  <checked-bead>{{ checked_bead }}</checked-bead>
+  <worktree>{{ worktree_path }}</worktree>
+  <branch>{{ branch }}</branch>
+  <commit>{{ commit }}</commit>
+  <base>{{ base }}</base>
+</atm-task>
