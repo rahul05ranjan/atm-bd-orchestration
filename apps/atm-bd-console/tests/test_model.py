@@ -424,13 +424,48 @@ def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
     assert len(snapshot.sections) == 1
     assert snapshot.sections[0].label == "Held"
     assert snapshot.sections[0].rows[0].reason == "not ready"
-    assert [problem.text for problem in snapshot.problems] == ["branch not on origin: missing", "no worktree for missing"]
-    assert [(action.kind, action.to) for action in actions] == [("send", "fenix"), ("send", "fenix")]
+    assert snapshot.problems == ()
+    assert actions == ()
 
     snapshot, actions, state = tick(supplied, state, NOW + timedelta(minutes=10), render)
     assert snapshot.sections[0].rows[0].reason == "not ready"
-    assert [problem.text for problem in snapshot.problems] == ["branch not on origin: missing", "no worktree for missing"]
-    assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
+    assert snapshot.problems == ()
+    assert actions == ()
+
+
+def test_open_fix_and_future_poured_sanity_and_qa_do_not_notify_missing_metadata() -> None:
+    fix = step("atm-bh-1.fix", "atm-bh-1", kind="fix", ready=True, branch="fix/bh-1", assignee="solar")
+    future = tuple(step(
+        f"{fix.bead_id}.{kind}", "atm-bh-1", kind=kind, ready=False, branch=None, worktree=None,
+        checked_bead=fix.bead_id, sprint_bead="atm-bh-1",
+    ) for kind in ("sanity", "qa"))
+    supplied = inputs(phase(fix, *future))
+    state = STATE
+    for minutes in (0, 10, 20):
+        snapshot, actions, state = tick(supplied, state, NOW + timedelta(minutes=minutes), render)
+        held = snapshot.sections[0].rows
+        assert {row.bead_id for row in held if row.reason == "not ready"} == {step.bead_id for step in future}
+        assert any("<missing>" in row.reason for row in held)
+        assert snapshot.problems == ()
+        assert snapshot.errors == ()
+        assert actions == ()
+        assert state.sent == ()
+        assert state.batch_due == {}
+
+
+@pytest.mark.parametrize("branch", (None, ""))
+def test_ready_step_without_branch_reports_one_meaningful_configuration_problem(branch: str | None) -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch=branch, worktree=None)
+    supplied = inputs(phase(candidate))
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+    assert len(snapshot.sections[0].rows) == 2
+    assert snapshot.problems == (Problem("hold:qa", "qa", "fenix", "missing branch configuration", NOW),)
+    assert len(actions) == 1
+    assert (actions[0].kind, actions[0].to, actions[0].text) == ("send", "fenix", "missing branch configuration")
+    assert all("<missing>" not in problem.text for problem in snapshot.problems)
+    snapshot, actions, _ = tick(supplied, state, NOW + timedelta(minutes=5), render)
+    assert len(snapshot.problems) == 1
+    assert actions == ()
 
 
 def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> None:

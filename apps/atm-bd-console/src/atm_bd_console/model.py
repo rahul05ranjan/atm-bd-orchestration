@@ -347,10 +347,18 @@ def _problems(
         if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
     }
     problems: list[Problem] = []
+    not_ready = {row.bead_id for row in held if row.reason == "not ready"}
     for row in held:
-        if row.reason == "not ready":
+        if row.bead_id in not_ready:
             continue
         step = by_id[row.bead_id]
+        if not step.branch:
+            if not any(problem.key == f"hold:{step.bead_id}" for problem in problems):
+                problems.append(Problem(
+                    f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
+                    "missing branch configuration", now,
+                ))
+            continue
         conflict = conflicts.get(f"conflict:{step.branch}")
         if conflict is not None and row.reason == conflict.text:
             continue

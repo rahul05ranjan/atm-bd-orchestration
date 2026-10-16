@@ -4,11 +4,12 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
 from atm_bd_console.prs import render_prs
-from atm_bd_console.result import Ok
+from atm_bd_console.result import Ok, Timeout
 from atm_bd_console.types import GhStatus, Merge, PrRow, PullRequest, Snapshot
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
@@ -55,3 +56,17 @@ def test_rest_mode_and_width() -> None:
     assert all("CI —" in line for line in render_prs(value, 120).plain.splitlines())
     for width in (80, 120):
         assert all(cell_len(line) <= width for line in render_prs(snapshot(), width).plain.splitlines())
+
+
+@pytest.mark.parametrize("phase", ("bh", "phase-current"))
+@pytest.mark.parametrize("mode", ("graphql", "rest"))
+def test_successful_empty_prs_name_actual_phase_and_checked_time(phase: str, mode: str) -> None:
+    empty = replace(snapshot(), phase=phase, prs=(), gh=GhStatus(mode, True, None, NOW, False))
+    assert render_prs(empty, 120).plain == f"No open PR for phase {phase} (checked 12:00)"
+
+
+def test_empty_prs_distinguish_github_off_and_failure() -> None:
+    empty = replace(snapshot(), prs=())
+    assert render_prs(replace(empty, gh=GhStatus("off", None, None, None, False)), 120).plain == "GitHub checks are off"
+    failed = GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, False)
+    assert render_prs(replace(empty, gh=failed), 120).plain == "GitHub read failed: timeout"
