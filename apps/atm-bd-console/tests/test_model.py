@@ -219,7 +219,7 @@ def test_recorded_phase_bh_dag_labels_are_compact_and_keep_all_edges() -> None:
 def test_dag_label_boundaries_handle_long_assignees_and_unbroken_unicode_words() -> None:
     title = "bh-8: renderers with a deliberately long description that must be truncated after two concise lines"
     active = step("atm-bh-8.group-dev", "atm-bh-8", status="in_progress", assignee="a-very-long-assignee-name")
-    unicode_title = "bh-9: \u6e2c\u8a66 supercalifragilisticexpialidociousunbrokenword"
+    unicode_title = "bh-9: 測試 supercalifragilisticexpialidociousunbrokenword"
     value = phase(active, sprints=(
         Sprint("atm-bh-8", title, 8, "sprint/bh-8", "base", "phase-bh", (), False, 0),
         Sprint("atm-bh-9", unicode_title, 9, "sprint/bh-9", "base", "phase-bh", (), False, 0),
