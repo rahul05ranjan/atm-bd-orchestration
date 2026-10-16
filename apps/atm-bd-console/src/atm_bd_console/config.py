@@ -4,6 +4,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from .atm_bd import phase_file
 from .paths import console_config_path, state_directory
 from .result import ConfigInvalid, Err, IoFailed, Ok, Result
 from .types import Config
@@ -34,7 +35,6 @@ def _team(root: Path) -> Result[str]:
 def load_config(
     repo_root: str | Path,
     phase: str,
-    lead: str,
     *,
     github: str | None = None,
     interval_s: int | None = None,
@@ -43,8 +43,8 @@ def load_config(
 ) -> Result[Config]:
     """Return TOML settings with explicit command-line overrides.
 
-    A missing configuration file is deliberately unremarkable: the console is
-    usable with its documented graphql/60 defaults.
+    Missing console.toml uses the documented graphql/60 defaults. The phase
+    file must supply the lead and all assignment template paths.
     """
     root = Path(repo_root)
     team = _team(root)
@@ -75,5 +75,8 @@ def load_config(
     if not isinstance(chosen_interval, int) or isinstance(chosen_interval, bool) or chosen_interval < 10:
         return Err(ConfigInvalid("config_invalid", "interval", repr(chosen_interval), "use an integer of at least 10 seconds"))
 
+    phase_settings = phase_file(str(root), phase)
+    if isinstance(phase_settings, Err):
+        return phase_settings
     state_dir = state_directory(root, f"atm-phase-{phase}")
-    return Ok(Config(phase, lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))
+    return Ok(Config(phase, phase_settings.value.lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))

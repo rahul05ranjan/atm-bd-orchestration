@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from datetime import UTC, datetime
 
+from contract_samples import PHASE_TEMPLATES
+
 from atm_bd_console.atm_bd import dispatch_spec
 from atm_bd_console.dispatch import candidates, dispatch
 from atm_bd_console.result import Err, NotFound, Ok
@@ -144,8 +146,8 @@ def test_stack_has_one_owner_sprint() -> None:
 
 
 def test_qa_dispatch_reads_stack_from_sprint() -> None:
-    spec = dispatch_spec(_context())
+    spec = dispatch_spec(_context(), PHASE_TEMPLATES)
     assert isinstance(spec, Ok)
-    assert spec.value.template == "qa-template.xml.j2"
+    assert spec.value.template == PHASE_TEMPLATES["qa"]
     assert spec.value.vars["stack"] == "phase-bh"
     assert spec.value.vars["layer"] == 6

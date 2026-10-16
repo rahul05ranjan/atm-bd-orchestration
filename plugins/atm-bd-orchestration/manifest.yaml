@@ -158,6 +158,7 @@ artifacts:
     - skills/atm-beads/schemas/sprint-bead.schema.json
     - skills/atm-beads/scripts/bead_schema.py
     - skills/atm-beads/scripts/check-phase-artifact
+    - skills/atm-beads/scripts/phase-config
     - skills/atm-beads/scripts/phase-index-path
     - skills/atm-beads/scripts/plan_contract.py
     - skills/atm-beads/scripts/repo_config.py
@@ -168,7 +169,9 @@ artifacts:
     - skills/atm-beads/templates/dev-sanity-bead.json.j2
     - skills/atm-beads/templates/plan-root.json.j2
     - skills/atm-beads/templates/sprint-bead.json.j2
+    - skills/atm-beads/tests/phase_fixtures.py
     - skills/atm-beads/tests/test_importing_docs.py
+    - skills/atm-beads/tests/test_phase_config.py
     - skills/atm-beads/tests/test_plan_root.py
     - skills/atm-beads/tests/test_repo_config.py
     - skills/atm-beads/tests/test_sc_render.py

@@ -84,7 +84,15 @@ SPRINT = Sprint(
     True, 3,
 )
 PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (STEP,), (("atm-bh-7.qa", NOT_FOUND),))
-DISPATCH_SPEC = DispatchSpec("qa-template.xml.j2", {"round": 2, "reviewers_round1": ["req-qa"], "stack": "phase-bh"})
+PHASE_TEMPLATES = {
+    purpose: f".claude/skills/atm-bd-orchestration/templates/{filename}.xml.j2"
+    for purpose, filename in (
+        ("dev", "dev-template"), ("dev_fix", "dev-fix"), ("fix", "fix-assignment"),
+        ("sanity", "dev-sanity-template"), ("qa", "qa-template"),
+        ("plan_review", "plan-review-template"), ("review", "review-template"),
+    )
+}
+DISPATCH_SPEC = DispatchSpec(PHASE_TEMPLATES["qa"], {"round": 2, "reviewers_round1": ["req-qa"], "stack": "phase-bh"})
 REMOTE_REF = RemoteRef("sprint/bh-6-tick-rules", "0123456789abcdef0123456789abcdef01234567")
 MERGE = Merge(
     "sprint/bh-6-tick-rules", "integrate/phase-bh", "conflict", ("src/atm_bd_console/types.py",),
@@ -128,7 +136,7 @@ SNAPSHOT = Snapshot(
 STATE = State(
     (PROBLEM,), EARLIER, EARLIER, NOW, PLUS_TWO, (ACTION,), (REMOTE_REF,), {"quality-mgr": NOW, "arch-ctm": PLUS_TWO},
 )
-PHASE_FILE = PhaseFile("bh", "atm-phase-bh", "phase:bh", ("atm-bh-1", "atm-bh-6"), {"atm-bh-6": ("atm-bh-1",)})
+PHASE_FILE = PhaseFile("bh", "atm-phase-bh", "phase:bh", ("atm-bh-1", "atm-bh-6"), {"atm-bh-6": ("atm-bh-1",)}, lead="fenix", templates=PHASE_TEMPLATES)
 MERGE_FILE = MergeFile(NOW, {"sprint/bh-6-tick-rules": MERGE})
 PRS_FILE = PrsFile(NOW, GH_STATUS, (PULL_REQUEST,))
 ACTION_LINE = ActionLine(NOW, "hold", "arch-ctm", "atm-bh-6", "holding: CI red on the layer below")

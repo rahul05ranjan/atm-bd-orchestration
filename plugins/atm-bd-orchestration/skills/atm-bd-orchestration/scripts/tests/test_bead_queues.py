@@ -116,3 +116,12 @@ def test_viewer_contains_no_beads_queue_queries() -> None:
     assert "bd show" not in text
     assert "-" + "-json" not in text
     assert "state" + "-file" not in text
+
+
+def test_viewer_rejects_identity_override(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(rendered_script(tmp_path)), "--phase", "bh", "--as", "wrong-lead"],
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 2
+    assert "unrecognized arguments: --as wrong-lead" in result.stderr

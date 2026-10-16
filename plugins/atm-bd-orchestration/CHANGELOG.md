@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Each phase file now requires its own `lead` and seven assignment template paths: `dev`, `dev_fix`, `fix`, `sanity`, `qa`, `plan_review`, and `review`. Missing settings and dangling installed-template paths are errors. The planner creates new files with `phase-config init --phase <x> --lead <identity>`; it never overwrites an existing phase.
+- Installation no longer emits a repository-wide `lead`. Reinstall and add the explicit settings to active phase files when upgrading. Console and viewer commands take only the phase for lead selection; there is no `--as` override.
+- Jev startup and child-error announcements take `--phase <x>` and resolve their fallback lead from the phase file. `--lead` is no longer accepted by `jev_client.py`.
+
 ## [0.16.0] - 2026-10-14
 
 ### Changed
