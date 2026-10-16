@@ -60,7 +60,7 @@ FIELDS: dict[str, str] = {
     "Snapshot": "schema generated_at phase root_closed stopped agents sections problems errors metrics gh top_pr "
                 "top_ci mermaid sprints interval_s lead bead_prefix sent prs files",
     "State": "problems cycle_first_send last_batch last_cycle idle_since sent remotes batch_due",
-    "PhaseFile": "phase root_id label sprints depends_on",
+    "PhaseFile": "phase root_id label sprints depends_on lead templates",
     "MergeFile": "checked_at merges",
     "PrsFile": "read_at gh prs",
     "ActionLine": "at kind to bead text",

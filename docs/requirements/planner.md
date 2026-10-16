@@ -35,7 +35,7 @@ Sources: `plugins/atm-bd-orchestration/skills/`: `atm-beads/` (SKILL.md, resourc
 24. A not-yet-existing id only when its document is in `owned_paths` and a deliverable says the sprint adds it.
 25. No dev, sanity or QA bead is planned: `bead-groups --phase <x>` pours each sprint's dev ← sanity ← qa group under its container after import; no assignee.
 26. Stop on any render failure; never let a failed render drop a bead.
-27. Hand-write the plan file `<plans_dir>/phase-<x>.jsonl` (one `{"sprint", optional "depends_on"}` line per sprint) and the phase file `.atm-bd/phase-<x>.toml`; never generated from beads, nor beads from it.
+27. Hand-write the plan file `<plans_dir>/phase-<x>.jsonl` (one `{"sprint", optional "depends_on"}` line per sprint). Create `.atm-bd/phase-<x>.toml` before validation or pouring with `phase-config init --phase <x> --lead <appointed-lead>`: explicit lead, repository-derived plan/root/integration branch, and seven existing installed template paths (`dev`, `dev_fix`, `fix`, `sanity`, `qa`, `plan_review`, `review`). The writer refuses to overwrite an existing phase; neither file is generated from beads, nor beads from it.
 28. `validate-plan` on the rendered plan; exit 5: fix every problem and re-render.
 29. `bd import --dry-run`, then `bd import`, then `bead-groups --phase <x>`.
 30. At once create `<root>-plan-qa` (no assignee, parent root); every sprint container blocks on it.

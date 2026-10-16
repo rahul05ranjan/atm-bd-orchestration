@@ -12,11 +12,12 @@ def test_every_console_path_resolves_under_one_root(tmp_path) -> None:
     assert state_directory(tmp_path, "atm-bh") == tmp_path / ".atm-bd" / "atm-bd-console" / "atm-bh"
 
 
-def test_config_state_dir_is_the_state_directory(tmp_path) -> None:
+def test_config_state_dir_is_the_state_directory(phase_repo) -> None:
+    tmp_path = phase_repo
     (tmp_path / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
-    loaded = load_config(tmp_path, "atm-bh", "fenix")
+    loaded = load_config(tmp_path, "bh")
     assert isinstance(loaded, Ok)
-    assert loaded.value.state_dir == str(state_directory(tmp_path, "atm-phase-atm-bh"))
+    assert loaded.value.state_dir == str(state_directory(tmp_path, "atm-phase-bh"))
 
 
 def test_logger_writes_into_the_log_directory(tmp_path) -> None:

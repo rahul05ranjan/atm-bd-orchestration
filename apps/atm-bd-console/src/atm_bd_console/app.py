@@ -8,11 +8,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, VerticalScroll
+from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
+from textual.message import Message
 from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
@@ -48,13 +50,25 @@ def _lock_message(error: Error) -> str:
     return f"atm-bd-console: {error.kind}: {error.path}: {error.message}; {error.fix}"
 
 
+class StatusPanel(ScrollableContainer):
+    class Resized(Message):
+        pass
+
+    def on_resize(self) -> None:
+        self.post_message(self.Resized())
+
+
 class ConsoleApp(App[int]):
     CSS = """
     TabbedContent, TabPane { height: 1fr; }
     #dispatch-panel { height: 1fr; }
     #status-panel { overflow: auto auto; height: 1fr; }
     #status-text { width: auto; height: auto; }
-    #sprints { height: auto; max-height: 12; }
+    #status-overflow { display: none; height: 1; }
+    #sprint-details { height: 11; }
+    #sprints { width: 1fr; height: 1fr; }
+    #sprint-steps { width: 1fr; height: 1fr; }
+    #sprint-steps-text { width: auto; height: auto; }
     #status-bar { dock: bottom; height: 1; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
@@ -77,6 +91,7 @@ class ConsoleApp(App[int]):
         self._step_lock = threading.Lock()
         self._tick_running = False
         self._pending_forced_refresh = False
+        self._status_view_initialized = False
 
     def compose(self) -> ComposeResult:
         with TabbedContent(initial="dispatch"):
@@ -84,10 +99,13 @@ class ConsoleApp(App[int]):
                 yield Static(id="dashboard")
             with TabPane("Status", id="status"):
                 yield Static(id="status-header")
-                yield OptionList(id="sprints")
-                yield Static(id="sprint-steps")
-                with ScrollableContainer(id="status-panel"):
+                yield Static("↔ Wide graph · focus graph and use ←/→ to pan", id="status-overflow")
+                with StatusPanel(id="status-panel"):
                     yield Static(id="status-text")
+                with Horizontal(id="sprint-details"):
+                    yield OptionList(id="sprints")
+                    with VerticalScroll(id="sprint-steps"):
+                        yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
         yield Static(id="status-bar")
@@ -110,6 +128,8 @@ class ConsoleApp(App[int]):
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.pane.id == "prs":
             self.tick(True)
+        elif event.pane.id == "status":
+            self.call_after_refresh(self._refresh_status_viewport)
 
     def tick(self, force_github: bool) -> None:
         # Interval ticks are intentionally dropped while work is in flight. Forced
@@ -170,6 +190,8 @@ class ConsoleApp(App[int]):
         sprints.add_options([Option(f"{sprint.id}  {sprint.title}", id=sprint.id) for sprint in snapshot.sprints])
         if highlighted is not None and highlighted < len(snapshot.sprints):
             sprints.highlighted = highlighted
+        elif snapshot.sprints:
+            sprints.highlighted = next((index for index, sprint in enumerate(snapshot.sprints) if sprint.state != "closed"), 0)
         self.refresh_views()
         # Panel sizes settle after the first layout; render once more at the laid-out size.
         self.call_after_refresh(self.refresh_views)
@@ -184,10 +206,29 @@ class ConsoleApp(App[int]):
         if self.snapshot is None:
             return
         sprint = next((value for value in self.snapshot.sprints if value.id == sprint_id), None)
-        self.query_one("#sprint-steps", Static).update(sprint_steps(sprint) if sprint else "")
+        self.query_one("#sprint-steps-text", Static).update(sprint_steps(sprint) if sprint else "")
 
     def on_resize(self) -> None:
         self.call_after_refresh(self.refresh_views)
+
+    def on_status_panel_resized(self) -> None:
+        self.call_after_refresh(self._refresh_status_viewport)
+
+    def _refresh_status_viewport(self) -> None:
+        if self.query_one(TabbedContent).active != "status":
+            return
+        panel = self.query_one("#status-panel", ScrollableContainer)
+        width = panel.scrollable_content_region.width
+        if width <= 0:
+            return
+        lines = self.status_text.splitlines()
+        self.query_one("#status-overflow").display = max((cell_len(line) for line in lines), default=0) > width
+        if not self._status_view_initialized:
+            first_line = next((line for line in lines if line.strip()), None)
+            if first_line is not None:
+                indent = first_line[:len(first_line) - len(first_line.lstrip())]
+                panel.scroll_to(x=cell_len(indent), animate=False, immediate=True)
+                self._status_view_initialized = True
 
     def refresh_views(self) -> None:
         snapshot = self.snapshot
@@ -207,6 +248,7 @@ class ConsoleApp(App[int]):
             header.truncate(width, overflow="ellipsis")
             self.query_one("#status-header", Static).update(header)
             self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
+            self.call_after_refresh(self._refresh_status_viewport)
         if self.tick_error is not None:
             dashboard, header = render.tick_error(self.tick_error, dashboard_width)
             self.query_one("#dashboard", Static).update(dashboard)

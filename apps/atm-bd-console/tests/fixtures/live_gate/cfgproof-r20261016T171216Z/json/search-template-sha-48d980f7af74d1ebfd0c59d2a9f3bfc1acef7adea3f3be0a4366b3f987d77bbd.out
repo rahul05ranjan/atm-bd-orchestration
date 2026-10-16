@@ -1,0 +1,56 @@
+{
+  "hits": [
+    {
+      "key": {
+        "team": "cfgproof-r20261016T171216Z",
+        "agent": "cfg-receiver",
+        "message_key": "atm:01M52VC5DTD6502QNSHRXQN8J8"
+      },
+      "message_id": "01M52VC5DTD6502QNSHRXQN8J8",
+      "message_at": "2026-10-16T17:15:23.450585Z",
+      "from_agent": {
+        "agent": "fenix",
+        "team": "cfgproof-r20261016T171216Z",
+        "chat_id": null
+      },
+      "to_agent": {
+        "agent": "cfg-receiver",
+        "team": "cfgproof-r20261016T171216Z",
+        "chat_id": null
+      },
+      "template_type": "cfgproof-sanity",
+      "category": null,
+      "snippet": "metadata match",
+      "workflow": {
+        "snapshot": {
+          "scope_kind": "sprint",
+          "scope_id": "cfgproof-1",
+          "state": "dev-sanity-start",
+          "stage": "dev-sanity",
+          "transition": "start"
+        },
+        "tag_provenance": {
+          "instance_tags": [],
+          "applied_template_tags": [],
+          "derived_tags": [
+            "template-type:cfgproof-sanity",
+            "workflow-scope-kind:sprint",
+            "workflow-stage:dev-sanity",
+            "workflow-state:dev-sanity-start",
+            "workflow-transition:start"
+          ],
+          "effective_tags": [
+            "template-type:cfgproof-sanity",
+            "workflow-scope-kind:sprint",
+            "workflow-stage:dev-sanity",
+            "workflow-state:dev-sanity-start",
+            "workflow-transition:start"
+          ]
+        }
+      }
+    }
+  ],
+  "aggregate": null,
+  "next_cursor": null,
+  "lifecycle": null
+}

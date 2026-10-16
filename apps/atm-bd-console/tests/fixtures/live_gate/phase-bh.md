@@ -1,5 +1,11 @@
 # Phase BH live-gate transcript
 
+Commands in this transcript retain their historical syntax. For current
+launches, configure `lead` and all seven template purposes in
+`.atm-bd/phase-bh.toml`, then run
+`atm-bd-console --phase bh --interval 600 --dry-run`; console `--as` was removed
+by the phase-settings update.
+
 This file has two parts. The first is the primary live transcript for
 REFRESH-03 (`atm-phase-bh.refresh-f3`), taken at source SHA `6af2231085580d0bcba1c6234afcbc1840854062`. The second
 retains the earlier R11 capture and the historical recovery evidence, verbatim.

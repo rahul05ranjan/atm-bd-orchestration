@@ -346,6 +346,8 @@ class PhaseFile:
     label: str
     sprints: tuple[str, ...]
     depends_on: Mapping[str, tuple[str, ...]]
+    lead: str
+    templates: Mapping[str, str]
 
 
 @dataclass(frozen=True)

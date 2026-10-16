@@ -4,7 +4,6 @@ version: 1.0.0
 format: yaml
 required_variables:
   - bead_prefix
-  - lead
   - dev_sanity_member
   - qa_member
   - worktree_base
@@ -21,7 +20,6 @@ required_variables:
 # Do not edit: change registry.yaml and rerun the install. Read it through
 # .claude/skills/atm-beads/scripts/repo_config.py (load()).
 bead_prefix: {{ bead_prefix | tojson }}
-lead: {{ lead | tojson }}
 dev_sanity_member: {{ dev_sanity_member | tojson }}
 qa_member: {{ qa_member | tojson }}
 worktree_base: {{ worktree_base | tojson }}

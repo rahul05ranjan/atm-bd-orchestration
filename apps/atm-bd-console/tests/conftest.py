@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,14 @@ from textual.worker import WorkerCancelled
 
 from atm_bd_console import app as console
 from atm_bd_console.types import Config, Snapshot, State
+
+
+@pytest.fixture
+def phase_repo(tmp_path: Path) -> Path:
+    root = tmp_path / "phase-repo"
+    shutil.copytree(Path(__file__).parent / "fixtures/beads/repo", root)
+    (root / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
+    return root
 
 # Only the system directories a fake script or a source's own subprocess needs; never the caller's PATH.
 SYSTEM_PATH = ("/usr/bin", "/bin")

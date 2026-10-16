@@ -2,7 +2,7 @@
 # the required_variables of config/atm-bd-orchestration.yaml.j2, read from the
 # consuming repository's .claude/agents/registry.yaml (see README.md).
 #
-# The files below carry install-time placeholders ({{ lead }}, {{ dev_sanity_member }},
+# The files below carry install-time placeholders ({{ dev_sanity_member }},
 # {{ bead_prefix }}, {{ worktree_base }} from the config; {{ repo_slug }},
 # {{ repo_name }}, {{ repo_root }}, {{ workflow_issues_root }} derived from the
 # repository) and are rendered strictly with the sc-compose wheel when installed.

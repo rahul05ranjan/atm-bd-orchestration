@@ -1,5 +1,42 @@
 # Console operational logs
 
+## Launch settings
+
+Run `atm-bd-console --phase bh` from the repository root. For one cron tick,
+use `atm-bd-console --phase bh --headless`; add `--dry-run` to preview actions.
+The phase file `.atm-bd/phase-bh.toml` supplies the assignment identity and
+template paths:
+
+```toml
+plan = "docs/plans/phase-bh.jsonl"
+root = "atm-phase-bh"
+integration_branch = "integrate/phase-bh"
+lead = "solar"
+
+[templates]
+dev = ".claude/skills/atm-bd-orchestration/templates/dev-template.xml.j2"
+dev_fix = ".claude/skills/atm-bd-orchestration/templates/dev-fix.xml.j2"
+fix = ".claude/skills/atm-bd-orchestration/templates/fix-assignment.xml.j2"
+sanity = ".claude/skills/atm-bd-orchestration/templates/dev-sanity-template.xml.j2"
+qa = ".claude/skills/atm-bd-orchestration/templates/qa-template.xml.j2"
+plan_review = ".claude/skills/atm-bd-orchestration/templates/plan-review-template.xml.j2"
+review = ".claude/skills/atm-bd-orchestration/templates/review-template.xml.j2"
+```
+
+All seven purposes are required. Each value must name an existing file under
+the installed template directory, relative to the repository root. Missing,
+empty, unknown, or invalid settings produce `config_invalid` naming the key
+before the console starts. Console `--as` is removed; `lead` is read only from
+the phase file, with no environment or repository YAML fallback. Each tick
+reloads these phase settings. Team and sanity/QA recipients still come from
+`.atm.toml` and `.claude/project/atm-bd-orchestration.yaml`, respectively.
+
+The console automatically assigns ready sanity and QA work using
+`templates.sanity` and `templates.qa`. It passes the configured path to
+`atm task assign --template` and the phase lead to ATM's `--as`. The other
+purposes support orchestration workflows and do not enable additional console
+dispatch kinds.
+
 ## Dispatch verification
 
 Ready sanity and QA assignments require a successful merge check for their

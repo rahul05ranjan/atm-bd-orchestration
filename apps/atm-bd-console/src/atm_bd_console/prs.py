@@ -34,4 +34,11 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
 
 
 def render_prs(snapshot: Snapshot, width: int) -> Text:
+    if not snapshot.prs:
+        if snapshot.gh.mode == "off":
+            return Text("GitHub checks are off")
+        if snapshot.gh.error is not None:
+            return Text(f"GitHub read failed: {snapshot.gh.error.kind}")
+        checked = snapshot.gh.at.strftime("%H:%M") if snapshot.gh.at else "unknown time"
+        return Text(f"No open PR for phase {snapshot.phase} (checked {checked})")
     return Text("\n").join(_fit(_row(value, snapshot), width) for value in snapshot.prs)

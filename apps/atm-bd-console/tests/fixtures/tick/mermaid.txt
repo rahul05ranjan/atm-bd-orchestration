@@ -1,7 +1,7 @@
 graph TD
-    atm_bh_1["✅ atm-bh-1 contract"]
-    atm_bh_2["✅ atm-bh-2 viewer"]
-    atm_bh_3["🌀 atm-bh-3 source atm-bh-3.group-dev solar"]
+    atm_bh_1["✅ bh-1<br/>contract"]
+    atm_bh_2["✅ bh-2<br/>viewer"]
+    atm_bh_3["🌀 bh-3 dev:solar<br/>source"]
     atm_bh_1 --> atm_bh_3
-    atm_bh_4["📥 atm-bh-4 mapper atm-bh-4.group-dev unassigned"]
+    atm_bh_4["📥 bh-4 dev:unassigned<br/>mapper"]
     atm_bh_1 --> atm_bh_4

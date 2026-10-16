@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
@@ -109,7 +110,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         Inputs(now, config.lead, repo, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty),
         state,
         now,
-        atm_bd.dispatch_spec,
+        partial(atm_bd.dispatch_spec, templates=file.templates),
     )
     next_state = state if config.dry_run else next_state
     written = store.write_state(next_state)
@@ -142,6 +143,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
         persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
         return persisted, state
+    config = replace(config, lead=file.value.lead)
     root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
@@ -223,7 +225,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
             error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None,
         )
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
-    snapshot, actions, next_state = model.tick(inputs, state, now, atm_bd.dispatch_spec)
+    snapshot, actions, next_state = model.tick(inputs, state, now, partial(atm_bd.dispatch_spec, templates=file.value.templates))
     steps = {item.bead_id: item for item in phase.value.steps} if isinstance(phase, Ok) else {}
     for section in snapshot.sections:
         if section.label == "Held":

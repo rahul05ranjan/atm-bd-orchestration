@@ -12,10 +12,9 @@ Two ways in:
 Configuration. The only input is the consuming repository's
 `.claude/agents/registry.yaml` (plus `--set NAME=VALUE`, which wins). The
 variables are the `required_variables` of `config/atm-bd-orchestration.yaml.j2`;
-each is read from the top-level registry key of the same name, except the three
+each is read from the top-level registry key of the same name, except the two
 role members, which are read from `roles:`:
 
-    lead               -> roles.lead
     dev_sanity_member  -> roles.dev-sanity
     qa_member          -> roles.quality-mgr
 
@@ -81,7 +80,7 @@ LIST_VARIABLES = frozenset({
     "reviewers_round1",
 })
 # Variables read from registry.yaml `roles:` and written back there.
-ROLE_KEYS = {"lead": "lead", "dev_sanity_member": "dev-sanity", "qa_member": "quality-mgr"}
+ROLE_KEYS = {"dev_sanity_member": "dev-sanity", "qa_member": "quality-mgr"}
 # Variables naming agents that must have .claude/agents/<name>.md. dev_sanity_member
 # is a team member running the dev-sanity directive and may have no agent file.
 AGENT_VARIABLES = ("qa_member", "reviewers_round1")
@@ -90,7 +89,6 @@ AGENT_VARIABLES = ("qa_member", "reviewers_round1")
 # `render:` in registry.yaml). repo_slug, repo_name and
 # workflow_issues_root are derived from the repository, not configured.
 RENDER_VARIABLES = (
-    "lead",
     "dev_sanity_member",
     "bead_prefix",
     "workflow_issues_root",

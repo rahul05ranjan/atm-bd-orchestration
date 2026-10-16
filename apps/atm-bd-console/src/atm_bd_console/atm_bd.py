@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from collections.abc import Mapping
@@ -15,6 +16,8 @@ from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoCo
 # atm-bd conventions (atm-beads sprint_index_common.py): the only place they are named.
 PHASE_DIR = ".atm-bd"
 PHASE_KEYS = ("plan", "root", "integration_branch")
+TEMPLATE_PURPOSES = ("dev", "dev_fix", "fix", "sanity", "qa", "plan_review", "review")
+TEMPLATE_DIRECTORY = Path(".claude/skills/atm-bd-orchestration/templates")
 PLAN_KEYS = frozenset({"sprint", "depends_on"})
 PHASE_ID = re.compile(r"[a-z0-9]+")
 SPRINT_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
@@ -41,11 +44,6 @@ SPRINT_KEY = "sprint"
 SPRINT_BEAD_KEY = "sprint_bead"
 QUICK_FIX_KEY = "quick_fix"
 BRANCH_KEY, PR_TARGET_KEY, WORKTREE_KEY, LAYER_KEY, DIFFICULTY_KEY = "branch", "pr_target", "worktree", "layer", "difficulty"
-# The production template each dispatched StepKind fills.
-TEMPLATES: Mapping[StepKind, str] = {
-    SANITY_KIND: "dev-sanity-template.xml.j2",
-    QA_KIND: "qa-template.xml.j2",
-}
 # Semantic source name -> production template variable. Dispatch code uses these names
 # so the template contract is defined here once, next to the template paths.
 DISPATCH_KEYS: Mapping[str, str] = {
@@ -135,8 +133,34 @@ def _plan(path: Path) -> Result[tuple[tuple[str, tuple[str, ...]], ...]]:
     return Ok(tuple(rows))
 
 
+def _phase_templates(root: Path, raw: object) -> Result[Mapping[str, str]]:
+    templates = raw if isinstance(raw, dict) else {}
+    for purpose in sorted(templates.keys() - TEMPLATE_PURPOSES):
+        key = f"templates.{purpose}"
+        return Err(ConfigInvalid("config_invalid", key, repr(templates[purpose]), f"remove unknown {key}; use {', '.join(TEMPLATE_PURPOSES)}"))
+    for purpose in TEMPLATE_PURPOSES:
+        key = f"templates.{purpose}"
+        value = templates.get(purpose)
+        fix = f"set {key} to an existing repository-relative file under {TEMPLATE_DIRECTORY}"
+        if not isinstance(value, str) or not value.strip():
+            return Err(ConfigInvalid("config_invalid", key, repr(value), fix))
+        path = Path(value)
+        try:
+            valid = (
+                not value.endswith("/") and not path.is_absolute()
+                and ".." not in path.parts and path.is_relative_to(TEMPLATE_DIRECTORY)
+                and (root / path).resolve().is_relative_to((root / TEMPLATE_DIRECTORY).resolve())
+                and os.path.isfile(os.path.join(root, value))
+            )
+        except (OSError, RuntimeError, ValueError):
+            valid = False
+        if not valid:
+            return Err(ConfigInvalid("config_invalid", key, repr(value), fix))
+    return Ok({purpose: templates[purpose] for purpose in TEMPLATE_PURPOSES})
+
+
 def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
-    """`.atm-bd/phase-<x>.toml` (plan, root, integration_branch) and the plan file it names."""
+    """Read the phase identity, dispatch settings, and its named plan file."""
     if not PHASE_ID.fullmatch(x):
         return Err(ConfigInvalid("config_invalid", "phase", x, "name the phase as lowercase a-z0-9, e.g. bh"))
     path = Path(repo_root) / PHASE_DIR / f"phase-{x}.toml"
@@ -147,6 +171,12 @@ def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
         raw = tomllib.loads(text.value)
     except tomllib.TOMLDecodeError as error:
         return Err(ParseFailed("parse_failed", str(path), str(error), f"repair the TOML in {path}"))
+    lead = raw.get("lead")
+    if not isinstance(lead, str) or not lead.strip():
+        return Err(ConfigInvalid("config_invalid", "lead", repr(lead), f"set lead in {path} to a nonempty ATM identity"))
+    templates = _phase_templates(Path(repo_root), raw.get("templates"))
+    if isinstance(templates, Err):
+        return templates
     for key in PHASE_KEYS:
         if key not in raw:
             return Err(NotFound("not_found", f"{path}: key {key}", f"add {key} = \"...\" to {path}"))
@@ -161,7 +191,7 @@ def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
         return rows
     ids = {name: sprint_bead_id(root_id, x, name) for name, _ in rows.value}
     depends_on = {ids[name]: tuple(ids[item] for item in items) for name, items in rows.value}
-    return Ok(PhaseFile(x, root_id, _phase_label(x), tuple(ids.values()), depends_on))
+    return Ok(PhaseFile(x, root_id, _phase_label(x), tuple(ids.values()), depends_on, lead=lead, templates=templates.value))
 
 
 def _yaml_scalars(text: str) -> dict[str, Any]:
@@ -342,12 +372,15 @@ def phase(
     return Ok(Phase(root.id, file.label, root.title, closed, tuple(sprints), tuple(steps), tuple(errors)))
 
 
-def dispatch_spec(ctx: DispatchContext) -> Result[DispatchSpec]:
+def dispatch_spec(ctx: DispatchContext, templates: Mapping[str, str]) -> Result[DispatchSpec]:
     current, pr = ctx.step, ctx.pr
-    template = TEMPLATES.get(current.kind)
-    if template is None:
+    if current.kind not in (SANITY_KIND, QA_KIND):
         return Err(ConfigInvalid("config_invalid", f"{current.bead_id}.kind", current.kind,
-                                 f"dispatch only {' or '.join(TEMPLATES)} steps"))
+                                 f"dispatch only {SANITY_KIND} or {QA_KIND} steps"))
+    template = templates.get(current.kind)
+    if not isinstance(template, str) or not template.strip():
+        key = f"templates.{current.kind}"
+        return Err(ConfigInvalid("config_invalid", key, repr(template), f"set {key} in the phase TOML"))
     # Template vars are JSON: layer PRs go as their numbers, the form `gh pr view <n>` takes.
     layer_prs = [layer.number for layer in ctx.layer_prs]
     keys = DISPATCH_KEYS

@@ -2,7 +2,7 @@
 
 D2: phase_file and repo_config on copies of atm-core's real phase-bh files.
 
-tests/fixtures/beads/repo/ holds verbatim copies of atm-core's `.atm-bd/phase-bh.toml`,
+tests/fixtures/beads/repo/ adapts atm-core's `.atm-bd/phase-bh.toml` with phase settings,
 `docs/plans/phase-bh.jsonl` and `.claude/project/atm-bd-orchestration.yaml` (2026-10-14).
 
 D3: phase() over recorded `bd --json` output of real phase-bh beads (atm-core, 2026-10-14).
@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
+from contract_samples import PHASE_TEMPLATES
 
 from atm_bd_console import beads_source
 from atm_bd_console.atm_bd import (
@@ -72,6 +73,7 @@ EXPECTED_PHASE_FILE = PhaseFile(
         "atm-bh-9": ("atm-bh-3", "atm-bh-4", "atm-bh-5", "atm-bh-6", "atm-bh-7", "atm-bh-8"),
         "atm-bh-10": ("atm-bh-9",),
     },
+    lead="fenix", templates=PHASE_TEMPLATES,
 )
 REVIEWERS = (
     "req-qa", "arch-qa", "ruthless-boundary-qa", "rust-qa-agent", "rust-best-practices-agent",
@@ -102,7 +104,7 @@ def test_phase_file_root_comes_from_the_toml_and_sprints_from_the_plan(repo: Pat
     (repo / PLAN).write_text('{"sprint": "bh-1"}\n\n{"sprint": "bh-2", "depends_on": ["bh-1"]}\n')
     result = phase_file(str(repo), "bh")
     assert result == Ok(PhaseFile("bh", "zz-phase-bh", "phase-bh", ("zz-bh-1", "zz-bh-2"),
-                                  {"zz-bh-1": (), "zz-bh-2": ("zz-bh-1",)}))
+                                  {"zz-bh-1": (), "zz-bh-2": ("zz-bh-1",)}, lead="fenix", templates=PHASE_TEMPLATES))
 
 
 def test_phase_file_plan_path_is_the_toml_plan_key(repo: Path) -> None:
@@ -144,7 +146,7 @@ def test_unreadable_phase_file_is_io_failed(repo: Path) -> None:
 @pytest.mark.parametrize("key", ["plan", "root", "integration_branch"])
 def test_each_missing_phase_key_is_not_found_naming_it(repo: Path, key: str) -> None:
     toml = repo / TOML
-    toml.write_text("".join(line + "\n" for line in toml.read_text().splitlines() if not line.startswith(key)))
+    toml.write_text("".join(line + "\n" for line in toml.read_text().splitlines() if not line.startswith(f"{key} = ")))
     error = _err(phase_file(str(repo), "bh"))
     assert isinstance(error, NotFound)
     assert error.what == f"{repo / TOML}: key {key}"
@@ -570,10 +572,10 @@ def render(template: str, values: dict, tmp_path: Path) -> subprocess.CompletedP
 @pytest.mark.parametrize("pr", [PR, None], ids=["with-pr", "no-pr"])
 @pytest.mark.parametrize("kind", list(STEPS))
 def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullRequest | None, tmp_path: Path) -> None:
-    spec = dispatch_spec(context(mapped(STEPS[kind]), pr))
+    spec = dispatch_spec(context(mapped(STEPS[kind]), pr), PHASE_TEMPLATES)
     assert isinstance(spec, Ok), spec
     template, values = expected(kind, pr)
-    assert spec.value.template == template
+    assert spec.value.template == f".claude/skills/atm-bd-orchestration/templates/{template}"
     assert dict(spec.value.vars) == values
     rendered = render(template, dict(spec.value.vars), tmp_path)
     assert rendered.returncode == 0, rendered.stderr
@@ -584,7 +586,7 @@ def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullReque
 def test_dispatch_spec_uses_named_template_variable_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(DISPATCH_KEYS, "task", "task_identifier")
 
-    spec = dispatch_spec(context(mapped(SANITY), None))
+    spec = dispatch_spec(context(mapped(SANITY), None), PHASE_TEMPLATES)
 
     assert isinstance(spec, Ok), spec
     assert spec.value.vars["task_identifier"] == SANITY.id
@@ -607,7 +609,7 @@ def test_fix_bead_without_round_is_not_found_naming_it() -> None:
 def test_qa_step_without_round_is_not_found_not_round_one() -> None:
     from dataclasses import replace
 
-    result = dispatch_spec(context(replace(mapped(SPRINT_QA), qa_round=None), PR))
+    result = dispatch_spec(context(replace(mapped(SPRINT_QA), qa_round=None), PR), PHASE_TEMPLATES)
     assert isinstance(result, Err) and isinstance(result.error, NotFound)
     assert result.error.what == "atm-bh-5.group-qa.metadata.round"
 
@@ -711,7 +713,7 @@ def test_qa_without_round_or_checked_bead_is_a_step_error_and_every_other_step_i
 def test_unsupported_kind_is_config_invalid_not_a_missing_value(kind: str) -> None:
     from dataclasses import replace
 
-    result = dispatch_spec(context(replace(mapped(SANITY), kind=kind), PR))
+    result = dispatch_spec(context(replace(mapped(SANITY), kind=kind), PR), PHASE_TEMPLATES)
     assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
     assert (result.error.key, result.error.value) == ("atm-bh-5.group-sanity.kind", kind)
 
