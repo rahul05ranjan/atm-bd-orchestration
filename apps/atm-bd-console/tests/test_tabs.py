@@ -6,6 +6,7 @@ from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
+from textual import events
 
 from atm_bd_console.app import ConsoleApp, status_header
 from atm_bd_console.types import SprintView, StepView
@@ -84,6 +85,54 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
             sprints.highlighted = 0
             await settle(pilot)
             assert lines(app, "#sprint-steps-text")[1].split()[:2] == [STEP_VIEW.kind, STEP_VIEW.bead_id]
+
+    run_scenario(scenario())
+
+
+def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> None:
+    merged = replace(RUNNING.prs[0], pr=replace(RUNNING.prs[0].pr, state="merged"))
+    snapshot = replace(RUNNING, prs=(RUNNING.prs[0], merged))
+
+    async def scenario() -> None:
+        step = FakeStep(snapshot)
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "prs"
+            await settle(pilot)
+            assert "⑂" not in str(app.query_one("#prs-text").render())
+            await pilot.press("m")
+            await settle(pilot)
+            assert "⑂" in str(app.query_one("#prs-text").render())
+            assert step.calls == [False, True]
+
+    run_scenario(scenario())
+
+
+def test_status_mouse_events_keep_the_active_tab_and_copy_only_a_drag(monkeypatch) -> None:
+    copied: list[str] = []
+    notices: list[str] = []
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        monkeypatch.setattr(app, "notify", lambda message, **_kwargs: notices.append(message))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            tabs = app.query_one("TabbedContent")
+            tabs.active = "status"
+            await settle(pilot)
+            panel = app.query_one("#status-panel")
+            await pilot.mouse_down(panel, offset=(0, 0))
+            panel.on_mouse_move(events.MouseMove(panel, 5, 0, 0, 0, 0, False, False, False))
+            await pilot.mouse_up(panel, offset=(5, 0))
+            await settle(pilot)
+            assert tabs.active == "status" and copied and notices == [f"Copied {len(copied[0])} chars"]
+            copied.clear()
+            notices.clear()
+            await pilot.click("#sprints", offset=(1, 1))
+            await settle(pilot)
+            assert tabs.active == "status" and copied == [] and notices == []
 
     run_scenario(scenario())
 

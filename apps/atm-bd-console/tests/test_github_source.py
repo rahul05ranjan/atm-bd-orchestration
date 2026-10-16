@@ -103,7 +103,7 @@ def test_rest_truncation_and_off_make_only_the_allowed_calls(fake_bin, monkeypat
     calls = fake_gh(fake_bin, monkeypatch, rows)
     result, status = github_source.open_prs("rest")
     assert len(result.value) == 100 and status.truncated
-    assert calls.argv() == [("gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100")]
+    assert calls.argv() == [("gh", "api", "repos/{owner}/{repo}/pulls?state=all&per_page=100")]
     calls.log.unlink()
     off, off_status = github_source.open_prs("off")
     assert off.value == () and off_status.ok is None and calls.argv() == []

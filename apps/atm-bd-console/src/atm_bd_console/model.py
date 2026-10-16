@@ -336,7 +336,7 @@ def _pr_rows(
     by_branch.update({sprint.branch: None for sprint in phase.sprints if sprint.branch not in by_branch})
     relevant = tuple(pr for pr in prs if pr.head in by_branch)
     bases = {pr.base for pr in relevant}
-    top = next((pr for pr in relevant if pr.head not in bases), None)
+    top = next((pr for pr in relevant if pr.state == "open" and pr.head not in bases), None)
     merge_by_branch = {merge.branch: merge for merge in merges}
     rows = tuple(PrRow(
         pr=pr,

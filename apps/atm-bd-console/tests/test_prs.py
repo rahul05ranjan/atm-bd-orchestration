@@ -34,9 +34,9 @@ def test_lower_red_and_green_top_are_display_only() -> None:
     rendered = render_prs(snapshot(), 120)
     lines = rendered.plain.splitlines()
     assert len(lines) == 2
-    assert lines[0].startswith("  #11") and "CI ⛔ lint, test" in lines[0]
+    assert lines[0].startswith("  ◉ #11") and "CI ⛔ lint, test" in lines[0]
     assert "merge ⛔ model.py" in lines[0]
-    assert lines[1].startswith("▲ #12") and "CI ✅" in lines[1] and "merge ✅" in lines[1]
+    assert lines[1].startswith("▲ ◉ #12") and "CI ✅" in lines[1] and "merge ✅" in lines[1]
     assert "L1" in lines[0] and "bh-1.group-dev" in lines[0]
     assert "L2" in lines[1] and "bh-2.group-dev" in lines[1]
     assert any("link https://example/pr/11" in str(span.style) for span in rendered.spans)
@@ -70,3 +70,13 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
     assert render_prs(replace(empty, gh=GhStatus("off", None, None, None, False)), 120).plain == "GitHub checks are off"
     failed = GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, False)
     assert render_prs(replace(empty, gh=failed), 120).plain == "GitHub read failed: timeout"
+
+
+def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
+    base = snapshot()
+    merged = replace(base.prs[0], pr=replace(base.prs[0].pr, state="merged"))
+    closed = replace(base.prs[1], pr=replace(base.prs[1].pr, state="closed"))
+    value = replace(base, prs=(base.prs[0], merged, closed))
+    assert render_prs(value, 120).plain.count("#11") == 1
+    rendered = render_prs(value, 120, include_history=True).plain
+    assert "◉ #11" in rendered and "⑂ #11" in rendered and "⊗ #12" in rendered

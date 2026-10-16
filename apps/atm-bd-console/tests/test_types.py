@@ -39,7 +39,7 @@ FIELDS: dict[str, str] = {
     "RemoteRef": "branch sha",
     "Merge": "branch target state files messages checked_at",
     "Worktree": "path branch head",
-    "PullRequest": "number url head base head_sha ci failed_checks",
+    "PullRequest": "number url head base head_sha ci failed_checks state",
     "GhStatus": "mode ok error at truncated",
     "RepoConfig": "bead_prefix sanity_member qa_member primary_checkout worktree_base lint_command policy_path "
                   "reviewers_round1 plans_dir",
