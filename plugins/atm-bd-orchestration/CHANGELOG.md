@@ -1,18 +1,17 @@
 # Changelog
 
-## Unreleased
+## [0.16.0] - 2026-10-16
 
 ### Changed
 - Each phase file now requires its own `lead` and seven assignment template paths: `dev`, `dev_fix`, `fix`, `sanity`, `qa`, `plan_review`, and `review`. Missing settings and dangling installed-template paths are errors. The planner creates new files with `phase-config init --phase <x> --lead <identity>`; it never overwrites an existing phase.
 - Installation no longer emits a repository-wide `lead`. Reinstall and add the explicit settings to active phase files when upgrading. Console and viewer commands take only the phase for lead selection; there is no `--as` override.
 - Jev startup and child-error announcements take `--phase <x>` and resolve their fallback lead from the phase file. `--lead` is no longer accepted by `jev_client.py`.
-
-## [0.16.0] - 2026-10-14
-
-### Changed
-- `bead-queues` is now a thin `atm-bd-console show --phase <x>` snapshot viewer. It no longer reads beads, ATM tasks, or GitHub; it has no cron JSON/state-file mode. The phase cron is `atm-bd-console --headless --phase <x> --as <lead>`; `--headless` runs one tick and exits.
+- `bead-queues` is now a thin `atm-bd-console show --phase <x>` snapshot viewer. It no longer reads beads, ATM tasks, or GitHub; it has no cron JSON/state-file mode. The phase cron is `atm-bd-console --headless --phase <x>`; `--headless` runs one tick and exits.
 - Plugin installation requires `atm-bd-console >= 0.1.0`. The console owns its `mmdflux >= 2.6.1` status-rendering dependency and reports a typed fix when it is missing or too old.
 - The `bead-queues` install remediation is rendered from the installer's single `CONSOLE_INSTALL` definition.
+
+### Known gaps
+- Live daemon dispatch is not yet proven; `atm-phase-bh.cfg-f1-d6` tracks the next actual Colima round.
 
 ## [0.15.0] - 2026-10-14
 
