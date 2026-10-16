@@ -341,7 +341,7 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
             selected = 0 if all_closed else 1
             options = app.query_one("#sprints")
             assert options.highlighted == selected
-            shown = app.query_one("#sprint-steps").render().plain
+            shown = app.query_one("#sprint-steps-text").render().plain
             assert sprints[selected].id in shown
             assert sprints[selected].steps[0].bead_id in shown
 
@@ -353,8 +353,53 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
             await pilot.press("r")
             await settle(pilot)
             assert options.highlighted == 2
-            shown = app.query_one("#sprint-steps").render().plain
+            shown = app.query_one("#sprint-steps-text").render().plain
             assert "updated sprint" in shown
             assert sprints[2].steps[0].bead_id in shown
+
+    run_scenario(scenario())
+
+
+@pytest.mark.parametrize("size", ((140, 40), (100, 30)))
+def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tuple[int, int]) -> None:
+    two_steps = tuple(StepView(f"atm-bh-2.dev-{number}", "dev", "closed", "solar") for number in range(2))
+    six_steps = tuple(StepView(f"atm-bh-6.dev-{number}", "dev", "open", "solar") for number in range(6))
+    overflowing_steps = tuple(StepView(f"atm-bh-7.dev-{number}", "dev", "open", "solar") for number in range(14))
+    sprints = (
+        SprintView("atm-bh-2", "bh-2: two steps", "ready", (), two_steps),
+        SprintView("atm-bh-6", "bh-6: six steps", "in_progress", (), six_steps),
+        SprintView("atm-bh-7", "bh-7: overflowing steps", "ready", (), overflowing_steps),
+    )
+    step = FakeStep(replace(RUNNING, sprints=sprints, mermaid="graph TD\n    one --> two"))
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
+        async with app.run_test(size=size) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "status"
+            await settle(pilot)
+            panel = app.query_one("#status-panel")
+            initial = panel.region
+            sprints_widget = app.query_one("#sprints")
+            details = app.query_one("#sprint-steps")
+            details_text = app.query_one("#sprint-steps-text")
+            assert sprints_widget.region.width > 0 and details.region.width > 0
+            assert sprints_widget.region.y == details.region.y
+            assert details.region.height == 11
+            assert panel.region.y < details.region.y and panel.region.bottom <= details.region.y
+            assert sprints_widget.region.x < details.region.x
+            sprints_widget.focus()
+            await pilot.press("home")
+            await settle(pilot)
+            assert panel.region == initial
+            await pilot.press("down")
+            await settle(pilot)
+            assert panel.region == initial
+            assert "atm-bh-6.dev-5" in details_text.render().plain
+            await pilot.press("end")
+            await settle(pilot)
+            assert panel.region == initial
+            assert "atm-bh-7.dev-13" in details_text.render().plain
+            assert details.max_scroll_y > 0
 
     run_scenario(scenario())

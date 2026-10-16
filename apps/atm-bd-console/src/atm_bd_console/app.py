@@ -13,7 +13,7 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer, VerticalScroll
+from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
 from textual.message import Message
 from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
@@ -65,7 +65,10 @@ class ConsoleApp(App[int]):
     #status-panel { overflow: auto auto; height: 1fr; }
     #status-text { width: auto; height: auto; }
     #status-overflow { display: none; height: 1; }
-    #sprints { height: auto; max-height: 12; }
+    #sprint-details { height: 11; }
+    #sprints { width: 1fr; height: 1fr; }
+    #sprint-steps { width: 1fr; height: 1fr; }
+    #sprint-steps-text { width: auto; height: auto; }
     #status-bar { dock: bottom; height: 1; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
@@ -96,11 +99,13 @@ class ConsoleApp(App[int]):
                 yield Static(id="dashboard")
             with TabPane("Status", id="status"):
                 yield Static(id="status-header")
-                yield OptionList(id="sprints")
-                yield Static(id="sprint-steps")
                 yield Static("↔ Wide graph · focus graph and use ←/→ to pan", id="status-overflow")
                 with StatusPanel(id="status-panel"):
                     yield Static(id="status-text")
+                with Horizontal(id="sprint-details"):
+                    yield OptionList(id="sprints")
+                    with VerticalScroll(id="sprint-steps"):
+                        yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
         yield Static(id="status-bar")
@@ -201,7 +206,7 @@ class ConsoleApp(App[int]):
         if self.snapshot is None:
             return
         sprint = next((value for value in self.snapshot.sprints if value.id == sprint_id), None)
-        self.query_one("#sprint-steps", Static).update(sprint_steps(sprint) if sprint else "")
+        self.query_one("#sprint-steps-text", Static).update(sprint_steps(sprint) if sprint else "")
 
     def on_resize(self) -> None:
         self.call_after_refresh(self.refresh_views)

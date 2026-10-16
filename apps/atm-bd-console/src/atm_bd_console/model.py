@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+from rich.cells import cell_len
+
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
+from .ids import short_id
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -227,6 +230,41 @@ def _agent_views(
     return tuple(views)
 
 
+def _label_truncate(text: str, width: int) -> str:
+    """Return text no wider than ``width`` cells, reserving room for an ellipsis."""
+    if cell_len(text) <= width:
+        return text
+    kept = ""
+    for character in text:
+        if cell_len(kept + character + "…") > width:
+            break
+        kept += character
+    return kept + "…"
+
+
+def _label_title_lines(title: str, sprint_id: str, bead_prefix: str) -> tuple[str, ...]:
+    """Make the two compact description lines for a Mermaid sprint node."""
+    normalized = " ".join(title.split())
+    prefix = f"{short_id(sprint_id, bead_prefix)}:"
+    if normalized.startswith(prefix):
+        normalized = normalized[len(prefix):].lstrip()
+    words = normalized.split()
+    lines: list[str] = []
+    for word in words:
+        candidate = f"{lines[-1]} {word}" if lines else word
+        if not lines or cell_len(candidate) <= 28:
+            if lines:
+                lines[-1] = candidate
+            else:
+                lines.append(word)
+            continue
+        if len(lines) == 2:
+            lines[-1] = _label_truncate(f"{lines[-1]} {word}", 28)
+            break
+        lines.append(word)
+    return tuple(_label_truncate(line, 28) for line in lines[:2])
+
+
 def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintView, ...], str]:
     if phase is None:
         return (), "graph TD"
@@ -246,9 +284,13 @@ def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintVi
         current = next((step for step in steps if step.status == "in_progress"), None)
         if current is None:
             current = next((step for step in steps if step.ready), None)
-        label = f"{icons[state]} {sprint.id} {sprint.title}"
+        label = f"{icons[state]} {short_id(sprint.id, bead_prefix)}"
         if current:
-            label += f" {current.bead_id} {current.assignee or 'unassigned'}"
+            label += f" {current.kind}:{current.assignee or 'unassigned'}"
+        label = _label_truncate(label, 30)
+        description = _label_title_lines(sprint.title, sprint.id, bead_prefix)
+        if description:
+            label += "<br/>" + "<br/>".join(description)
         node = sprint.id.replace("-", "_").replace(".", "_")
         lines.append(f'    {node}["{label.replace(chr(34), chr(39))}"]')
         for dependency in sprint.depends_on:

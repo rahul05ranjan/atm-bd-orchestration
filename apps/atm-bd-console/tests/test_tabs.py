@@ -73,7 +73,7 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
             sprints.highlighted = 3
             await pilot.press("enter")
             await settle(pilot)
-            shown = lines(app, "#sprint-steps")
+            shown = lines(app, "#sprint-steps-text")
             assert shown[0] == "atm-bh-8  renderers"
             assert [line.split()[:2] + line.split()[-1:] for line in shown[1:]] == [
                 ["dev", "atm-bh-8.group-dev", "solar"],
@@ -83,7 +83,7 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
             ]
             sprints.highlighted = 0
             await settle(pilot)
-            assert lines(app, "#sprint-steps")[1].split()[:2] == [STEP_VIEW.kind, STEP_VIEW.bead_id]
+            assert lines(app, "#sprint-steps-text")[1].split()[:2] == [STEP_VIEW.kind, STEP_VIEW.bead_id]
 
     run_scenario(scenario())
 
