@@ -1,0 +1,184 @@
+"""Crash-safe, inspectable runtime files for one console phase."""
+from __future__ import annotations
+
+import fcntl
+import os
+import tempfile
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Self
+from uuid import uuid4
+
+from .codec import from_json, to_json
+from .paths import state_directory
+from .result import Err, Error, IoFailed, LockHeld, NotFound, Ok, ParseFailed, Result
+from .types import ActionLine, MergeFile, PrsFile, Snapshot, State
+
+
+class StateStore:
+    """The sole writer for a phase's files while its advisory lock is held."""
+
+    def __init__(self, directory: Path, lock_file: Any) -> None:
+        self.directory = directory
+        self._lock_file = lock_file
+        self.load_errors: list[Error] = []
+        self._blocked_writes: dict[str, Err] = {}
+
+    def load_state(self) -> Result[State]:
+        return self._load_runtime("state.json", State)
+
+    def load_merges(self) -> Result[MergeFile]:
+        return self._load_runtime("merge.json", MergeFile)
+
+    def load_prs(self) -> Result[PrsFile]:
+        return self._load_runtime("prs.json", PrsFile)
+
+    def _load_runtime(self, name: str, cls: type[Any]) -> Result[Any]:
+        if name in self._blocked_writes:
+            return self._blocked_writes[name]
+        path = self.directory / name
+        loaded = _read(path, cls)
+        if isinstance(loaded, Ok) or isinstance(loaded.error, NotFound):
+            return loaded
+        backup = path.with_name(f"{name}.corrupt-{datetime.now(UTC):%Y%m%dT%H%M%S}-{uuid4().hex}")
+        try:
+            path.rename(backup)
+        except OSError as error:
+            self.load_errors.append(loaded.error)
+            blocked = Err(IoFailed("io_failed", str(path), str(error), f"preserve {path} before resetting it; writes are blocked"))
+            self._blocked_writes[name] = blocked
+            self.load_errors.append(blocked.error)
+            return blocked
+        recovered = Err(replace(loaded.error, fix=f"inspect preserved file {backup}; runtime data was reset"))
+        self.load_errors.append(recovered.error)
+        return recovered
+
+    def close(self) -> None:
+        """Release promptly; process death also releases this OS lock."""
+        if self._lock_file is not None:
+            try:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._lock_file.close()
+                self._lock_file = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def write_snapshot(self, value: Snapshot) -> Result[None]:
+        return self._write("snapshot.json", value)
+
+    def write_state(self, value: State) -> Result[None]:
+        return self._write("state.json", value)
+
+    def write_merges(self, value: MergeFile) -> Result[None]:
+        return self._write("merge.json", value)
+
+    def write_prs(self, value: PrsFile) -> Result[None]:
+        return self._write("prs.json", value)
+
+    def append_action(self, value: ActionLine) -> Result[None]:
+        path = self.directory / "actions.jsonl"
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(to_json(value) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            return Ok(None)
+        except (OSError, ValueError) as error:
+            return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
+
+    def _write(self, name: str, value: object) -> Result[None]:
+        if name in self._blocked_writes:
+            return self._blocked_writes[name]
+        path = self.directory / name
+        temporary: str | None = None
+        try:
+            payload = to_json(value)
+            descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.", dir=self.directory)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            return Ok(None)
+        except (OSError, ValueError) as error:
+            if temporary is not None:
+                _discard(temporary)
+            return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
+
+
+def acquire_lock(repo_root: str | Path, root_id: str) -> Result[StateStore]:
+    """Create state storage and acquire its non-blocking process-lifetime lock."""
+    directory = state_directory(repo_root, root_id)
+    lock_path = directory / "lock"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        ignore = directory.parent / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n", encoding="utf-8")
+        handle = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            return Err(LockHeld("lock_held", _snapshot_age(directory), "wait for the running console process"))
+        except OSError:
+            handle.close()
+            raise
+        return Ok(StateStore(directory, handle))
+    except OSError as error:
+        return Err(IoFailed("io_failed", str(lock_path), str(error), "repair the state directory permissions"))
+
+
+def load_snapshot(repo_root: str | Path, root_id: str) -> Result[Snapshot]:
+    return _load(repo_root, root_id, "snapshot.json", Snapshot)
+
+
+def load_state(repo_root: str | Path, root_id: str) -> Result[State]:
+    return _load(repo_root, root_id, "state.json", State)
+
+
+def load_merges(repo_root: str | Path, root_id: str) -> Result[MergeFile]:
+    return _load(repo_root, root_id, "merge.json", MergeFile)
+
+
+def load_prs(repo_root: str | Path, root_id: str) -> Result[PrsFile]:
+    return _load(repo_root, root_id, "prs.json", PrsFile)
+
+
+def _load(repo_root: str | Path, root_id: str, name: str, cls: type[Any]) -> Result[Any]:
+    return _read(state_directory(repo_root, root_id) / name, cls)
+
+
+def _discard(path: str) -> None:
+    """Best-effort removal of a temporary file a failed write left behind."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _read(path: Path, cls: type[Any]) -> Result[Any]:
+    try:
+        decoded = from_json(cls, path.read_text(encoding="utf-8"))
+        if isinstance(decoded, Err) and isinstance(decoded.error, ParseFailed):
+            return Err(replace(decoded.error, source=f"{path}:{decoded.error.source}"))
+        return decoded
+    except FileNotFoundError:
+        if not path.is_symlink():
+            return Err(NotFound("not_found", str(path), "run a console tick to create it"))
+        return Err(IoFailed("io_failed", str(path), "broken symbolic link", "repair the runtime file"))
+    except (OSError, UnicodeDecodeError) as error:
+        return Err(IoFailed("io_failed", str(path), str(error), "repair the state directory permissions"))
+
+
+def _snapshot_age(directory: Path) -> int | None:
+    decoded = _read(directory / "snapshot.json", Snapshot)
+    if isinstance(decoded, Err):
+        return None
+    return max(0, int((datetime.now(UTC) - decoded.value.generated_at).total_seconds()))

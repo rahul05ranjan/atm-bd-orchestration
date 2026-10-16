@@ -23,7 +23,7 @@ PKG = Path(__file__).resolve().parents[1]
 SC_COMPOSE = shutil.which("sc-compose") is not None
 REPO_STRINGS = ("sc-observability", "sc-obs", "obs-", "randlee/sc-", "/Users/randlee", "atm-core", "atm-dev")
 SPEC_VARIABLES = [
-    "bead_prefix", "lead", "dev_sanity_member", "qa_member", "worktree_base", "test_command",
+    "bead_prefix", "dev_sanity_member", "qa_member", "worktree_base", "test_command",
     "lint_command", "integration_branch_pattern", "plans_dir", "requirements_globs", "adr_globs",
     "policy_path", "reviewers_round1",
 ]
@@ -39,6 +39,18 @@ def sha(data: bytes) -> str:
 
 def test_generated_blocks_are_current():
     assert gen_manifest.main(["--check"]) == 0
+
+
+def test_bead_queues_install_command_is_rendered_from_installer_constant():
+    source = (PKG / "skills/atm-bd-orchestration/scripts/bead-queues").read_text()
+    values = {name: f"test-{name}" for name in install.RENDER_VARIABLES}
+    values["console_install"] = install.CONSOLE_INSTALL
+
+    rendered = install.render_text(source, values)
+
+    assert "{{ console_install }}" not in rendered
+    assert rendered.count(install.CONSOLE_INSTALL) == 1
+    assert "CONSOLE_INSTALL = \"uv tool install " in rendered
 
 
 def test_manifest_lists_every_skill_and_agent_file():
@@ -83,7 +95,7 @@ def test_config_template_declares_exactly_the_spec_variables_without_defaults():
 
 def test_versions_agree():
     version = install.package_version(PKG)
-    assert version == "0.15.0"
+    assert version == "0.16.0"
     assert json.loads((PKG / ".claude-plugin/plugin.json").read_text())["version"] == version
     assert f"## [{version}]" in (PKG / "CHANGELOG.md").read_text()
 
@@ -92,7 +104,8 @@ def test_versions_agree():
 def shim_sc_compose(bin_dir: Path, cli: str, wheel: str) -> None:
     """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
     bin_dir.mkdir(exist_ok=True)
-    for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel)):
+    for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel),
+                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}")):
         (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
         (bin_dir / name).chmod(0o755)
 
@@ -116,6 +129,25 @@ def test_check_tools_accepts_one_sc_compose_version_in_the_range(tmp_path, monke
         install.check_tools()
     assert refusal in str(caught.value)
     assert "python3 -m pip install 'sc-compose>=1.7.0,<2'" in str(caught.value)
+
+
+@pytest.mark.parametrize(("tool", "reported", "expected"), [
+    ("atm-bd-console", None, "uv tool install"),
+    ("atm-bd-console", "atm-bd-console 0.0.9", "older than required 0.1.0"),
+])
+def test_check_tools_requires_current_console(tmp_path, monkeypatch, tool, reported, expected):
+    bin_dir = tmp_path / "bin"
+    shim_sc_compose(bin_dir, "1.7.0", "1.7.0")
+    path = bin_dir / tool
+    if reported is None:
+        path.unlink()
+    else:
+        path.write_text(f"#!/bin/sh\necho '{reported}'\n")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    with pytest.raises(install.InstallError, match=expected):
+        install.check_tools()
 
 
 def test_the_manifest_requires_sc_compose_from_1_7_0_below_2():
@@ -229,8 +261,8 @@ def test_unknown_set_key_is_rejected(tmp_path):
 def test_set_wins_and_lists_parse(tmp_path):
     repo = make_repo(tmp_path)
     vals = install.resolve_config(repo, {"test_command": "make test", "reviewers_round1": "a, b",
-                                         "adr_globs": '["x/*.md"]', "lead": "other"})
-    assert vals["test_command"] == "make test" and vals["lead"] == "other"
+                                         "adr_globs": '["x/*.md"]'})
+    assert vals["test_command"] == "make test" and "lead" not in vals
     assert vals["reviewers_round1"] == ["a", "b"] and vals["adr_globs"] == ["x/*.md"]
     assert vals["dev_sanity_member"] == "my-sanity" and "qa_member" not in vals
 
@@ -252,9 +284,20 @@ def test_wrong_type_and_misplaced_role_are_named(tmp_path):
     reg.write_text(reg.read_text().replace("reviewers_round1: [req-qa, arch-qa]", "reviewers_round1: req-qa"))
     with pytest.raises(install.InstallError, match="reviewers_round1 must be a list"):
         install.resolve_config(repo, {})
-    reg.write_text(reg.read_text() + "lead: x\n")
-    with pytest.raises(install.InstallError, match="lead belongs under roles.lead"):
+    reg.write_text(reg.read_text() + "dev_sanity_member: x\n")
+    with pytest.raises(install.InstallError, match="dev_sanity_member belongs under roles.dev-sanity"):
         install.resolve_config(repo, {})
+
+
+def test_phase_lead_is_not_an_installer_input(tmp_path):
+    repo = make_repo(tmp_path)
+    reg = repo / ".claude/agents/registry.yaml"
+    before = reg.read_text()
+    assert "lead" not in install.resolve_config(repo, {})
+    with pytest.raises(install.InstallError, match=r"unknown --set variable\(s\): lead"):
+        install.resolve_config(repo, {"lead": "phase-lead"})
+    reg.write_text(before.replace("  lead: my-lead\n", ""))
+    assert "lead" not in install.resolve_config(repo, {})
 
 
 def test_write_roles_updates_in_place_and_keeps_comments(tmp_path):
@@ -290,13 +333,13 @@ def test_fresh_install(tmp_path, capsys):
     # the config file: every declared variable, from registry.yaml and --set
     config = yaml.safe_load((repo / install.CONFIG_OUT).read_text())
     assert list(config) == SPEC_VARIABLES
-    assert config["qa_member"] == "quality-mgr" and config["lead"] == "my-lead"
+    assert config["qa_member"] == "quality-mgr" and "lead" not in config
     assert config["integration_branch_pattern"] == "integrate/phase-{phase}"
     assert config["requirements_globs"] == ["docs/requirements.md", "docs/**/requirements.md"]
     assert config["reviewers_round1"] == ["req-qa", "arch-qa"]
     # the install record: version and the sha256 of every file written
     record = lock(repo)
-    assert record["package"] == "atm-bd-orchestration" and record["version"] == "0.15.0"
+    assert record["package"] == "atm-bd-orchestration" and record["version"] == "0.16.0"
     expected = {f".claude/{rel}" for rel in artifacts["skills"] + artifacts["agents"]} | {install.CONFIG_OUT}
     assert set(record["files"]) == expected
     assert all(sha((repo / k).read_bytes()) == v for k, v in record["files"].items())
@@ -589,7 +632,7 @@ def test_migration_owns_shipped_and_legacy_bytes_and_fails_on_others(tmp_path, p
     assert rc == 0, err
     assert (repo / ".claude" / script).read_bytes() == (PKG / script).read_bytes()
     assert not (repo / ".claude" / dropped).exists()
-    assert lock(repo)["version"] == "0.15.0"
+    assert lock(repo)["version"] == "0.16.0"
 
 
 def _git_has(rev: str) -> bool:

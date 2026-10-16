@@ -1,0 +1,87 @@
+# provenance: source SHA 6af2231085580d0bcba1c6234afcbc1840854062
+# provenance: installed version 0.1.0 (uv tool install of the worktree at that SHA, scratch tool dirs)
+# provenance: session tmux new-session -d -s bhrf3 -x 300 -y 80, then the console command below
+# provenance: command cd /Users/randlee/github/atm-core && GH_REPO=randlee/atm-bd-orchestration /private/tmp/claude-501/-Users-randlee-github-atm-core/9d403cde-f4fc-4a96-9889-e232f1fe0bc9/scratchpad/refresh-f3/bin/atm-bd-console --phase bh --as solar --interval 600 --dry-run
+# provenance: capture tmux capture-pane -p -t bhrf3 (dispatch pane), taken between the initial tick_end 18:51:49.099755Z and the Right key sent at about 18:52:00Z
+# provenance: capture window 2026-10-15T18:51:45Z to 2026-10-15T18:53:03Z; full UTC times in the phase-bh.md transcript
+# ---- payload follows: verbatim tmux capture-pane -p output ----
+ Dispatch  Status  PRs
+╸━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+phase-bh · 11:51 · next 600s
+
+· team-lead  0
+· arch-ctm  0
+· atm-sanity  0
+● cipher  1
+ 🌀 phase-bh.refresh-f3    12s phase-bh: <atm-task id="atm-phase-bh.refresh-f3" sprint="bh-10" mode="fix"> <description><![CDATA[Fix `atm-phase-bh.refresh-f3` (found in sprint bh-10). `bd show atm-phase-bh.refresh-f3` is the assignment: a poured fix bead carries the finding in its description and `…
+· cipher2  0
+· dev-fast  0
+· dev-opus  0
+· fenix  0
+· lumen  0
+· publisher  0
+· quality-mgr  0
+■ solar  1
+ 🌀 phase-bh.refresh-f1     3m phase-bh: <atm-task id="atm-phase-bh.refresh-f1" sprint="phase-end" mode="fix"> <description><![CDATA[Fix `atm-phase-bh.refresh-f1` (found in sprint phase-end). `bd show atm-phase-bh.refresh-f1` is the assignment: a poured fix bead carries the finding in its descripti…
+· teammate  0
+· trinity  0
+
+== Held (12)
+  phase-bh.refresh-f3-qa   0s  not ready
+  phase-bh.refresh-f3-qa   0s  branch not on origin: <missing>
+  phase-bh.refresh-f3-qa   0s  no worktree for <missing>
+  phase-bh.refresh-f3-sanity   0s  not ready
+  phase-bh.refresh-f3-sanity   0s  branch not on origin: <missing>
+  phase-bh.refresh-f3-sanity   0s  no worktree for <missing>
+  phase-bh.refresh-f1-qa   0s  not ready
+  phase-bh.refresh-f1-qa   0s  branch not on origin: <missing>
+  phase-bh.refresh-f1-qa   0s  no worktree for <missing>
+  phase-bh.refresh-f1-sanity   0s  not ready
+  phase-bh.refresh-f1-sanity   0s  branch not on origin: <missing>
+  phase-bh.refresh-f1-sanity   0s  no worktree for <missing>
+
+== Sent
+ 11:51 phase-bh.refresh-f3-sanity → solar
+ 11:51 phase-bh.refresh-f1-qa → arch-ctm
+ 11:51 phase-bh.refresh-f1-qa → arch-ctm
+ 11:51 phase-bh.refresh-f1-sanity → solar
+ 11:51 phase-bh.refresh-f1-sanity → solar
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+gh: graphql ✅ 11:51 | 10/10 [█████████] 100% | active 0h00m | tick 11:51:46

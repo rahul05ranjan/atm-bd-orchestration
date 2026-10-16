@@ -1,0 +1,12 @@
+configured marker in delivered body:
+json/receiver-read-task.out:1
+json/task-list-post.out:1
+basename-fallback marker in delivered body:
+json/receiver-read-task.out:0
+json/task-list-post.out:0
+default dev-sanity-template phrase (first non-frontmatter line of default) in delivered body:
+<atm-task id="{{ task_id }}" sprint="{{ sprint }}" mode="dev-sanity">
+
+0
+default dev-sanity-template unchanged vs source:
+identical

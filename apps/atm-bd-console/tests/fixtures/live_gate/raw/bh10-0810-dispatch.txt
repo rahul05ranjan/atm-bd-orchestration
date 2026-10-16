@@ -1,0 +1,29 @@
+ Dispatch  Status  PRs
+╸━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+phase-bh · 08:09 · next 60s
+
+· team-lead  0
+● arch-ctm  1
+ 🌀 bh-10.qa1-f1-r3-fix.1  23s phase-bh: <atm-task id="atm-bh-10.qa1-f1-r3-fix.1" sprint="bh-10" mode="dev-fix">
+· atm-sanity  0
+· cipher  0
+· cipher2  0
+· dev-fast  0
+· dev-opus  0
+· fenix  0
+· lumen  0
+· publisher  0
+· quality-mgr  0
+· solar  0
+· teammate  0
+· trinity  0
+
+== Held (6)
+  bh-10.qa1-f1-r3-qa       0s  not ready
+  bh-10.qa1-f1-r3-qa       0s  branch not on origin: <missing>
+  bh-10.qa1-f1-r3-qa       0s  no worktree for None
+  bh-10.qa1-f1-r3-sanity   0s  not ready
+  bh-10.qa1-f1-r3-sanity   0s  branch not on origin: <missing>
+  bh-10.qa1-f1-r3-sanity   0s  no worktree for None
+
+gh: graphql ✅ 08:09 | 10/11 [████████░] 91% | active 0h00m | tick 08:09:36

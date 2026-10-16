@@ -35,9 +35,13 @@ Requirements in the consuming repository:
   on PATH.
 
 Jev sanity checks and post-mortem screening also need `TYPESAFE_API_KEY` in the
-agent's environment at run time; without it `.claude/skills/atm-bd-orchestration/scripts/jev_client.py --startup`
+agent's environment at run time; without it `.claude/skills/atm-bd-orchestration/scripts/jev_client.py --startup --phase <x>`
 reports `SANITY.JEV_UNAVAILABLE` and dev-sanity records every JEV slot as
 unavailable (the LLM subagent still runs and selection takes its replies).
+Jev announcements use `--announce --phase <x>` and resolve the fallback lead
+from that phase's tracked settings; `--lead` is not an announcement input.
+Before a phase task exists, a synthetic `--startup` probe may omit `--phase`
+and cannot announce its result.
 
 Standalone, from a checkout of this repository:
 
@@ -52,6 +56,61 @@ Through `sc-install` (synaptic-canvas): `sc-install install atm-bd-orchestration
 hook, with `--set` values in `options["args"]`. `prepare()` makes every check
 below and writes nothing; `complete()` places, renders and records the files.
 
+## Phase cron
+
+The console's `--headless` option runs one tick and exits. It shares the
+`runner.step` path with the app. The documented invocation is:
+
+```sh
+atm-bd-console --headless --phase bh
+```
+
+Create the log directory with `mkdir -p /Users/randlee/Library/Logs`, then
+install this crontab entry to run every 15 minutes on the ATM development host.
+It uses absolute repository, executable, PATH, and log paths; a launch or CLI
+failure is written to the same log and keeps a nonzero exit status.
+
+```cron
+*/15 * * * * /bin/bash -lc 'cd /Users/randlee/github/atm-bd-orchestration || { echo "cannot enter orchestration repo" >&2; exit 72; }; export PATH="/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /Users/randlee/.local/bin/atm-bd-console --headless --phase bh; rc=$?; if [ "$rc" -ne 0 ]; then echo "atm-bd-console phase bh failed with exit $rc" >&2; fi; exit "$rc"' >> /Users/randlee/Library/Logs/atm-bd-console-phase-bh.log 2>&1
+```
+
+For Hermes cron, create this script under `~/.hermes/scripts/`. It changes to
+the orchestration repo, sets a cron-safe PATH, checks the executable, and
+propagates any launch or CLI failure. With `--deliver local`, Hermes stores
+stdout and stderr under `~/.hermes/cron/output/<job-id>/<timestamp>.md` and
+records a nonzero run as a failure.
+
+```sh
+mkdir -p ~/.hermes/scripts
+cat > ~/.hermes/scripts/atm-bd-console-bh.sh <<'EOF'
+#!/usr/bin/env bash
+set -u
+repo=/Users/randlee/github/atm-bd-orchestration
+console=/Users/randlee/.local/bin/atm-bd-console
+export PATH=/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+if ! cd "$repo"; then
+  printf 'atm-bd-console cron: cannot enter %s\n' "$repo" >&2
+  exit 72
+fi
+if [ ! -x "$console" ]; then
+  printf 'atm-bd-console cron: executable missing: %s\n' "$console" >&2
+  exit 127
+fi
+"$console" --headless --phase bh
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  printf 'atm-bd-console cron: command failed with exit %s\n' "$rc" >&2
+fi
+exit "$rc"
+EOF
+chmod 700 ~/.hermes/scripts/atm-bd-console-bh.sh
+hermes cron create "*/15 * * * *" --no-agent --script atm-bd-console-bh.sh --deliver local --name "atm-bd-console phase-bh"
+```
+
+The examples use `/Users/randlee`; adjust those paths for the host where the
+cron runs. The lead comes from `.atm-bd/phase-bh.toml`. Disable either cron
+while that phase is paused or complete.
+
 ## Configuration
 
 The variables are declared once, as the `required_variables` of
@@ -64,7 +123,6 @@ time (`skills/atm-beads/scripts/repo_config.py`).
 | Variable | registry.yaml key | Example |
 | --- | --- | --- |
 | `bead_prefix` | `bead_prefix` | `myp` |
-| `lead` | `roles.lead` | `team-lead` |
 | `dev_sanity_member` | `roles.dev-sanity` | `dev-sanity` |
 | `qa_member` | `roles.quality-mgr` | `quality-mgr` |
 | `worktree_base` | `worktree_base` | `../my-repo-worktrees` |
@@ -78,18 +136,40 @@ time (`skills/atm-beads/scripts/repo_config.py`).
 | `reviewers_round1` | `reviewers_round1` (list) | `[req-qa, arch-qa]` |
 
 `--set NAME=VALUE` wins over registry.yaml; a list takes a JSON array or
-`a,b,c`. An unknown name is an error. The resolved `lead`, `dev_sanity_member`
+`a,b,c`. An unknown name is an error. The resolved `dev_sanity_member`
 and `qa_member` are written back into `roles:` (the rest of registry.yaml is kept
 as written), which is the map `resolve-role` reads.
 
 The files listed under `render:` in `registry.yaml` (examples, a few docs and
-tests) also carry install-time placeholders: `{{ lead }}`,
-`{{ dev_sanity_member }}`, `{{ bead_prefix }}`, `{{ worktree_base }}` from the
+tests) also carry install-time placeholders: `{{ dev_sanity_member }}`,
+`{{ bead_prefix }}`, `{{ worktree_base }}` from the
 configuration, and `{{ repo_slug }}`, `{{ repo_name }}` (git origin)
 and `{{ workflow_issues_root }}` (`<bead_prefix>-workflow-issues`)
 derived from the repository. Every other file, including every `*.j2` dispatch
 template, is copied byte for byte. `sc-sanity-jev` and `post_mortem_jev.py` call
 the Jev transport at `.claude/skills/atm-bd-orchestration/scripts/jev_client.py`.
+
+### Phase settings
+
+Each tracked `.atm-bd/phase-<x>.toml` owns its nonempty `lead` and mandatory
+`[templates]` table: `dev`, `dev_fix`, `fix`, `sanity`, `qa`, `plan_review`,
+and `review`. Paths must name existing repository-relative files inside
+`.claude/skills/atm-bd-orchestration/templates/`. Runtime readers report missing
+settings and dangling paths; they never fall back to the generated YAML,
+registry roles, environment identity, or default templates.
+
+Before validating or pouring a new phase, run
+`.claude/skills/atm-beads/scripts/phase-config init --phase <x> --lead <appointed-lead>`.
+It writes the seven standard template paths and repository-derived plan/root/branch
+values, refusing to overwrite an existing phase. See
+[`planning.md`](skills/atm-beads/resources/planning.md#phase-definition-plan-file-and-phase-file)
+for the complete file and purpose mapping. Update `lead` there for a handoff.
+
+On upgrade, rerun the installer to remove the old repository YAML `lead`, and
+add `lead` plus all seven template entries to each active phase file before
+running phase commands. The installer preserves unrelated `roles.lead` launcher
+metadata but neither reads it nor writes it as a phase lead. `--set lead=...`
+and console/viewer `--as` are not supported.
 
 ## Ownership and upgrades
 
