@@ -12,7 +12,7 @@
 - The `bead-queues` install remediation is rendered from the installer's single `CONSOLE_INSTALL` definition.
 
 ### Known gaps
-- Live daemon dispatch is not yet proven; `atm-phase-bh.cfg-f1-d6` tracks the next actual Colima round.
+- Live template delivery is proven against the production ATM daemon (2026-10-16, console from 87ac0d2; evidence in `apps/atm-bd-console/tests/fixtures/live_gate/cfgproof-r20261016T171216Z/`). Not yet exercised: the receiver lifecycle (task_ready/start/close) and the Colima run of the released package; `atm-phase-bh.cfg-f1-d6` tracks both.
 
 ## [0.15.0] - 2026-10-14
 
