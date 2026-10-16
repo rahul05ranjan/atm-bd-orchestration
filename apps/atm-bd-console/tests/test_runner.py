@@ -30,7 +30,7 @@ from atm_bd_console import log, runner
 from atm_bd_console.log import TickLog
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
-from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok
+from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE, ActionLine, Due, GhStatus, Problem, RemoteRef, Section, SectionRow, Task
 
@@ -42,7 +42,6 @@ class StoreReads:
 
     def load_merges(self): return Err(NotFound("not_found", "merge.json", "run"))
     def load_prs(self): return Err(NotFound("not_found", "prs.json", "run"))
-    def load_snapshot(self): return Err(NotFound("not_found", "snapshot.json", "run"))
     def load_actions(self): return Ok((ActionLine(ACTION.at, "assign", "quality-mgr", "atm-bh-6.qa", "QA completed"),))
 
 
@@ -173,6 +172,33 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     assert [row.pr.number for row in snapshot.prs] == [PRS_FILE.prs[0].number]
     assert [(action.text, action.outcome) for action in snapshot.sent] == [("QA completed", "recorded")]
     assert snapshot.errors == ()
+
+
+def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypatch, tmp_path) -> None:
+    closed = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    config = replace(CONFIG, repo_root=str(tmp_path))
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=True, steps=(), step_errors=())))
+    locked = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(locked, Ok)
+
+    with locked.value as store:
+        actions_path = store.directory / "actions.jsonl"
+        for index in range(6):
+            assert store.append_action(ActionLine(
+                ACTION.at + timedelta(minutes=index), "send", "quality-mgr", "atm-bh-6.qa", f"action-{index}",
+            )) == Ok(None)
+        with actions_path.open("a", encoding="utf-8") as handle:
+            handle.write("{not-json}\n")
+        snapshot, _ = runner.step(config, STATE, False, store)
+
+    assert snapshot.stopped == "closed"
+    assert [action.text for action in snapshot.sent] == [f"action-{index}" for index in range(1, 6)]
+    assert len(snapshot.errors) == 1
+    assert isinstance(snapshot.errors[0], ParseFailed)
+    assert snapshot.errors[0].source == f"{actions_path}:7"
 
 
 def test_runner_passes_the_configured_interval_to_inputs(github_runtime) -> None:

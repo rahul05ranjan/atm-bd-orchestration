@@ -34,9 +34,6 @@ class StateStore:
     def load_prs(self) -> Result[PrsFile]:
         return self._load_runtime("prs.json", PrsFile)
 
-    def load_snapshot(self) -> Result[Snapshot]:
-        return self._load_runtime("snapshot.json", Snapshot)
-
     def load_actions(self) -> Result[tuple[ActionLine, ...]]:
         path = self.directory / "actions.jsonl"
         try:
@@ -49,8 +46,9 @@ class StateStore:
         for number, line in enumerate(lines, start=1):
             decoded = from_json(ActionLine, line)
             if isinstance(decoded, Err):
-                return Err(ParseFailed("parse_failed", f"{path}:{number}", decoded.error.message,
-                                       "repair the action history JSON"))
+                self.load_errors.append(ParseFailed("parse_failed", f"{path}:{number}", decoded.error.message,
+                                                    "repair the action history JSON"))
+                continue
             actions.append(decoded.value)
         return Ok(tuple(actions))
 

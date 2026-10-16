@@ -9,7 +9,7 @@ from typing import Literal
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .dispatch import verification_reason
 from .log import TickLog, create_console_logger
-from .result import Err, Ok
+from .result import Err, NotFound, Ok
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
 
@@ -131,7 +131,8 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     snapshot = replace(snapshot, sent=sent)
     next_state = state if config.dry_run else next_state
     written = store.write_state(next_state)
-    errors = (*snapshot.errors, *store.load_errors, *((written.error,) if isinstance(written, Err) else ()))
+    history_errors = () if isinstance(history, Ok) or isinstance(history.error, NotFound) else (history.error,)
+    errors = (*snapshot.errors, *history_errors, *store.load_errors, *((written.error,) if isinstance(written, Err) else ()))
     for error in errors:
         logger.event("error", error=asdict(error))
     logger.finish(actions=0)
