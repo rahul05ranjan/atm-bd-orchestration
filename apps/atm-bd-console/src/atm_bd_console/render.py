@@ -174,6 +174,19 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
             if row.pr is not None:
                 _pr_link(line, row.pr, snapshot)
             lines.append(line)
+    if snapshot.stopped is not None and snapshot.sprints:
+        beads = tuple(step for sprint in snapshot.sprints for step in sprint.steps)
+        lines.extend((Text(), Text(f"== Beads ({len(beads)})")))
+        for step in beads:
+            lines.append(Text(
+                f" {short_id(step.bead_id, snapshot.bead_prefix):<22} {step.status:<12} {step.kind}"
+            ))
+    if snapshot.stopped is not None and snapshot.prs:
+        lines.extend((Text(), Text(f"== PRs ({len(snapshot.prs)})")))
+        for row in snapshot.prs:
+            line = Text(f" PR #{row.pr.number} {row.pr.head} · {row.pr.ci}")
+            line.stylize(f"link {row.pr.url}", 1, 1 + len(f"PR #{row.pr.number}"))
+            lines.append(line)
     if snapshot.sent:
         lines.extend((Text(), Text("== Sent")))
         lines.extend(_sent_line(action, snapshot) for action in snapshot.sent[-5:])

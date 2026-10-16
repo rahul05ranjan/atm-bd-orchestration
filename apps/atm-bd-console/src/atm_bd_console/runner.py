@@ -10,7 +10,7 @@ from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .dispatch import verification_reason
 from .log import TickLog, create_console_logger
 from .result import Err, Ok
-from .state import StateStore
+from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
 
 
@@ -102,16 +102,33 @@ def _write_snapshot(store: StateStore, snapshot: Snapshot, logger: TickLog) -> S
 
 
 def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger):
-    phase = atm_bd.phase(file, root_bead, (), (), ())
+    shown_ids = atm_bd.closed_show_ids(file, ())
+    shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
+    phase = shown if isinstance(shown, Err) else atm_bd.phase(file, root_bead, (), (), shown.value)
     if root_bead is not None and root_bead.status == "closed" and isinstance(phase, Ok):
         phase = Ok(replace(phase.value, step_errors=()))
-    empty = Ok(())
+    cached_prs = load_prs(config.repo_root, file.root_id)
+    cached_merges = load_merges(config.repo_root, file.root_id)
+    cached_snapshot = load_snapshot(config.repo_root, file.root_id)
+    history = store.load_actions()
+    prs = Ok(cached_prs.value.prs) if isinstance(cached_prs, Ok) else Ok(())
+    gh = _gh(config.github)
+    merges = tuple(Ok(merge) for merge in cached_merges.value.merges.values()) if isinstance(cached_merges, Ok) else ()
+    sent = tuple(
+        Action(line.at, line.kind if line.kind in ("assign", "send", "batch") else "send", line.to or "—",
+               (line.bead,) if line.bead else (),
+               line.text if line.kind in ("assign", "send", "batch") else f"{line.kind}: {line.text}", None, "recorded")
+        for line in history.value[-5:]
+    ) if isinstance(history, Ok) else ()
     snapshot, _, next_state = model.tick(
-        Inputs(now, config.lead, repo, config.interval_s, phase, empty, empty, empty, None, None, None, _gh(config.github), empty),
+        Inputs(now, config.lead, repo, config.interval_s, phase, Ok(()), Ok(()), Ok(()), None, merges, prs, gh, Ok(())),
         state,
         now,
         partial(atm_bd.dispatch_spec, templates=file.templates),
     )
+    if isinstance(cached_snapshot, Ok):
+        snapshot = replace(snapshot, agents=cached_snapshot.value.agents)
+    snapshot = replace(snapshot, sent=sent)
     next_state = state if config.dry_run else next_state
     written = store.write_state(next_state)
     errors = (*snapshot.errors, *store.load_errors, *((written.error,) if isinstance(written, Err) else ()))

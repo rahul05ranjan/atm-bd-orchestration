@@ -14,6 +14,7 @@ from contract_samples import (
     CONFIG,
     EARLIER,
     IO_FAILED,
+    MERGE_FILE,
     NOW,
     PHASE,
     PHASE_FILE,
@@ -31,7 +32,7 @@ from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
-from atm_bd_console.types import INITIAL_STATE, Due, GhStatus, Problem, RemoteRef, Section, SectionRow, Task
+from atm_bd_console.types import INITIAL_STATE, ActionLine, Due, GhStatus, Problem, RemoteRef, Section, SectionRow, Task
 
 RUNNING_STATE = replace(STATE, idle_since=None)
 
@@ -41,6 +42,8 @@ class StoreReads:
 
     def load_merges(self): return Err(NotFound("not_found", "merge.json", "run"))
     def load_prs(self): return Err(NotFound("not_found", "prs.json", "run"))
+    def load_snapshot(self): return Err(NotFound("not_found", "snapshot.json", "run"))
+    def load_actions(self): return Ok((ActionLine(ACTION.at, "assign", "quality-mgr", "atm-bh-6.qa", "QA completed"),))
 
 
 class Store(StoreReads):
@@ -128,7 +131,7 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return Store(), calls, events, inputs
 
 
-def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
+def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> None:
     closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
     shown = []
 
@@ -137,32 +140,38 @@ def test_closed_root_stops_before_any_other_source_read(monkeypatch) -> None:
         return Ok(value)
 
     def show(ids):
-        assert not shown and ids == (PHASE_FILE.root_id,)
         shown.append(ids)
-        return Ok((closed,))
+        return Ok((closed,)) if ids == (PHASE_FILE.root_id,) else Ok((BEAD,))
 
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: initial_read(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: initial_read(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", show)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(PHASE))
 
     def forbidden(*_args, **_kwargs):
-        raise AssertionError("closed root must not read another source")
+        raise AssertionError("stopped history must not dispatch or fetch")
 
     store = Store()
+    monkeypatch.setattr(runner, "load_prs", lambda *_: Ok(PRS_FILE))
+    monkeypatch.setattr(runner, "load_merges", lambda *_: Ok(MERGE_FILE))
+    monkeypatch.setattr(runner, "load_snapshot", lambda *_: Ok(SNAPSHOT))
     for source, name in (
-        (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
-        (runner.atm_source, "members"), (runner.atm_source, "tasks"),
         (runner.atm_source, "send"), (runner.atm_source, "assign"),
-        (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
+        (runner.git_source, "fetch"),
         (runner.git_source, "remote_refs"), (runner.git_source, "merge"),
         (runner.github_source, "open_prs"), (runner.atm_bd, "dispatch_spec"),
-        (store, "load_merges"), (store, "load_prs"),
         (store, "append_action"), (store, "write_merges"), (store, "write_prs"),
     ):
         monkeypatch.setattr(source, name, forbidden)
     snapshot, _ = runner.step(CONFIG, STATE, False, store)
-    assert shown == [(PHASE_FILE.root_id,)]
+    assert shown == [(PHASE_FILE.root_id,), (
+        "atm-bh-1", "atm-bh-1.group-dev", "atm-bh-1.group-sanity", "atm-bh-1.group-qa",
+        "atm-bh-6", "atm-bh-6.group-dev", "atm-bh-6.group-sanity", "atm-bh-6.group-qa",
+    )]
     assert snapshot.root_closed and snapshot.stopped == "closed"
+    assert snapshot.agents == SNAPSHOT.agents
+    assert [row.pr.number for row in snapshot.prs] == [PRS_FILE.prs[0].number]
+    assert [(action.text, action.outcome) for action in snapshot.sent] == [("QA completed", "recorded")]
     assert snapshot.errors == ()
 
 
