@@ -22,6 +22,8 @@ jobs:
         python-version: ["3.11", "3.x"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the console build hook embeds rev-list count + sha and refuses shallow checkouts
       - uses: actions/setup-python@v5
         id: python
         with:
