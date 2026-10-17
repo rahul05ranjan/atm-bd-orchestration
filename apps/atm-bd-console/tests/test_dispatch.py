@@ -115,6 +115,21 @@ def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
     assert sanity.actions[0].to == "dev-sanity"
 
 
+def test_closed_pr_cannot_replace_an_open_dispatch_context() -> None:
+    open_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "open", "success", ())
+    closed_pr = replace(open_pr, number=133, head_sha="closed", state="closed")
+    seen: list[DispatchContext] = []
+    outcome = run(step(), prs=(open_pr, closed_pr), spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
+    assert outcome.actions and seen[0].pr == open_pr and seen[0].layer_prs == (open_pr,)
+
+
+def test_draft_pr_remains_in_the_dispatch_context() -> None:
+    draft_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "draft", "success", (), "draft")
+    seen: list[DispatchContext] = []
+    outcome = run(step(), prs=(draft_pr,), spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
+    assert outcome.actions and seen[0].pr == draft_pr and seen[0].layer_prs == (draft_pr,)
+
+
 def test_spec_error_is_reported_without_assignment() -> None:
     error = NotFound("not_found", "checked_bead", "fix the bead")
     outcome = run(step(), spec=lambda context: Err(error))

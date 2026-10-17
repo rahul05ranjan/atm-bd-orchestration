@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "fixtures" / "live_gate"
+APP_ROOT = Path(__file__).parents[1]
 TRANSCRIPT = FIXTURE / "phase-bh.md"
 SOURCE_SHA = re.compile(r"source_sha: ([0-9a-f]{40})")
 INSTALLED_VERSION = re.compile(r"installed_version: ([0-9]+\.[0-9]+\.[0-9]+)")
@@ -16,6 +18,11 @@ CURRENT_HEADING = "## Current run (REFRESH-03)"
 HISTORICAL_HEADING = "## Previous revision (R11 capture, retained verbatim)"
 R11_FILES = {"bh-rdy-f11-dispatch.txt", "bh-rdy-f11-prs.txt", "bh-rdy-f11-status.txt"}
 REFRESH_FILES = {"bh-refresh3-dispatch.txt", "bh-refresh3-prs.txt", "bh-refresh3-status.txt"}
+CFGFPROOF = FIXTURE / "cfgproof-20261016-233500-7192e36d"
+CFGFPROOF_TEMPLATE_SHA = "efa6cd540565952a510244105e199cfb6ff8441591d4192c129653416c8385eb"
+CFGFPROOF_REPORT_SHA = "eaa678ebfe2d378c390952a28e6fdec5b29a3c5654ff9e10c64502369c8f984b"
+CFGFPROOF_PROVENANCE_SHA = "a570198460bfd0a89fa08f554e027733d9afaf89bfd7e7132c46ae419c4ac269"
+LIVE_DISPATCH_CAVEAT = "not proven: live daemon dispatch"
 
 
 def _first(pattern: re.Pattern[str], text: str) -> str:
@@ -112,3 +119,45 @@ def test_a_changed_refresh3_payload_no_longer_matches_its_block() -> None:
 
     assert changed != raw
     assert _fenced(_payload(changed)) not in current
+
+
+def _cfgproof_provenance() -> list[tuple[str, Path, str]]:
+    entries = []
+    for line in (CFGFPROOF / "PROVENANCE.md").read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+            entries.append((parts[0], CFGFPROOF / parts[1], parts[2]))
+    return entries
+
+
+def test_cfgproof_live_dispatch_evidence_has_byte_provenance() -> None:
+    entries = _cfgproof_provenance()
+
+    assert len(entries) == 17
+    assert hashlib.sha256((CFGFPROOF / "PROVENANCE.md").read_bytes()).hexdigest() == CFGFPROOF_PROVENANCE_SHA
+    assert {path.relative_to(CFGFPROOF) for path in CFGFPROOF.rglob("*") if path.is_file()} == {
+        *(path.relative_to(CFGFPROOF) for _, path, _ in entries),
+        Path("PROVENANCE.md"),
+    }
+    for expected_sha, path, tar_entry in entries:
+        assert path.is_file(), path
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected_sha, path
+        assert tar_entry
+
+    report = (CFGFPROOF / "REPORT.md").read_text(encoding="utf-8")
+    catalog = "### Catalog Observation"
+    search = "### Correlated Search"
+    mailbox = "### Receiver mailbox read"
+    assert hashlib.sha256((CFGFPROOF / "REPORT.md").read_bytes()).hexdigest() == CFGFPROOF_REPORT_SHA
+    assert CFGFPROOF_TEMPLATE_SHA in report
+    assert all(marker in report for marker in (catalog, search, mailbox, "### Commit correlation"))
+
+
+def test_live_dispatch_caveat_is_replaced_by_cfgproof_evidence() -> None:
+    for path in (
+        APP_ROOT / "CONTRACT.md",
+        APP_ROOT / "README.md",
+        FIXTURE / "phase-bh.md",
+        FIXTURE / "cfgproof-20261016-233500-7192e36d" / "REPORT.md",
+    ):
+        assert LIVE_DISPATCH_CAVEAT not in path.read_text(encoding="utf-8").lower(), path

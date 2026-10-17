@@ -4,11 +4,18 @@ from rich.text import Text
 
 from .ids import short_id
 from .render import _fit
-from .types import PrRow, Snapshot
+from .types import PrRow, PullRequest, Snapshot
+
+_STATE_GLYPHS = {"open": "◉", "merged": "⑂", "closed": "⊗", "draft": "○"}
+_STATE_STYLES = {"open": "green", "merged": "magenta", "closed": "red", "draft": "grey70"}
+
+def active_pr(pr: PullRequest) -> bool:
+    return pr.state in ("open", "draft")
 
 
 def _row(value: PrRow, snapshot: Snapshot) -> Text:
     line = Text("▲ " if value.top else "  ")
+    line.append(f"{_STATE_GLYPHS[value.pr.state]} ", style=_STATE_STYLES[value.pr.state])
     line.append(f"#{value.pr.number}", style=f"link {value.pr.url}")
     line.append(f"  {value.pr.head} → {value.pr.base}")
     line.append(f"  L{value.layer}" if value.layer is not None else "  L—")
@@ -33,12 +40,13 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
     return line
 
 
-def render_prs(snapshot: Snapshot, width: int) -> Text:
-    if not snapshot.prs:
+def render_prs(snapshot: Snapshot, width: int, include_history: bool = False) -> Text:
+    rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if active_pr(row.pr))
+    if not rows:
         if snapshot.gh.mode == "off":
             return Text("GitHub checks are off")
         if snapshot.gh.error is not None:
             return Text(f"GitHub read failed: {snapshot.gh.error.kind}")
         checked = snapshot.gh.at.strftime("%H:%M") if snapshot.gh.at else "unknown time"
         return Text(f"No open PR for phase {snapshot.phase} (checked {checked})")
-    return Text("\n").join(_fit(_row(value, snapshot), width) for value in snapshot.prs)
+    return Text("\n").join(_fit(_row(value, snapshot), width) for value in rows)

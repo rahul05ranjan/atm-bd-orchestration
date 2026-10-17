@@ -73,6 +73,36 @@ def test_graphql_is_one_call_and_maps_rollups(fake_bin, monkeypatch, state, expe
     assert status.ok is True and calls.argv() == [github_source.GRAPHQL_ARGV]
 
 
+def test_graphql_requests_newest_prs_before_the_100_row_limit() -> None:
+    assert "orderBy: {field: CREATED_AT, direction: DESC}" in github_source.GRAPHQL
+
+
+def test_graphql_and_rest_map_drafts_to_draft_state(fake_bin, monkeypatch) -> None:
+    graph = graphql()
+    graph["data"]["repository"]["pullRequests"]["nodes"][0]["isDraft"] = True
+    fake_gh(fake_bin, monkeypatch, graph)
+    assert github_source.open_prs("graphql")[0].value[0].state == "draft"
+    rest = copy.deepcopy(RECORDED_REST[:1])
+    rest[0]["draft"] = True
+    fake_gh(fake_bin, monkeypatch, rest)
+    assert github_source.open_prs("rest")[0].value[0].state == "draft"
+
+
+def test_graphql_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
+    graph = graphql()
+    node = graph["data"]["repository"]["pullRequests"]["nodes"][0]
+    node.update(state="CLOSED", isDraft=True)
+    fake_gh(fake_bin, monkeypatch, graph)
+    assert github_source.open_prs("graphql")[0].value[0].state == "closed"
+
+
+def test_rest_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
+    rest = copy.deepcopy(RECORDED_REST[:1])
+    rest[0].update(state="closed", draft=True)
+    fake_gh(fake_bin, monkeypatch, rest)
+    assert github_source.open_prs("rest")[0].value[0].state == "closed"
+
+
 
 
 def test_failed_check_runs_and_commit_statuses_are_both_named(fake_bin, monkeypatch) -> None:
@@ -103,7 +133,7 @@ def test_rest_truncation_and_off_make_only_the_allowed_calls(fake_bin, monkeypat
     calls = fake_gh(fake_bin, monkeypatch, rows)
     result, status = github_source.open_prs("rest")
     assert len(result.value) == 100 and status.truncated
-    assert calls.argv() == [("gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100")]
+    assert calls.argv() == [("gh", "api", "repos/{owner}/{repo}/pulls?state=all&per_page=100")]
     calls.log.unlink()
     off, off_status = github_source.open_prs("off")
     assert off.value == () and off_status.ok is None and calls.argv() == []

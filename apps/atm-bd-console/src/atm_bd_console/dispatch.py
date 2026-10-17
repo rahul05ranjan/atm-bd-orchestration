@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .ids import short_id
+from .prs import active_pr
 from .result import CommandFailed, Err, Error, NotFound, Timeout
 from .types import (
     Action,
@@ -72,6 +73,7 @@ def dispatch(
     spec: SpecFn,
     remote_error: Error | None = None,
 ) -> DispatchOutcome:
+    prs = tuple(pr for pr in prs if active_pr(pr))
     remote_by_branch = {remote.branch: remote.sha for remote in remotes}
     merge_by_pair = {(merge.branch, merge.target): merge for merge in merges}
     pr_by_branch = {pr.head: pr for pr in prs}

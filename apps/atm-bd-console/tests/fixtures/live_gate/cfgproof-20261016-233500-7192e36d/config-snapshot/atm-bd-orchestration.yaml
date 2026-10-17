@@ -1,0 +1,8 @@
+bead_prefix: "proof"
+dev_sanity_member: "cfg-receiver"
+qa_member: "cfg-receiver"
+worktree_base: "/opt/data/results/rel-162.2-scopeC-v5/cfgproof-20261016-233500-7192e36d"
+lint_command: "git diff --check"
+policy_path: ".claude/project/quality-policy.md"
+reviewers_round1: []
+plans_dir: "docs/plans"

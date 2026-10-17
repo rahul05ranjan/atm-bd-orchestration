@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
@@ -161,8 +161,15 @@ def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
     if unknown:
         raise _DecodeError(f"{path}.{unknown[0]}", f"unknown field (unknown: {', '.join(unknown)})")
     decoded = {}
-    for name in names:
+    for field in fields(cls):
+        name = field.name
         if name not in value:
+            if field.default is not MISSING:
+                decoded[name] = field.default
+                continue
+            if field.default_factory is not MISSING:
+                decoded[name] = field.default_factory()
+                continue
             raise _DecodeError(f"{path}.{name}", "missing field")
         decoded[name] = _decode(hints[name], value[name], f"{path}.{name}")
     return cls(**decoded)

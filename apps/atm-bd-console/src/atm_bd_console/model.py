@@ -7,6 +7,7 @@ from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
 from .ids import short_id
+from .prs import active_pr
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -336,7 +337,7 @@ def _pr_rows(
     by_branch.update({sprint.branch: None for sprint in phase.sprints if sprint.branch not in by_branch})
     relevant = tuple(pr for pr in prs if pr.head in by_branch)
     bases = {pr.base for pr in relevant}
-    top = next((pr for pr in relevant if pr.head not in bases), None)
+    top = next((pr for pr in relevant if active_pr(pr) and pr.head not in bases), None)
     merge_by_branch = {merge.branch: merge for merge in merges}
     rows = tuple(PrRow(
         pr=pr,
@@ -410,7 +411,7 @@ def _problems(
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
     if fresh_github:
-        heads = {pr.head for pr in prs}
+        heads = {pr.head for pr in prs if active_pr(pr)}
         remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
         pushed = {remote.branch for remote in remotes}
         open_branches = {

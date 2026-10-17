@@ -10,7 +10,7 @@ from typing import ClassVar
 
 from rich.cells import cell_len
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
@@ -57,6 +57,30 @@ class StatusPanel(ScrollableContainer):
     def on_resize(self) -> None:
         self.post_message(self.Resized())
 
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._selection_start = (int(event.x), int(event.y))
+        self._selection_end = None
+        event.stop()
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        if getattr(self, "_selection_start", None) is not None:
+            self._selection_end = (int(event.x), int(event.y))
+        event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        start = getattr(self, "_selection_start", None)
+        end = getattr(self, "_selection_end", None)
+        self._selection_start = self._selection_end = None
+        event.stop()
+        if start is not None and end is not None and start != end:
+            self.app.copy_status_selection(start, end, int(self.scroll_x), int(self.scroll_y))
+
+
+class SprintList(OptionList):
+    async def _on_click(self, event: events.Click) -> None:
+        await super()._on_click(event)
+        event.stop()
+
 
 class ConsoleApp(App[int]):
     CSS = """
@@ -75,6 +99,7 @@ class ConsoleApp(App[int]):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
+        Binding("m", "toggle_pr_history", "PR history"),
         Binding("ctrl+q", "noop", show=False, priority=True),
     ]
 
@@ -92,6 +117,7 @@ class ConsoleApp(App[int]):
         self._tick_running = False
         self._pending_forced_refresh = False
         self._status_view_initialized = False
+        self.show_pr_history = False
 
     def compose(self) -> ComposeResult:
         with TabbedContent(initial="dispatch"):
@@ -103,7 +129,7 @@ class ConsoleApp(App[int]):
                 with StatusPanel(id="status-panel"):
                     yield Static(id="status-text")
                 with Horizontal(id="sprint-details"):
-                    yield OptionList(id="sprints")
+                    yield SprintList(id="sprints")
                     with VerticalScroll(id="sprint-steps"):
                         yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
@@ -124,6 +150,25 @@ class ConsoleApp(App[int]):
 
     def action_noop(self) -> None:
         return None
+
+    def action_toggle_pr_history(self) -> None:
+        self.show_pr_history = not self.show_pr_history
+        self.refresh_views()
+
+    def copy_status_selection(self, start: tuple[int, int], end: tuple[int, int], scroll_x: int, scroll_y: int) -> None:
+        points = sorted(((start[1] + scroll_y, start[0] + scroll_x), (end[1] + scroll_y, end[0] + scroll_x)))
+        (first_line, first_column), (last_line, last_column) = points
+        lines = self.status_text.splitlines()
+        selected = []
+        for line_number in range(first_line, min(last_line + 1, len(lines))):
+            line = lines[line_number]
+            left = first_column if line_number == first_line else 0
+            right = last_column + 1 if line_number == last_line else len(line)
+            selected.append(line[left:right])
+        text = "\n".join(selected)
+        if text:
+            self.copy_to_clipboard(text)
+            self.notify(f"Copied {len(text)} chars", timeout=2)
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.pane.id == "prs":
@@ -240,7 +285,7 @@ class ConsoleApp(App[int]):
         if snapshot is not None:
             height = panel.size.height or self.size.height
             self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
-            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width))
+            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
             self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
             header = Text(status_header(snapshot), no_wrap=True, overflow="ellipsis")
             if self.status_error is not None:

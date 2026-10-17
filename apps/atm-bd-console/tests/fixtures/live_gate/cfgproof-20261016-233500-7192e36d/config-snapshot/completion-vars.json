@@ -1,0 +1,5 @@
+{
+  "task_id": "proof-cfgproof-1.group-sanity",
+  "sprint": "cfgproof-1",
+  "evidence": "message_id=01M53H8Q7R59YY5ZVX1XNS6YVG marker=CFGPROOF_CONFIGURED_cfgproof-20261016-233500-7192e36d rendered_commit=f97cf1b1143916448144a92298e18e014e607c44 origin_sha=f97cf1b1143916448144a92298e18e014e607c44 proof_txt=CFGPROOF_CONFIGURED_cfgproof-20261016-233500-7192e36d template_sha=efa6cd540565952a510244105e199cfb6ff8441591d4192c129653416c8385eb"
+}
