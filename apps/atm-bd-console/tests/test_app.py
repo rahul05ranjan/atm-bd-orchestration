@@ -12,10 +12,11 @@ from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
 from rich.cells import cell_len
+from textual import events
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
-from atm_bd_console.build import identity
+from atm_bd_console.build import display_identity, identity
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
@@ -100,12 +101,32 @@ def test_snapshot_source_failure_is_visible_in_diagnostics_and_written_to_its_lo
     run_scenario(scenario())
 
 
-def test_header_uses_the_cli_build_identity() -> None:
+def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_a_tab() -> None:
     async def scenario() -> None:
         app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            assert app.query_one("#build").render().plain == f"atm-bd-console {identity()}"
+            build = app.query_one("#build")
+            text = f"atm-bd-console {display_identity()}"
+            assert build.render().plain == text and build.display
+            assert build.region.y == 0 and build.region.right == 120
+            tabs_right = max(tab.region.right for tab in app.query("ContentTab"))
+            assert build.region.x > tabs_right
+            assert app.query_one("#--content-tab-dispatch").region.y == 0  # tab headers moved up: no row above them
+            assert app.query_one("#dashboard").region.y == 2  # tabs, underline, content
+            await pilot.resize_terminal(80, 30)
+            await settle(pilot)
+            assert build.display and build.region.right == 80 and build.region.x > tabs_right
+            await pilot.resize_terminal(40, 30)  # no room right of the tab strip: hidden, every tab clickable
+            await settle(pilot)
+            assert not build.display
+            await pilot.click("#--content-tab-diagnostics")
+            await settle(pilot)
+            assert app.query_one("TabbedContent").active == "diagnostics"
+            assert f"Build: {identity()}" in app.query_one("#diagnostics-text").render().plain
+            await pilot.resize_terminal(120, 40)
+            await settle(pilot)
+            assert build.display and build.region.right == 120
 
     run_scenario(scenario())
 
@@ -442,5 +463,54 @@ def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tup
             assert panel.region == initial
             assert "atm-bh-7.dev-13" in details_text.render().plain
             assert details.max_scroll_y > 0
+
+    run_scenario(scenario())
+
+
+def _terminal_press(x: int, y: int) -> tuple[events.MouseDown, events.MouseUp]:
+    # What the terminal driver posts for a click at cell (x, y); the pilot bypasses the app's event entry.
+    return (events.MouseDown(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y),
+            events.MouseUp(None, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y))
+
+
+def test_input_trace_records_terminal_presses_keys_and_tab_changes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, state_dir=str(tmp_path / "state"), interval_s=3600), FakeStep(), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            tab = app.query_one("#--content-tab-status").region
+            for event in _terminal_press(tab.x + 2, tab.y):
+                app.post_message(event)
+            await settle(pilot)
+            panel = app.query_one("#status-panel").region
+            for event in _terminal_press(panel.x + 2, panel.y + 2):
+                app.post_message(event)
+            await pilot.press("d")
+            await settle(pilot)
+            shown = app.query_one("#diagnostics-text").render().plain
+        trace = [line.split(" ", 1)[1] for line in app.input_log_path.read_text().splitlines()]
+        assert str(app.input_log_path) in shown
+        assert trace[0].startswith("start size=120x40 driver=HeadlessDriver TERM=")
+        assert f"mouse_down x={tab.x + 2} y={tab.y} button=1 widget=ContentTab#--content-tab-status active=dispatch" in trace
+        assert "tab status" in trace
+        assert f"mouse_up x={panel.x + 2} y={panel.y + 2} button=1 widget=StatusPanel#status-panel active=status" in trace
+        assert "key d active=status" in trace and "tab diagnostics" in trace
+
+    run_scenario(scenario())
+
+
+def test_off_screen_presses_are_traced_without_raising(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, state_dir=str(tmp_path / "state"), interval_s=3600), FakeStep(), STATE)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(pilot)
+            for x, y in ((500, 500), (-1, -1)):
+                for event in _terminal_press(x, y):
+                    await app.on_event(event)
+            await settle(pilot)
+        trace = [line.split(" ", 1)[1] for line in app.input_log_path.read_text().splitlines()]
+        assert "mouse_down x=500 y=500 button=1 widget=off-screen active=dispatch" in trace
+        assert "mouse_up x=-1 y=-1 button=1 widget=off-screen active=dispatch" in trace
+        assert not any(line.startswith("input trace:") for line in app.diagnostics)
 
     run_scenario(scenario())

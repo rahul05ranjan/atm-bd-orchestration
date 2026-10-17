@@ -13,11 +13,31 @@ except ImportError:
 
 
 def identity(root: Path | None = None) -> str:
+    """Full identity: <major>.<minor>.<commit count>+g<sha>[-dirty] (what --version prints)."""
+    return _checkout_identity(root) or BUILT_IDENTITY or f"{__version__}+unknown"
+
+
+def display_identity(root: Path | None = None) -> str:
+    """The build line in the TUI (#254): a release install shows only <major>.<minor>.<commit count>.
+
+    A checkout (identity derived from git at runtime) and a build from a dirty tree keep the full form, so
+    the sha and the dirty marker stay visible exactly where a debug build is running.
+    """
+    checkout = _checkout_identity(root)
+    if checkout is not None:
+        return checkout
+    if BUILT_IDENTITY is not None and not BUILT_IDENTITY.endswith("-dirty"):
+        return BUILT_IDENTITY.partition("+")[0]
+    return BUILT_IDENTITY or f"{__version__}+unknown"
+
+
+def _checkout_identity(root: Path | None) -> str | None:
+    """Git-derived identity when this package runs from its own checkout, else None."""
     root = root or Path(__file__).resolve().parents[4]
     toplevel = git_source._run(root, "rev-parse", "--show-toplevel")
     package = root / "apps" / ("atm-bd" + "-console") / "pyproject.toml"
     if isinstance(toplevel, Err) or Path(toplevel.value.stdout.strip()).resolve() != root.resolve() or not package.is_file():
-        return BUILT_IDENTITY or f"{__version__}+unknown"
+        return None
     revision = git_source._run(root, "rev-parse", "--short", "HEAD")
     count = git_source._run(root, "rev-list", "--count", "HEAD")
     if isinstance(revision, Err) or isinstance(count, Err) or not count.value.stdout.strip().isdigit():
