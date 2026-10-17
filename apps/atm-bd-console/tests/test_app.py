@@ -16,7 +16,7 @@ from textual import events
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
-from atm_bd_console.build import identity
+from atm_bd_console.build import display_identity
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
@@ -101,12 +101,19 @@ def test_snapshot_source_failure_is_visible_in_diagnostics_and_written_to_its_lo
     run_scenario(scenario())
 
 
-def test_header_uses_the_cli_build_identity() -> None:
+def test_build_line_sits_right_justified_on_the_tab_header_row() -> None:
     async def scenario() -> None:
         app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            assert app.query_one("#build").render().plain == f"atm-bd-console {identity()}"
+            build = app.query_one("#build")
+            assert build.render().plain == f"atm-bd-console {display_identity()}"
+            assert build.region.y == 0 and build.region.right == 120
+            assert app.query_one("#--content-tab-dispatch").region.y == 0  # tab headers moved up: no row above them
+            assert app.query_one("#dashboard").region.y == 2  # tabs, underline, content
+            await pilot.resize_terminal(80, 30)
+            await settle(pilot)
+            assert app.query_one("#build").region.right == 80
 
     run_scenario(scenario())
 

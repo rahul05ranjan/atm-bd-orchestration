@@ -9,7 +9,7 @@ from shutil import copytree, ignore_patterns, which
 import pytest
 
 from atm_bd_console import __version__, build
-from atm_bd_console.build import identity
+from atm_bd_console.build import display_identity, identity
 
 CONSOLE = Path(__file__).resolve().parents[1]
 
@@ -146,3 +146,18 @@ def test_build_rejects_sources_without_reliable_git_identity(tmp_path: Path, fai
     message = {"export": "source is not a console checkout", "missing_git": "git executable is missing",
                "shallow": "checkout is shallow"}[failure]
     assert message in result.stderr
+
+
+@pytest.mark.parametrize(("embedded", "shown"), [
+    ("0.16.490+g846527b", "0.16.490"),            # release install: count only (#254)
+    ("0.16.490+g846527b-dirty", "0.16.490+g846527b-dirty"),  # built from a dirty tree: say so
+    (None, f"{__version__}+unknown"),
+])
+def test_display_identity_shortens_only_clean_release_installs(tmp_path: Path, monkeypatch, embedded, shown) -> None:
+    monkeypatch.setattr(build, "BUILT_IDENTITY", embedded)
+    assert display_identity(tmp_path) == shown
+    assert identity(tmp_path) == (embedded or f"{__version__}+unknown")
+
+
+def test_display_identity_keeps_the_full_form_in_a_checkout() -> None:
+    assert display_identity() == identity() and "+g" in display_identity()

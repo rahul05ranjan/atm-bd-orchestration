@@ -22,7 +22,7 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import prs, render, status
-from .build import identity
+from .build import display_identity
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
@@ -109,7 +109,8 @@ class ConsoleApp(App[int]):
     #sprint-steps { width: 1fr; height: 1fr; }
     #sprint-steps-text { width: auto; height: auto; }
     #status-bar { dock: bottom; height: 1; }
-    #build { dock: top; height: 1; }
+    Screen { layers: base overlay; }
+    #build { layer: overlay; position: absolute; width: auto; height: 1; }
     #diagnostics { height: 1fr; overflow: auto; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
@@ -142,7 +143,6 @@ class ConsoleApp(App[int]):
         self.input_log_path = Path(config.state_dir) / "input.log"
 
     def compose(self) -> ComposeResult:
-        yield Static(f"atm-bd-console {identity()}", id="build")
         with TabbedContent(initial="dispatch"):
             with TabPane("Dispatch", id="dispatch"), VerticalScroll(id="dispatch-panel"):
                 yield Static(id="dashboard")
@@ -160,6 +160,16 @@ class ConsoleApp(App[int]):
             with TabPane("Diagnostics", id="diagnostics"):
                 yield Static(id="diagnostics-text")
         yield Static(id="status-bar")
+        # On the tab-header row, right-justified (#254): an overlay, so the tabs and content keep every row.
+        yield Static(self.build_line, id="build")
+
+    @property
+    def build_line(self) -> str:
+        return f"atm-bd-console {display_identity()}"
+
+    def _place_build_line(self, width: int | None = None) -> None:
+        width = self.size.width if width is None else width
+        self.query_one("#build", Static).offset = (max(width - cell_len(self.build_line), 0), 0)
 
     def _on_interval(self) -> None:
         # A stopped snapshot ends ticking until r.
@@ -206,6 +216,7 @@ class ConsoleApp(App[int]):
         self._trace_input(f"start size={self.size.width}x{self.size.height} driver={type(self._driver).__name__} "
                           f"TERM={os.environ.get('TERM', '')} TERM_PROGRAM={os.environ.get('TERM_PROGRAM', '')} "
                           f"TMUX={'yes' if os.environ.get('TMUX') else 'no'}")
+        self._place_build_line()
         self.tick(False)
         self.set_interval(self.config.interval_s, self._on_interval)
 
@@ -327,7 +338,8 @@ class ConsoleApp(App[int]):
         sprint = next((value for value in self.snapshot.sprints if value.id == sprint_id), None)
         self.query_one("#sprint-steps-text", Static).update(sprint_steps(sprint) if sprint else "")
 
-    def on_resize(self) -> None:
+    def on_resize(self, event: events.Resize) -> None:
+        self._place_build_line(event.size.width)
         self.call_after_refresh(self.refresh_views)
 
     def on_status_panel_resized(self) -> None:
