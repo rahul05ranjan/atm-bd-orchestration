@@ -32,6 +32,9 @@ SUITES = (
 )
 
 
+# PATH before any fixture of this module ran: what the installed suites must inherit.
+PATH_BEFORE_FIXTURES = os.environ["PATH"]
+
 # Installer-checked CLIs the installed suites never invoke, so a host without them (CI runners) may
 # fake them for the install step alone. jq and git are not here: the suites run them for real.
 ABSENT_TOOL_FAKES = ("atm", "atm-bd-console", "bd")
@@ -77,11 +80,15 @@ def test_installed_suite_passes(installed, suite):
 
 
 def test_installed_fixture_does_not_leak_installer_tool_shims(installed):
-    """Installed skill suites inherit the real shell tool path, not installer test fakes."""
-    assert all(path.name != "required-tools" for path in map(Path, os.environ["PATH"].split(os.pathsep)))
+    """Installed skill suites inherit the real shell tool path, not installer test fakes: the fixture put PATH
+    back exactly, so no fake is resolvable afterwards, and the fakes never stand in for jq or git."""
+    assert os.environ["PATH"] == PATH_BEFORE_FIXTURES
+    for name in ABSENT_TOOL_FAKES:
+        found = shutil.which(name)
+        assert found is None or not Path(found).parent.name.startswith("required-tools"), found
+    assert not {"jq", "git"} & set(ABSENT_TOOL_FAKES)
     jq = shutil.which("jq")
-    assert jq is not None
-    assert Path(jq).parent.name != "required-tools"
+    assert jq is not None and not Path(jq).parent.name.startswith("required-tools"), jq
 
 
 def test_dev_bead_ids_take_the_installed_prefix(installed):
