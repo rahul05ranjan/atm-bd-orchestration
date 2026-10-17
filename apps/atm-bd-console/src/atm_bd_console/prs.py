@@ -38,7 +38,7 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
 
 
 def render_prs(snapshot: Snapshot, width: int, include_history: bool = False) -> Text:
-    rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if row.pr.state == "open")
+    rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if row.pr.is_open)
     if not rows:
         if snapshot.gh.mode == "off":
             return Text("GitHub checks are off")

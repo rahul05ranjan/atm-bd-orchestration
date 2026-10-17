@@ -11,7 +11,7 @@ from . import command
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
-GRAPHQL = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number url state headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
+GRAPHQL = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number url state isDraft headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
 # The repository is the checkout gh runs in: gh fills {owner} and {repo} from it (or from GH_REPO).
 GRAPHQL_ARGV = ("gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={GRAPHQL}")
 REST_ARGV = ("gh", "api", "repos/{owner}/{repo}/pulls?state=all&per_page=100")
@@ -51,7 +51,8 @@ def _from_graphql(node: dict) -> PullRequest:
     # CheckRun reports name/conclusion, StatusContext (commit statuses) context/state.
     failed = tuple(str(row.get("name") or row.get("context")) for row in contexts
                    if row.get("conclusion") in FAILURES or row.get("state") in FAILURES)
-    return PullRequest(node["number"], node["url"], node["headRefName"], node["baseRefName"], node["headRefOid"], _ci(rollup.get("state")), failed, node.get("state", "OPEN").lower())
+    state = "draft" if node.get("isDraft") else node.get("state", "OPEN").lower()
+    return PullRequest(node["number"], node["url"], node["headRefName"], node["baseRefName"], node["headRefOid"], _ci(rollup.get("state")), failed, state)
 
 
 def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | None = None):
@@ -72,7 +73,7 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
             rows = tuple(_from_graphql(node) for node in pulls["nodes"])
             truncated = pulls["totalCount"] > 100
         else:
-            rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none", (), "merged" if row.get("merged_at") else row["state"]) for row in body)
+            rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none", (), "merged" if row.get("merged_at") else "draft" if row.get("draft") else row["state"]) for row in body)
             truncated = len(rows) >= 100
     except (json.JSONDecodeError, KeyError, TypeError, AttributeError, IndexError) as exc:
         # A body that is not JSON, or JSON of the wrong shape, is one typed failure; GitHub failing never stops work.

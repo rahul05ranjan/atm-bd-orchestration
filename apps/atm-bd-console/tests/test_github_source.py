@@ -77,6 +77,17 @@ def test_graphql_requests_newest_prs_before_the_100_row_limit() -> None:
     assert "orderBy: {field: CREATED_AT, direction: DESC}" in github_source.GRAPHQL
 
 
+def test_graphql_and_rest_map_drafts_to_draft_state(fake_bin, monkeypatch) -> None:
+    graph = graphql()
+    graph["data"]["repository"]["pullRequests"]["nodes"][0]["isDraft"] = True
+    fake_gh(fake_bin, monkeypatch, graph)
+    assert github_source.open_prs("graphql")[0].value[0].state == "draft"
+    rest = copy.deepcopy(RECORDED_REST[:1])
+    rest[0]["draft"] = True
+    fake_gh(fake_bin, monkeypatch, rest)
+    assert github_source.open_prs("rest")[0].value[0].state == "draft"
+
+
 
 
 def test_failed_check_runs_and_commit_statuses_are_both_named(fake_bin, monkeypatch) -> None:
