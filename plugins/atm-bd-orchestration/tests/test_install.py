@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -28,6 +29,19 @@ SPEC_VARIABLES = [
     "policy_path", "reviewers_round1",
 ]
 needs_sc_compose = pytest.mark.skipif(not SC_COMPOSE, reason="sc-compose not on PATH; install not verified")
+
+
+@pytest.fixture(autouse=True)
+def current_installer_tools(tmp_path, monkeypatch):
+    """Only direct installer tests receive fakes; installed suites inherit real PATH."""
+    bin_dir = tmp_path / "required-tools"
+    bin_dir.mkdir()
+    for name, version in dict(install.declared_tool_requirements()).items():
+        if name in {"atm", "atm-bd-console", "bd", "jq"}:
+            path = bin_dir / name
+            path.write_text(f"#!/bin/sh\necho '{name} {version}'\n")
+            path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 def sha(data: bytes) -> str:
