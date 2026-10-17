@@ -52,7 +52,8 @@ class CustomBuildHook(BuildHookInterface):
     def _include_skills(self, package: Path, root: Path, build_data: dict[str, object]) -> None:
         plugin = root / "plugins" / "atm-bd-orchestration"
         bundled = package / "src" / "atm_bd_console" / "_skills"
-        source = plugin if plugin.is_dir() else bundled
+        # An sdist must use its own contents, never a coincidental adjacent checkout.
+        source = bundled if (package / "PKG-INFO").is_file() else (plugin if plugin.is_dir() else bundled)
         if not source.is_dir():
             raise RuntimeError(f"cannot bundle skills: neither {plugin} nor {bundled} exists")
         destination = "atm_bd_console/_skills" if self.target_name == "wheel" else "src/atm_bd_console/_skills"

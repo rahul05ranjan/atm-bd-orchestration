@@ -60,6 +60,25 @@ def test_wheel_sdist_and_rebuilt_wheel_bundle_every_file(tmp_path: Path) -> None
     for archive in (next(direct.glob("*.whl")), sdist, next(rebuilt.glob("*.whl"))):
         check_archive(archive, expected, commit)
 
+    # An extracted sdist must not pick up an unrelated plugin beside it.
+    foreign = tmp_path / "foreign"
+    plugin = foreign / "plugins" / "atm-bd-orchestration"
+    plugin.mkdir(parents=True)
+    (plugin / "foreign.txt").write_text("not the bundle")
+    unpacked = foreign / "apps" / "atm-bd-console"
+    unpacked.mkdir(parents=True)
+    for name, data in contents(sdist).items():
+        destination = unpacked / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    extracted = next(unpacked.iterdir())
+    # Place the extracted project where the hook's inferred root is `foreign`.
+    moved = foreign / "apps" / "project"
+    extracted.rename(moved)
+    rebuilt_foreign = tmp_path / "rebuilt-foreign"
+    run(UV, "build", "--wheel", "--out-dir", str(rebuilt_foreign), str(moved))
+    check_archive(next(rebuilt_foreign.glob("*.whl")), expected, commit)
+
 
 def test_git_file_install_bundles_the_plugin(tmp_path: Path) -> None:
     commit = run("git", "rev-parse", "HEAD", cwd=REPO).stdout.strip()
