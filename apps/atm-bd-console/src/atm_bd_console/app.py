@@ -60,6 +60,7 @@ class StatusPanel(ScrollableContainer):
     def on_mouse_down(self, event: events.MouseDown) -> None:
         self._pan_position = (int(event.x), int(event.y))
         self.capture_mouse()
+        self.suppress_click()
         event.stop()
 
     def on_mouse_move(self, event: events.MouseMove) -> None:

@@ -124,6 +124,11 @@ def test_status_mouse_events_pan_the_graph_without_changing_tabs() -> None:
             panel.on_mouse_up(events.MouseUp(panel, 10, 0, 0, 0, 0, False, False, False))
             await settle(pilot)
             assert tabs.active == "status" and panel.scroll_x > 0
+            panel.scroll_to(x=0, animate=False)
+            await settle(pilot)
+            await pilot.click("#status-text", offset=(1, 0))
+            await settle(pilot)
+            assert tabs.active == "status"
             await pilot.click("#sprints", offset=(1, 1))
             await settle(pilot)
             assert tabs.active == "status"
