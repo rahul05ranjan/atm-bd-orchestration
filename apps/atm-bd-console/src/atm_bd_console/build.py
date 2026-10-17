@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import __version__
-from . import git_source
+from . import __version__, git_source
 from .result import Err
 
 
