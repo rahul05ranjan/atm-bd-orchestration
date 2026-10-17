@@ -101,15 +101,19 @@ def test_versions_agree():
 
 
 
-def shim_sc_compose(bin_dir: Path, cli: str, wheel: str) -> None:
+def shim_sc_compose(bin_dir: Path, cli: str, wheel: str, python_version: str = "3.11.0") -> None:
     """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
     bin_dir.mkdir(exist_ok=True)
-    for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel),
-                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}"),
+    for name, out in (("sc-compose", f"sc-compose {cli}"),
+                      ("atm-bd-console", f"atm-bd-console {install.manifest_requirement_floor('atm-bd-console')}"),
                       ("atm", "atm 1.6.1"), ("bd", "bd 1.3.0"),
                       ("jq", "jq-1.6"), ("git", "git version 2.27.0")):
         (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
         (bin_dir / name).chmod(0o755)
+    (bin_dir / "python3").write_text(
+        f"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Python {python_version}'; else echo '{wheel}'; fi\n"
+    )
+    (bin_dir / "python3").chmod(0o755)
 
 
 @pytest.mark.parametrize("cli, wheel, refusal", [
@@ -180,6 +184,15 @@ def test_check_tools_refuses_a_declared_tool_below_its_manifest_floor(tmp_path, 
         install.check_tools()
 
 
+def test_check_tools_refuses_python_below_its_manifest_floor(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    shim_sc_compose(bin_dir, "1.7.0", "1.7.0", python_version="3.10.0")
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    with pytest.raises(install.InstallError, match=r"python3 is 3\.10\.0, older than required 3\.11"):
+        install.check_tools()
+
+
 def test_the_manifest_requires_sc_compose_from_1_7_0_below_2():
     assert install.sc_compose_range() == ("1.7.0", 2)
 
@@ -192,6 +205,17 @@ def test_manifest_declares_every_installer_verified_cli():
         ("git", "2.27"),
         ("atm-bd-console", "0.1.0"),
     ]
+
+
+def test_manifest_rejects_requirements_without_a_verifier(monkeypatch):
+    manifest = install.load_manifest()
+    monkeypatch.setattr(install, "load_manifest", lambda _pkg_dir=install.PKG_DIR: {
+        **manifest,
+        "requires": [*manifest["requires"], "unverified-tool >= 1.0"],
+    })
+
+    with pytest.raises(install.InstallError, match=r"unrecognized requirement 'unverified-tool'"):
+        install.declared_tool_requirements()
 
 
 VERSIONED_SKILLS = sorted(p for p in PKG.glob("skills/*/SKILL.md")

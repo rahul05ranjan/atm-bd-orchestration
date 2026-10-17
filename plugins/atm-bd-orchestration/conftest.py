@@ -21,9 +21,10 @@ collect_ignore = ["skills", "agents"]
 def current_console_tools(tmp_path_factory):
     """All installer tests get current external-tool fakes unless they replace PATH."""
     bin_dir = tmp_path_factory.mktemp("required-tools")
-    for name, version in (("atm-bd-console", install.REQUIRED_CONSOLE_VERSION),):
+    floors = dict(install.declared_tool_requirements())
+    for name in ("atm-bd-console", "atm", "bd", "jq"):
         path = bin_dir / name
-        path.write_text(f"#!/bin/sh\necho '{name} {version}'\n")
+        path.write_text(f"#!/bin/sh\necho '{name} {floors[name]}'\n")
         path.chmod(0o755)
     original = os.environ.get("PATH", "")
     os.environ["PATH"] = f"{bin_dir}{os.pathsep}{original}"
