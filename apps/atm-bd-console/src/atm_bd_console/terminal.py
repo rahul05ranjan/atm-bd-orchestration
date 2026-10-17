@@ -17,12 +17,21 @@ if sys.platform == "win32":  # pragma: no cover - the console runs on POSIX term
     CONSOLE_DRIVER_CLASS = None
 else:
     from textual.drivers.linux_driver import LinuxDriver
+    from textual.message import Message
+    from textual.messages import InBandWindowResize
 
     class CellMouseDriver(LinuxDriver):
         """LinuxDriver that never requests in-band resize or pixel mouse reporting."""
 
         def _query_in_band_window_resize(self) -> None:
             return None
+
+        def process_message(self, message: Message) -> None:
+            # Never asked for, so never honoured: the stock handler would flag in-band resize (silencing
+            # SIGWINCH resizes) and enable pixel mouse reporting.
+            if isinstance(message, InBandWindowResize):
+                return
+            super().process_message(message)
 
         def _enable_in_band_window_resize(self) -> None:
             return None
