@@ -58,28 +58,35 @@ class StatusPanel(ScrollableContainer):
         self.post_message(self.Resized())
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
-        self._selection_start = (int(event.x), int(event.y))
-        self._selection_end = None
+        self._pan_position = (int(event.x), int(event.y))
+        self.capture_mouse()
         event.stop()
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        if getattr(self, "_selection_start", None) is not None:
-            self._selection_end = (int(event.x), int(event.y))
+        previous = getattr(self, "_pan_position", None)
+        if previous is not None:
+            position = (int(event.x), int(event.y))
+            self.scroll_relative(
+                x=previous[0] - position[0],
+                y=previous[1] - position[1],
+                animate=False,
+            )
+            self._pan_position = position
         event.stop()
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
-        start = getattr(self, "_selection_start", None)
-        end = getattr(self, "_selection_end", None)
-        self._selection_start = self._selection_end = None
+        self._pan_position = None
+        self.capture_mouse(False)
         event.stop()
-        if start is not None and end is not None and start != end:
-            self.app.copy_status_selection(start, end, int(self.scroll_x), int(self.scroll_y))
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
 
 
 class SprintList(OptionList):
     async def _on_click(self, event: events.Click) -> None:
-        await super()._on_click(event)
         event.stop()
+        await super()._on_click(event)
 
 
 class ConsoleApp(App[int]):
@@ -154,21 +161,6 @@ class ConsoleApp(App[int]):
     def action_toggle_pr_history(self) -> None:
         self.show_pr_history = not self.show_pr_history
         self.refresh_views()
-
-    def copy_status_selection(self, start: tuple[int, int], end: tuple[int, int], scroll_x: int, scroll_y: int) -> None:
-        points = sorted(((start[1] + scroll_y, start[0] + scroll_x), (end[1] + scroll_y, end[0] + scroll_x)))
-        (first_line, first_column), (last_line, last_column) = points
-        lines = self.status_text.splitlines()
-        selected = []
-        for line_number in range(first_line, min(last_line + 1, len(lines))):
-            line = lines[line_number]
-            left = first_column if line_number == first_line else 0
-            right = last_column + 1 if line_number == last_line else len(line)
-            selected.append(line[left:right])
-        text = "\n".join(selected)
-        if text:
-            self.copy_to_clipboard(text)
-            self.notify(f"Copied {len(text)} chars", timeout=2)
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.pane.id == "prs":

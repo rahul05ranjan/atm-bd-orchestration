@@ -109,36 +109,24 @@ def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> N
     run_scenario(scenario())
 
 
-def test_status_mouse_events_keep_the_active_tab_and_copy_only_a_drag(monkeypatch) -> None:
-    copied: list[str] = []
-    notices: list[str] = []
-
+def test_status_mouse_events_pan_the_graph_without_changing_tabs() -> None:
     async def scenario() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
-        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
-        monkeypatch.setattr(app, "notify", lambda message, **_kwargs: notices.append(message))
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             tabs = app.query_one("TabbedContent")
             tabs.active = "status"
             await settle(pilot)
             panel = app.query_one("#status-panel")
-            await pilot.mouse_down(panel, offset=(0, 0))
-            panel.on_mouse_move(events.MouseMove(panel, 5, 0, 0, 0, 0, False, False, False))
-            await pilot.mouse_up(panel, offset=(5, 0))
+            assert panel.max_scroll_x > 0
+            panel.on_mouse_down(events.MouseDown(panel, 60, 0, 0, 0, 0, False, False, False))
+            panel.on_mouse_move(events.MouseMove(panel, 10, 0, 0, 0, 0, False, False, False))
+            panel.on_mouse_up(events.MouseUp(panel, 10, 0, 0, 0, 0, False, False, False))
             await settle(pilot)
-            assert tabs.active == "status" and copied and notices == [f"Copied {len(copied[0])} chars"]
-            copied.clear()
-            notices.clear()
-            panel.on_mouse_down(events.MouseDown(panel, 0, 0, 0, 0, 0, False, False, False))
-            panel.on_mouse_move(events.MouseMove(panel, 5, 0, 0, 0, 0, False, False, False))
-            panel.on_mouse_down(events.MouseDown(panel, 0, 0, 0, 0, 0, False, False, False))
-            panel.on_mouse_up(events.MouseUp(panel, 0, 0, 0, 0, 0, False, False, False))
-            await settle(pilot)
-            assert copied == [] and notices == []
+            assert tabs.active == "status" and panel.scroll_x > 0
             await pilot.click("#sprints", offset=(1, 1))
             await settle(pilot)
-            assert tabs.active == "status" and copied == [] and notices == []
+            assert tabs.active == "status"
 
     run_scenario(scenario())
 
