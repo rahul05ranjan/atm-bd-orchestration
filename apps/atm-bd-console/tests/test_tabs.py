@@ -4,12 +4,16 @@ from dataclasses import replace
 
 from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
-from contract_samples import CONFIG, SPRINT_VIEW, STATE, STEP_VIEW
+from contract_samples import CONFIG, PHASE, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
 from textual import events
 
-from atm_bd_console.app import ConsoleApp, status_header
-from atm_bd_console.types import SprintView, StepView
+from atm_bd_console.app import ConsoleApp, sprint_steps, status_header
+from atm_bd_console.model import _sprint_views
+from atm_bd_console.prs import render_prs
+from atm_bd_console.render import dashboard, status_bar
+from atm_bd_console.status import _fallback
+from atm_bd_console.types import AgentView, SprintView, StepView
 
 WIDE = "x" * 200
 TEST_ASSIGNEE = "test-dev"
@@ -39,6 +43,56 @@ def lines(app: ConsoleApp, selector: str) -> list[str]:
 def test_status_header_counts_the_fixture_sprints() -> None:
     assert status_header(SNAPSHOT).plain == "sprints 1/4 · \U000f05e0 1 · \U000f051f 1 · \U000f137c 2"
     assert status_header(RUNNING).plain == "sprints 0/1 · \U000f05e0 0 · \U000f051f 1 · \U000f137c 0"
+
+
+def test_anc_023_same_fixture_renders_agent_icon_before_name_on_every_surface(tmp_path) -> None:
+    name = "terra-agent"
+    icon_and_name = "\U000f01e7" + name
+    agent = AgentView(name, "busy", RUNNING.generated_at, 1, RUNNING.agents[0].rows,
+                      "dev", "GPT-5.6-Terra", "codex-cli")
+    phase = replace(PHASE, steps=(replace(PHASE.steps[0], assignee=name),))
+    sprints, mermaid = _sprint_views(phase, "atm", (agent,))
+    sprint = sprints[0]
+    snapshot = replace(
+        RUNNING,
+        agents=(agent,),
+        lead=name,
+        sprints=sprints,
+        mermaid=mermaid,
+        sent=(replace(RUNNING.sent[0], to=name),),
+        prs=(replace(RUNNING.prs[0], assignee=name),),
+    )
+
+    # Dashboard roster heading.
+    dashboard_text = dashboard(snapshot, 160, 40).plain
+    assert icon_and_name in dashboard_text
+    # Dashboard's sent-recipient row.
+    assert f"→ {icon_and_name}" in dashboard_text
+    # Sprint row in the plain text DAG fallback.
+    assert icon_and_name in _fallback(snapshot)
+    # Task row in sprint details.
+    assert icon_and_name in sprint_steps(sprint, snapshot.agents).plain
+    # Status bar lead.
+    assert icon_and_name in status_bar(snapshot, 160).plain
+    # Mermaid DAG sprint node.
+    assert icon_and_name in snapshot.mermaid
+    # PR list assignee.
+    assert icon_and_name in render_prs(snapshot, 160).plain
+
+    async def scenario() -> None:
+        app = ConsoleApp(
+            replace(CONFIG, interval_s=3600, state_dir=str(tmp_path / "state")),
+            FakeStep(snapshot), STATE,
+        )
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            # Diagnostics agent line.
+            app.query_one("TabbedContent").active = "diagnostics"
+            await settle(pilot)
+            diagnostics = app.query_one("#diagnostics-text").render().plain
+            assert icon_and_name in diagnostics
+
+    run_scenario(scenario())
 
 
 def test_three_tabs_render_the_running_snapshot_with_the_status_bar() -> None:
