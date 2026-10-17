@@ -6,8 +6,9 @@ import json
 import shutil
 from datetime import UTC, datetime
 
-from . import __version__, atm_bd, render, runner
+from . import atm_bd, render, runner
 from . import config as config_source
+from .build import identity
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
 from .result import Err, Error, IoFailed, Ok
@@ -28,7 +29,7 @@ def _error_text(error: Error) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("command", choices=("show", "snapshot"), nargs="?")
-    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--version", action="version", version=identity())
     parser.add_argument("--phase")
     parser.add_argument("--github", choices=("graphql", "rest", "off")); parser.add_argument("--interval", type=int)
     parser.add_argument("--dry-run", action="store_true"); parser.add_argument("--no-fetch", action="store_true")

@@ -28,7 +28,8 @@ from contract_samples import (
 )
 from rich.text import Text
 
-from atm_bd_console import __version__, app, cli, runner
+from atm_bd_console import app, cli, runner
+from atm_bd_console.build import identity
 from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.types import INITIAL_STATE
@@ -208,7 +209,7 @@ def test_show_fresh_running_snapshot_reads_only_snapshot(cli_runtime, monkeypatc
 def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
     with pytest.raises(SystemExit) as exited:
         cli.main(["--version"])
-    assert exited.value.code == 0 and __version__ in capsys.readouterr().out
+    assert exited.value.code == 0 and capsys.readouterr().out.strip() == identity()
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(CONFIG))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
