@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -11,7 +13,6 @@ import pytest
 
 APP = Path(__file__).resolve().parents[1]
 REPO = APP.parents[1]
-PLUGIN = REPO / "plugins" / "atm-bd-orchestration"
 UV = shutil.which("uv")
 pytestmark = pytest.mark.skipif(UV is None, reason="uv is required to build and install the bundle")
 
@@ -22,6 +23,15 @@ def run(*args: str, cwd: Path = APP) -> subprocess.CompletedProcess[str]:
 
 def tree(path: Path) -> dict[str, bytes]:
     return {p.relative_to(path).as_posix(): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+
+def committed_plugin(commit: str) -> dict[str, bytes]:
+    prefix = "plugins/atm-bd-orchestration/"
+    archive = subprocess.run(["git", "archive", "--format=tar", commit, prefix], cwd=REPO,
+                             capture_output=True, check=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        return {member.name[len(prefix):]: source.extractfile(member).read()
+                for member in source.getmembers() if member.isfile() and member.name.startswith(prefix)}
 
 
 def contents(archive: Path) -> dict[str, bytes]:
@@ -47,9 +57,9 @@ def check_archive(archive: Path, expected: dict[str, bytes], expected_commit: st
 
 
 def test_wheel_sdist_and_rebuilt_wheel_bundle_every_file(tmp_path: Path) -> None:
-    expected = tree(PLUGIN)
-    assert {"install.py", "registry.yaml", "manifest.yaml", "config/legacy-owned.json"} <= expected.keys()
     commit = run("git", "rev-parse", "HEAD", cwd=REPO).stdout.strip()
+    expected = committed_plugin(commit)
+    assert {"install.py", "registry.yaml", "manifest.yaml", "config/legacy-owned.json"} <= expected.keys()
     direct = tmp_path / "direct"
     source = tmp_path / "source"
     rebuilt = tmp_path / "rebuilt"
@@ -88,7 +98,23 @@ def test_git_file_install_bundles_the_plugin(tmp_path: Path) -> None:
     run(UV, "pip", "install", "--python", str(python),
         f"git+{REPO.as_uri()}@{commit}#subdirectory=apps/atm-bd-console")
     site = Path(run(str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))").stdout.strip())
-    assert tree(site / "atm_bd_console" / "_skills") == tree(PLUGIN)
+    assert tree(site / "atm_bd_console" / "_skills") == committed_plugin(commit)
+
+
+def test_bundle_checks_ignore_stray_plugin_files(tmp_path: Path) -> None:
+    clone = tmp_path / "checkout"
+    run("git", "clone", "--no-hardlinks", str(REPO), str(clone), cwd=tmp_path)
+    test_file = clone / "apps" / "atm-bd-console" / "tests" / "test_bundle.py"
+    shutil.copy2(Path(__file__), test_file)
+    stray = clone / "plugins" / "atm-bd-orchestration" / "tests" / "__pycache__" / "stray.pyc"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_bytes(b"ignored sentinel")
+    run("git", "check-ignore", str(stray), cwd=clone)
+    run(sys.executable, "-m", "pytest", "-q",
+        "tests/test_bundle.py::test_wheel_sdist_and_rebuilt_wheel_bundle_every_file",
+        "tests/test_bundle.py::test_git_file_install_bundles_the_plugin",
+        cwd=clone / "apps" / "atm-bd-console")
+    assert stray.read_bytes() == b"ignored sentinel"
 
 
 def test_missing_plugin_and_bundle_fails_with_paths(tmp_path: Path) -> None:
