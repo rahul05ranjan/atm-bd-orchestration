@@ -105,7 +105,9 @@ def shim_sc_compose(bin_dir: Path, cli: str, wheel: str) -> None:
     """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
     bin_dir.mkdir(exist_ok=True)
     for name, out in (("sc-compose", f"sc-compose {cli}"), ("python3", wheel),
-                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}")):
+                      ("atm-bd-console", f"atm-bd-console {install.REQUIRED_CONSOLE_VERSION}"),
+                      ("atm", "atm 1.6.1"), ("bd", "bd 1.3.0"),
+                      ("jq", "jq-1.6"), ("git", "git version 2.27.0")):
         (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
         (bin_dir / name).chmod(0o755)
 
@@ -150,8 +152,46 @@ def test_check_tools_requires_current_console(tmp_path, monkeypatch, tool, repor
         install.check_tools()
 
 
+@pytest.mark.parametrize(("tool", "expected"), [
+    ("jq", "jq is not on PATH; install it with: brew install jq"),
+    ("bd", "bd is not on PATH; install it with: brew install beads"),
+])
+def test_prepare_refuses_missing_declared_tool_before_writing(tmp_path, monkeypatch, tool, expected):
+    repo = make_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    shim_sc_compose(bin_dir, "1.7.0", "1.7.0")
+    (bin_dir / tool).unlink()
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    result = install.prepare(str(PKG), str(repo / ".claude"), {"args": {"qa_member": "quality-mgr"}})
+
+    assert result == {"result": "fail", "message": expected}
+    assert not (repo / install.LOCK_OUT).exists()
+
+
+def test_check_tools_refuses_a_declared_tool_below_its_manifest_floor(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    shim_sc_compose(bin_dir, "1.7.0", "1.7.0")
+    (bin_dir / "git").write_text("#!/bin/sh\necho 'git version 2.26.0'\n")
+    (bin_dir / "git").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    with pytest.raises(install.InstallError, match=r"git is 2\.26\.0, older than required 2\.27"):
+        install.check_tools()
+
+
 def test_the_manifest_requires_sc_compose_from_1_7_0_below_2():
     assert install.sc_compose_range() == ("1.7.0", 2)
+
+
+def test_manifest_declares_every_installer_verified_cli():
+    assert install.declared_tool_requirements() == [
+        ("atm", "1.6.1"),
+        ("bd", "1.3.0"),
+        ("jq", "1.6"),
+        ("git", "2.27"),
+        ("atm-bd-console", "0.1.0"),
+    ]
 
 
 VERSIONED_SKILLS = sorted(p for p in PKG.glob("skills/*/SKILL.md")

@@ -31,8 +31,10 @@ Requirements in the consuming repository:
   `reviewers_round1` (agents this package ships count). `dev_sanity_member`
   names a team member and is not checked: it may have no agent file;
 - a git `origin` remote (`owner/name`);
-- `sc-compose`, `atm`, `bd`, `jq`, `gh`, and `python3` with PyYAML and pydantic
-  on PATH.
+- every manifest requirement on PATH: `python3` (with PyYAML and pydantic),
+  `sc-compose`, `atm`, `bd`, `jq`, `git`, and `atm-bd-console`. The installer
+  verifies their declared version floors before it writes anything.
+- `gh` and `gh-stack` for lead-only stacked-PR work (not installer-verified).
 
 Jev sanity checks and post-mortem screening also need `TYPESAFE_API_KEY` in the
 agent's environment at run time; without it `.claude/skills/atm-bd-orchestration/scripts/jev_client.py --startup --phase <x>`
