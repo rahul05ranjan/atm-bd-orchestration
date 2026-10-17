@@ -16,7 +16,7 @@ from textual import events
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
-from atm_bd_console.build import display_identity
+from atm_bd_console.build import display_identity, identity
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
@@ -101,19 +101,32 @@ def test_snapshot_source_failure_is_visible_in_diagnostics_and_written_to_its_lo
     run_scenario(scenario())
 
 
-def test_build_line_sits_right_justified_on_the_tab_header_row() -> None:
+def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_a_tab() -> None:
     async def scenario() -> None:
         app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             build = app.query_one("#build")
-            assert build.render().plain == f"atm-bd-console {display_identity()}"
+            text = f"atm-bd-console {display_identity()}"
+            assert build.render().plain == text and build.display
             assert build.region.y == 0 and build.region.right == 120
+            tabs_right = max(tab.region.right for tab in app.query("ContentTab"))
+            assert build.region.x > tabs_right
             assert app.query_one("#--content-tab-dispatch").region.y == 0  # tab headers moved up: no row above them
             assert app.query_one("#dashboard").region.y == 2  # tabs, underline, content
             await pilot.resize_terminal(80, 30)
             await settle(pilot)
-            assert app.query_one("#build").region.right == 80
+            assert build.display and build.region.right == 80 and build.region.x > tabs_right
+            await pilot.resize_terminal(40, 30)  # no room right of the tab strip: hidden, every tab clickable
+            await settle(pilot)
+            assert not build.display
+            await pilot.click("#--content-tab-diagnostics")
+            await settle(pilot)
+            assert app.query_one("TabbedContent").active == "diagnostics"
+            assert f"Build: {identity()}" in app.query_one("#diagnostics-text").render().plain
+            await pilot.resize_terminal(120, 40)
+            await settle(pilot)
+            assert build.display and build.region.right == 120
 
     run_scenario(scenario())
 
