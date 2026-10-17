@@ -1,10 +1,13 @@
 """The interactive console: one Textual app over an injected step function."""
 from __future__ import annotations
 
+import json
+import os
 import sys
 import threading
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -58,6 +61,7 @@ class StatusPanel(ScrollableContainer):
         self.post_message(self.Resized())
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._trace_mouse("status.mouse_down", event)
         self._pan_position = (int(event.x), int(event.y))
         self.capture_mouse()
         self.suppress_click()
@@ -73,19 +77,28 @@ class StatusPanel(ScrollableContainer):
                 animate=False,
             )
             self._pan_position = position
+            self._trace_mouse("status.pan", event)
         event.stop()
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
+        self._trace_mouse("status.mouse_up", event)
         self._pan_position = None
         self.capture_mouse(False)
         event.stop()
 
     def on_click(self, event: events.Click) -> None:
+        self._trace_mouse("status.click", event)
         event.stop()
+
+    def _trace_mouse(self, action: str, event: events.MouseEvent) -> None:
+        if isinstance(self.app, ConsoleApp):
+            self.app.trace_mouse(action, event, scroll_x=int(self.scroll_x), scroll_y=int(self.scroll_y))
 
 
 class SprintList(OptionList):
     async def _on_click(self, event: events.Click) -> None:
+        if isinstance(self.app, ConsoleApp):
+            self.app.trace_mouse("sprints.click", event, highlighted=self.highlighted)
         event.stop()
         await super()._on_click(event)
 
@@ -126,6 +139,31 @@ class ConsoleApp(App[int]):
         self._pending_forced_refresh = False
         self._status_view_initialized = False
         self.show_pr_history = False
+        self.mouse_log_path = os.environ.get("ATM_BD_CONSOLE_MOUSE_LOG")
+
+    def trace_mouse(self, action: str, event: events.MouseEvent, **details: int | str | None) -> None:
+        """Append opt-in interaction diagnostics without risking the running console."""
+        if self.mouse_log_path is None:
+            return
+        target = event.widget
+        record = {
+            "at": datetime.now(UTC).isoformat(),
+            "action": action,
+            "target": target.id if target is not None else None,
+            "target_type": type(target).__name__ if target is not None else None,
+            "x": event.x,
+            "y": event.y,
+            "screen_x": event.screen_x,
+            "screen_y": event.screen_y,
+            "active_tab": self.query_one(TabbedContent).active,
+            **details,
+        }
+        try:
+            with Path(self.mouse_log_path).open("a", encoding="utf-8") as log_file:
+                log_file.write(f"{json.dumps(record, sort_keys=True)}\n")
+        except OSError as error:
+            self.log.error(f"mouse trace disabled: {error}")
+            self.mouse_log_path = None
 
     def compose(self) -> ComposeResult:
         with TabbedContent(initial="dispatch"):

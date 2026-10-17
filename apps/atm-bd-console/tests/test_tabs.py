@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 from conftest import FakeStep, run_scenario, settle
@@ -109,7 +110,10 @@ def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> N
     run_scenario(scenario())
 
 
-def test_status_mouse_events_pan_the_graph_without_changing_tabs() -> None:
+def test_status_mouse_events_pan_the_graph_without_changing_tabs(monkeypatch, tmp_path) -> None:
+    mouse_log = tmp_path / "mouse.jsonl"
+    monkeypatch.setenv("ATM_BD_CONSOLE_MOUSE_LOG", str(mouse_log))
+
     async def scenario() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
@@ -132,6 +136,17 @@ def test_status_mouse_events_pan_the_graph_without_changing_tabs() -> None:
             await pilot.click("#sprints", offset=(1, 1))
             await settle(pilot)
             assert tabs.active == "status"
+            records = [json.loads(line) for line in mouse_log.read_text().splitlines()]
+            assert [record["action"] for record in records] == [
+                "status.mouse_down",
+                "status.pan",
+                "status.mouse_up",
+                "status.mouse_down",
+                "status.mouse_up",
+                "status.click",
+                "sprints.click",
+            ]
+            assert all(record["active_tab"] == "status" for record in records)
 
     run_scenario(scenario())
 
