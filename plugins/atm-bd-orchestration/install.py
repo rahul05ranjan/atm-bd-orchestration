@@ -104,11 +104,19 @@ PLACEHOLDER_RE = re.compile(r"\{\{ (" + "|".join(RENDER_VARIABLES) + r") \}\}")
 # the atm-bd-orchestration skill.
 RETIRED_REPO_FILES = {"scripts/jev_client.py": "assets/scripts/jev_client.py"}
 
-REQUIRED_CONSOLE_VERSION = "0.1.0"
 CONSOLE_INSTALL = (
     "uv tool install "
     "git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console"
 )
+TOOL_INSTALLS = {
+    "atm": "brew install randlee/tap/atm",
+    "atm-bd-console": CONSOLE_INSTALL,
+    "bd": "brew install beads",
+    "git": "brew install git",
+    "jq": "brew install jq",
+}
+HANDLED_ELSEWHERE_REQUIREMENTS = frozenset({"python3", "pyyaml", "pydantic", "sc-compose"})
+PYTHON_INSTALL = "install Python 3.11 or newer with your system package manager"
 
 
 class InstallError(RuntimeError):
@@ -156,6 +164,7 @@ def package_version(pkg_dir: Path = PKG_DIR) -> str:
 
 
 SC_COMPOSE_RANGE_RE = re.compile(r"sc-compose >= ([0-9]+\.[0-9]+\.[0-9]+), < ([0-9]+)")
+TOOL_REQUIREMENT_RE = re.compile(r"([a-z][a-z0-9-]*)(?: >= ([0-9]+(?:\.[0-9]+){0,2}))?")
 
 
 def sc_compose_range(pkg_dir: Path = PKG_DIR) -> Tuple[str, int]:
@@ -184,9 +193,45 @@ def sc_compose_upgrade(pkg_dir: Path = PKG_DIR) -> str:
             "the CLI and wheel at the same version")
 
 
-def _version_parts(text: str) -> Optional[Tuple[int, int, int]]:
-    match = re.search(r"\b([0-9]+)\.([0-9]+)\.([0-9]+)\b", text)
-    return tuple(int(part) for part in match.groups()) if match else None
+def declared_tool_requirements(pkg_dir: Path = PKG_DIR) -> list[tuple[str, str]]:
+    """CLI version floors declared in the manifest, excluding sc-compose's range."""
+    requirements = []
+    for entry in load_manifest(pkg_dir).get("requires") or []:
+        requirement = str(entry).split("#", 1)[0].strip()
+        if SC_COMPOSE_RANGE_RE.fullmatch(requirement):
+            continue
+        match = TOOL_REQUIREMENT_RE.fullmatch(requirement)
+        if match is None:
+            raise InstallError(f"{pkg_dir / MANIFEST_FILE}: unrecognized requirement {requirement!r}")
+        name, floor = match.groups()
+        if name in HANDLED_ELSEWHERE_REQUIREMENTS:
+            continue
+        if name not in TOOL_INSTALLS:
+            raise InstallError(f"{pkg_dir / MANIFEST_FILE}: unrecognized requirement {name!r}")
+        if floor is None:
+            raise InstallError(f"{pkg_dir / MANIFEST_FILE}: {name} must declare a version floor")
+        requirements.append((name, floor))
+    return requirements
+
+
+def manifest_requirement_floor(name: str, pkg_dir: Path = PKG_DIR) -> str:
+    """The required version floor for one non-range manifest requirement."""
+    for entry in load_manifest(pkg_dir).get("requires") or []:
+        match = TOOL_REQUIREMENT_RE.fullmatch(str(entry).split("#", 1)[0].strip())
+        if match is not None and match.group(1) == name:
+            floor = match.group(2)
+            if floor is None:
+                raise InstallError(f"{pkg_dir / MANIFEST_FILE}: {name} must declare a version floor")
+            return floor
+    raise InstallError(f"{pkg_dir / MANIFEST_FILE}: requires has no {name} version floor")
+
+
+def _version_parts(text: str) -> tuple[int, int, int] | None:
+    match = re.search(r"\b([0-9]+)\.([0-9]+)(?:\.([0-9]+))?\b", text)
+    if match is None:
+        return None
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch or 0)
 
 
 def _check_required_tool(name: str, required: str, install_command: str) -> None:
@@ -401,6 +446,7 @@ def render_text(text: str, variables: Dict[str, str]) -> str:
 
 
 def check_tools() -> None:
+    _check_required_tool("python3", manifest_requirement_floor("python3"), PYTHON_INSTALL)
     floor, ceiling = sc_compose_range()
     needs = f"the package needs >= {floor}, < {ceiling}"
     if shutil.which("sc-compose") is None:
@@ -425,7 +471,8 @@ def check_tools() -> None:
     if wheel_version != cli_version:
         raise InstallError(f"the sc-compose CLI is {cli_version} and the python3 wheel is {wheel_version}; they must "
                            f"be the same version; install {sc_compose_upgrade()} and rerun")
-    _check_required_tool("atm-bd-console", REQUIRED_CONSOLE_VERSION, CONSOLE_INSTALL)
+    for name, floor in declared_tool_requirements():
+        _check_required_tool(name, floor, TOOL_INSTALLS[name])
 
 
 def check_beads_server_mode(repo_root: Path) -> None:

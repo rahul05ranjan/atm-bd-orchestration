@@ -7,6 +7,7 @@ Needs `sc-compose`; skipped (and says so) without it.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -31,10 +32,38 @@ SUITES = (
 )
 
 
+# PATH before any fixture of this module ran: what the installed suites must inherit.
+PATH_BEFORE_FIXTURES = os.environ["PATH"]
+
+# Installer-checked CLIs the installed suites never invoke, so a host without them (CI runners) may
+# fake them for the install step alone. jq and git are not here: the suites run them for real.
+ABSENT_TOOL_FAKES = ("atm", "atm-bd-console", "bd")
+
+
+@contextlib.contextmanager
+def absent_installer_tools_faked(bin_dir: Path):
+    """Put version-printing fakes of the ABSENT_TOOL_FAKES CLIs missing from this host first on PATH, and
+    restore the real PATH on exit so nothing started afterwards (the installed suites) can see them."""
+    bin_dir.mkdir(exist_ok=True)
+    floors = dict(install.declared_tool_requirements())
+    for name in ABSENT_TOOL_FAKES:
+        if shutil.which(name) is None:
+            path = bin_dir / name
+            path.write_text(f"#!/bin/sh\necho '{name} {floors[name]}'\n")
+            path.chmod(0o755)
+    original = os.environ["PATH"]
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{original}"
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = original
+
+
 @pytest.fixture(scope="module")
 def installed(tmp_path_factory):
     repo = make_repo(tmp_path_factory.mktemp("suites"))
-    assert install.main(["--dest", str(repo / ".claude"), "--set", "qa_member=quality-mgr"]) == 0
+    with absent_installer_tools_faked(tmp_path_factory.mktemp("required-tools")):
+        assert install.main(["--dest", str(repo / ".claude"), "--set", "qa_member=quality-mgr"]) == 0
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"], check=True)
     return repo
@@ -48,6 +77,18 @@ def test_installed_suite_passes(installed, suite):
     proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", suite],
                           cwd=installed, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.returncode == 0, proc.stdout[-16000:]   # room for the pour test's server log tails
+
+
+def test_installed_fixture_does_not_leak_installer_tool_shims(installed):
+    """Installed skill suites inherit the real shell tool path, not installer test fakes: the fixture put PATH
+    back exactly, so no fake is resolvable afterwards, and the fakes never stand in for jq or git."""
+    assert os.environ["PATH"] == PATH_BEFORE_FIXTURES
+    for name in ABSENT_TOOL_FAKES:
+        found = shutil.which(name)
+        assert found is None or not Path(found).parent.name.startswith("required-tools"), found
+    assert not {"jq", "git"} & set(ABSENT_TOOL_FAKES)
+    jq = shutil.which("jq")
+    assert jq is not None and not Path(jq).parent.name.startswith("required-tools"), jq
 
 
 def test_dev_bead_ids_take_the_installed_prefix(installed):
