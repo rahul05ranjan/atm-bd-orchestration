@@ -146,12 +146,37 @@ def test_dag_drag_pans_the_graph_and_copies_nothing(monkeypatch) -> None:
     run_scenario(scenario())
 
 
-def test_selecting_dashboard_text_copies_it_with_a_toast(monkeypatch) -> None:
+def test_dag_pan_follows_a_drag_that_leaves_the_panel_until_the_button_is_released(monkeypatch) -> None:
+    copied: list[str] = []
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "status"
+            await settle(pilot)
+            panel = app.query_one("#status-panel")
+            before = panel.scroll_x
+            await pilot.mouse_down(panel, offset=(20, 2))
+            await pilot.hover("#sprints", offset=(5, 3))  # pointer is off the panel: capture keeps routing the drag
+            assert app.mouse_captured is panel and panel.scroll_x != before
+            panned = panel.scroll_x
+            await pilot.mouse_up("#sprints", offset=(5, 3))
+            assert app.mouse_captured is None
+            await pilot.hover("#status-header", offset=(3, 0))
+            await settle(pilot)
+            assert panel.scroll_x == panned and copied == []
+
+    run_scenario(scenario())
+
+
+def test_selecting_dashboard_text_copies_it_with_a_toast(monkeypatch, tmp_path) -> None:
     copied: list[str] = []
     notices: list[str] = []
 
     async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path / "state")), FakeStep(SNAPSHOT), STATE)
         monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
         monkeypatch.setattr(app, "notify", lambda message, **_kwargs: notices.append(message))
         async with app.run_test(size=(120, 40)) as pilot:
@@ -166,6 +191,8 @@ def test_selecting_dashboard_text_copies_it_with_a_toast(monkeypatch) -> None:
             await settle(pilot)
             assert copied == [lines(app, "#dashboard")[0][:9]]
             assert notices == [f"Copied {len(copied[0])} chars"]
+        trace = [line.split(" ", 1)[1] for line in app.input_log_path.read_text().splitlines()]
+        assert trace.count(f"copy {len(copied[0])} chars active=dispatch") == 1
 
     run_scenario(scenario())
 
