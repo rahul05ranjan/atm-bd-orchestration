@@ -37,8 +37,8 @@ def lines(app: ConsoleApp, selector: str) -> list[str]:
 
 
 def test_status_header_counts_the_fixture_sprints() -> None:
-    assert status_header(SNAPSHOT) == "sprints 1/4 · ✅ 1 · 🌀 1 · ⏳ 2"
-    assert status_header(RUNNING) == "sprints 0/1 · ✅ 0 · 🌀 1 · ⏳ 0"
+    assert status_header(SNAPSHOT).plain == "sprints 1/4 · \U000f05e0 1 · \U000f051f 1 · \U000f137c 2"
+    assert status_header(RUNNING).plain == "sprints 0/1 · \U000f05e0 0 · \U000f051f 1 · \U000f137c 0"
 
 
 def test_three_tabs_render_the_running_snapshot_with_the_status_bar() -> None:
@@ -56,7 +56,7 @@ def test_three_tabs_render_the_running_snapshot_with_the_status_bar() -> None:
             assert lines(app, "#dashboard")[0].startswith("phase-bh")
             assert TEST_ASSIGNEE in str(app.query_one("#dashboard").render())
             assert "#1850" in str(app.query_one("#prs-text").render())
-            assert lines(app, "#status-header") == ["sprints 1/4 · ✅ 1 · 🌀 1 · ⏳ 2"]
+            assert lines(app, "#status-header") == [status_header(SNAPSHOT).plain]
             assert WIDE in str(app.query_one("#status-text").render())
 
     run_scenario(scenario())
@@ -77,10 +77,10 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
             shown = lines(app, "#sprint-steps-text")
             assert shown[0] == "atm-bh-8  renderers"
             assert [line.split()[:2] + line.split()[-1:] for line in shown[1:]] == [
-                ["dev", "atm-bh-8.group-dev", "solar"],
+                ["dev", "atm-bh-8.group-dev", "·solar"],
                 ["sanity", "atm-bh-8.group-sanity", "unassigned"],
-                ["qa", "atm-bh-8.group-qa", "quality-mgr"],
-                ["fix", "atm-bh-8.group-qa-f1", TEST_ASSIGNEE],
+                ["qa", "atm-bh-8.group-qa", "·quality-mgr"],
+                ["fix", "atm-bh-8.group-qa-f1", "·" + TEST_ASSIGNEE],
             ]
             sprints.highlighted = 0
             await settle(pilot)
@@ -100,10 +100,11 @@ def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> N
             await settle(pilot)
             app.query_one("TabbedContent").active = "prs"
             await settle(pilot)
-            assert "⑂" not in str(app.query_one("#prs-text").render())
+            before = str(app.query_one("#prs-text").render()).count("\U000f062d")
             await pilot.press("m")
             await settle(pilot)
-            assert "⑂" in str(app.query_one("#prs-text").render())
+            after = str(app.query_one("#prs-text").render()).count("\U000f062d")
+            assert after > before
             assert step.calls == [False, True]
 
     run_scenario(scenario())

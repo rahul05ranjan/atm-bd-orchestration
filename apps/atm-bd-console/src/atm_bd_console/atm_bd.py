@@ -299,7 +299,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         bead.status, False, bead.assignee, metadata.get(BRANCH_KEY), metadata.get(PR_TARGET_KEY),
         metadata.get(WORKTREE_KEY), metadata.get(LAYER_KEY), metadata.get(DIFFICULTY_KEY),
         short_id(top or bead.id, prefix), top, bead.claimed_at, bead.closed_at, bead.title,
-        checked, sprint_bead, qa_round, carry,
+        checked, sprint_bead, qa_round, carry, bead.close_reason,
     ))
 
 

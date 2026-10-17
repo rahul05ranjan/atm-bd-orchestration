@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
+from .icons import SPRINT_STATE_ICONS
 from .ids import short_id
 from .prs import active_pr
+from .render import render_agent
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -144,7 +146,8 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         remotes=remotes,
         batch_due=batch_due,
     )
-    sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix)
+    agents = _agent_views(members, tasks, phase, inputs.task_beads, now)
+    sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix, agents)
     sections = (Section("Held", held),) if held else ()
     snapshot = Snapshot(
         schema=1,
@@ -152,7 +155,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         phase=phase.label.removeprefix("phase-") if phase else "",
         root_closed=root_closed,
         stopped=stopped,
-        agents=_agent_views(members, tasks, phase, inputs.task_beads, now),
+        agents=agents,
         sections=sections,
         problems=problems,
         errors=tuple(errors),
@@ -190,6 +193,7 @@ def _agent_views(
     root_id = phase.root_id if phase else None
     known_beads = {bead.id for bead in task_beads.value} if isinstance(task_beads, Ok) else None
     views: list[AgentView] = []
+    qa_steps = tuple(step for step in phase.steps if step.kind == "qa") if phase else ()
     for member in members:
         mine = sorted((task for task in tasks if task.agent == member.name), key=lambda task: (task.state != "active", task.position))
         if member.presence == "blocked":
@@ -227,8 +231,34 @@ def _agent_views(
                 description=task.description,
             ))
         active = next((task for task in mine if task.state == "active"), None)
-        views.append(AgentView(member.name, status, active.state_since if active else member.presence_since or now, len(mine), tuple(rows)))
+        qa_state = None
+        if (member.agent_type or "").lower() == "qa":
+            if any(row.kind in ("sprint_qa", "fix_qa") and row.state == "running" for row in rows):
+                qa_state = "running"
+            else:
+                closed = sorted(
+                    (step for step in qa_steps if step.assignee == member.name and step.status == "closed"),
+                    key=lambda step: step.closed_at.timestamp() if step.closed_at else float("-inf"),
+                    reverse=True,
+                )
+                qa_state = qa_state_from_close(closed[0].close_reason) if closed else None
+        views.append(AgentView(
+            member.name, status, active.state_since if active else member.presence_since or now,
+            len(mine), tuple(rows), member.agent_type, member.model, member.harness, qa_state,
+        ))
     return tuple(views)
+
+
+def qa_state_from_close(reason: str | None) -> str | None:
+    """Interpret the first token of a closed QA step's close reason."""
+    if reason is None:
+        return None
+    normalized = reason.strip().upper()
+    if normalized.startswith("PASS"):
+        return "pass"
+    if normalized.startswith("FAIL"):
+        return "fail"
+    return None
 
 
 def _label_truncate(text: str, width: int) -> str:
@@ -266,12 +296,14 @@ def _label_title_lines(title: str, sprint_id: str, bead_prefix: str) -> tuple[st
     return tuple(_label_truncate(line, 28) for line in lines[:2])
 
 
-def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintView, ...], str]:
+def _sprint_views(
+    phase: Phase | None, bead_prefix: str, agents: tuple[AgentView, ...] = (),
+) -> tuple[tuple[SprintView, ...], str]:
     if phase is None:
         return (), "graph TD"
     views: list[SprintView] = []
     lines = ["graph TD"]
-    icons = {"closed": "✅", "in_progress": "🌀", "ready": "📥", "not_ready": "⏳"}
+    by_name = {agent.name: agent for agent in agents}
     for sprint in phase.sprints:
         steps = tuple(step for step in phase.steps if sprint_of(step, phase, bead_prefix) == sprint)
         state = "closed" if sprint.closed else (
@@ -285,9 +317,12 @@ def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintVi
         current = next((step for step in steps if step.status == "in_progress"), None)
         if current is None:
             current = next((step for step in steps if step.ready), None)
-        label = f"{icons[state]} {short_id(sprint.id, bead_prefix)}"
+        glyph = SPRINT_STATE_ICONS[state][0]
+        label = f"{glyph} {short_id(sprint.id, bead_prefix)}"
         if current:
-            label += f" {current.kind}:{current.assignee or 'unassigned'}"
+            assignee = current.assignee or "unassigned"
+            rendered = render_agent(assignee, by_name.get(current.assignee)).plain if current.assignee else assignee
+            label += f" {current.kind}:{rendered}"
         label = _label_truncate(label, 30)
         description = _label_title_lines(sprint.title, sprint.id, bead_prefix)
         if description:
@@ -349,6 +384,7 @@ def _pr_rows(
         ),
         top=pr == top,
         merge=merge_by_branch.get(pr.head),
+        assignee=by_branch[pr.head].assignee if by_branch[pr.head] else None,
     ) for pr in relevant)
     return tuple(sorted(rows, key=lambda row: (row.layer if row.layer is not None else -1, row.pr.number))), top
 

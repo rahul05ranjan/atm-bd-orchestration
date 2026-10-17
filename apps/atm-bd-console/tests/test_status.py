@@ -83,14 +83,14 @@ def test_fallback_is_one_row_per_sprint_in_dependency_depth_order(monkeypatch) -
     rendered, error = status_text(value)
     assert isinstance(error, NotFound)
     # Depth 0 first (bh-1 before bh-4 by declared order), then depth 1, then depth 2.
-    assert rendered == "✅ bh-1\n📥 bh-4  dev: unassigned\n🌀 bh-2  dev: fenix\n⏳ bh-3  ← bh-2"
+    assert rendered == "\U000f05e0 bh-1\n\U000f040d bh-4  dev: unassigned\n\U000f051f bh-2  dev: ·fenix\n\U000f137c bh-3  ← bh-2"
 
 
 def test_nonzero_and_timeout_return_error_and_fallback(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "bad"))
     rendered, error = status_text(snapshot())
     assert isinstance(error, CommandFailed) and error.code == 1
-    assert rendered.startswith("✅ bh-1")
+    assert rendered.startswith("\U000f05e0 bh-1")
 
     def timed_out(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], 20)
@@ -98,4 +98,4 @@ def test_nonzero_and_timeout_return_error_and_fallback(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", timed_out)
     rendered, error = status_text(snapshot())
     assert isinstance(error, Timeout) and error.seconds == 20
-    assert rendered.startswith("✅ bh-1")
+    assert rendered.startswith("\U000f05e0 bh-1")

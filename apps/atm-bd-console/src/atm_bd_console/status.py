@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import subprocess
 
+from .icons import SPRINT_STATE_ICONS
 from .ids import short_id
+from .render import render_agent
 from .result import CommandFailed, ConfigInvalid, Error, NotFound, Timeout
 from .types import Snapshot, SprintView
 
@@ -11,9 +13,6 @@ _COMMAND = ("mmdflux", "--format", "text")
 _VERSION_COMMAND = ("mmdflux", "--version")
 _MINIMUM_VERSION = (2, 6, 1)
 _VERSION_PATTERN = re.compile(r"\b([0-9]+)\.([0-9]+)\.([0-9]+)\b")
-_ICONS = {"closed": "✅", "in_progress": "🌀", "ready": "📥", "not_ready": "⏳"}
-
-
 def _fallback(snapshot: Snapshot) -> str:
     by_id = {sprint.id: sprint for sprint in snapshot.sprints}
 
@@ -30,9 +29,11 @@ def _fallback(snapshot: Snapshot) -> str:
         current = next((step for step in sprint.steps if step.status == "in_progress"), None)
         if current is None and sprint.state == "ready":
             current = next((step for step in sprint.steps if step.status == "open"), None)
-        line = f"{_ICONS[sprint.state]} {sprint_id}"
+        line = f"{SPRINT_STATE_ICONS[sprint.state][0]} {sprint_id}"
         if current is not None:
-            line += f"  {current.kind}: {current.assignee or 'unassigned'}"
+            member = next((agent for agent in snapshot.agents if agent.name == current.assignee), None)
+            assignee = render_agent(current.assignee, member).plain
+            line += f"  {current.kind}: {assignee}"
         elif sprint.depends_on:
             dependencies = " ".join(short_id(value, snapshot.bead_prefix) for value in sprint.depends_on)
             line += f"  ← {dependencies}"

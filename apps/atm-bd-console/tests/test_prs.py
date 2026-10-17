@@ -10,7 +10,7 @@ from rich.cells import cell_len
 from atm_bd_console.codec import from_json
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
-from atm_bd_console.types import GhStatus, Merge, PrRow, PullRequest, Snapshot
+from atm_bd_console.types import AgentView, GhStatus, Merge, PrRow, PullRequest, Snapshot
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
@@ -34,28 +34,35 @@ def test_lower_red_and_green_top_are_display_only() -> None:
     rendered = render_prs(snapshot(), 120)
     lines = rendered.plain.splitlines()
     assert len(lines) == 2
-    assert lines[0].startswith("  ◉ #11") and "CI ⛔ lint, test" in lines[0]
-    assert "merge ⛔ model.py" in lines[0]
-    assert lines[1].startswith("▲ ◉ #12") and "CI ✅" in lines[1] and "merge ✅" in lines[1]
+    assert lines[0].startswith("  \U000f04c2 #11") and "CI \U000f062c lint, test" in lines[0]
+    assert "merge \U000f062d model.py" in lines[0]
+    assert lines[1].startswith("▲ \U000f04c2 #12") and "CI \U000f062c" in lines[1] and "merge \U000f062d" in lines[1]
     assert "L1" in lines[0] and "bh-1.group-dev" in lines[0]
     assert "L2" in lines[1] and "bh-2.group-dev" in lines[1]
     assert any("link https://example/pr/11" in str(span.style) for span in rendered.spans)
 
 
 def test_merge_error_uses_the_failure_glyph_without_a_file_list() -> None:
-    # Same ⛔ as the status bar's error segment: the merge check failed, so it is not clean and it names no conflicted files.
+    # The merge error keeps the GH failure glyph and does not name files when none were reported.
     lower = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", "success", ())
     failed = PrRow(lower, 1, "atm-bh-1.group-dev", False,
                    Merge("branch-1", "base", "error", (), ("merge-tree failed",), NOW))
     line = render_prs(replace(snapshot(), prs=(failed,)), 120).plain
-    assert "merge ⛔  CI ✅" in line
+    assert "merge \U000f062d  CI \U000f062c" in line
 
 
 def test_rest_mode_and_width() -> None:
     value = replace(snapshot(), gh=GhStatus("rest", True, None, NOW, False))
-    assert all("CI —" in line for line in render_prs(value, 120).plain.splitlines())
+    assert all("CI \U000f01d8" in line for line in render_prs(value, 120).plain.splitlines())
     for width in (80, 120):
         assert all(cell_len(line) <= width for line in render_prs(snapshot(), width).plain.splitlines())
+
+
+def test_pr_assignee_uses_roster_icon_before_name() -> None:
+    agent = AgentView("codex-sol", "busy", NOW, 0, (), "dev", "GPT-5.6-Sol", "codex-cli")
+    row = replace(snapshot().prs[1], assignee=agent.name)
+    rendered = render_prs(replace(snapshot(), prs=(row,), agents=(agent,)), 120).plain
+    assert "\U000f05a8codex-sol" in rendered
 
 
 @pytest.mark.parametrize("phase", ("bh", "phase-current"))
@@ -80,7 +87,8 @@ def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
     value = replace(base, prs=(base.prs[0], merged, closed, draft))
     assert render_prs(value, 120).plain.count("#11") == 1
     rendered = render_prs(value, 120, include_history=True)
-    assert "◉ #11" in rendered.plain and "⑂ #11" in rendered.plain and "⊗ #12" in rendered.plain and "○ #12" in rendered.plain
+    assert "\U000f04c2 #11" in rendered.plain and "\U000f062d #11" in rendered.plain
+    assert "\U000f073a #12" in rendered.plain and "\U000f0cb6 #12" in rendered.plain
     glyph_styles = {rendered.plain[span.start:span.end]: str(span.style) for span in rendered.spans}
-    assert glyph_styles["◉ "] == "green" and glyph_styles["⑂ "] == "magenta"
-    assert glyph_styles["⊗ "] == "red" and glyph_styles["○ "] == "grey70"
+    assert glyph_styles["\U000f04c2 "] == "#2D81E0" and glyph_styles["\U000f062d "] == "#8957E5"
+    assert glyph_styles["\U000f073a "] == "#F85149" and glyph_styles["\U000f0cb6 "] == "#FFA60D"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from typing import get_args, get_type_hints
 
 import pytest
@@ -30,6 +31,7 @@ TEST_LEAD = "test-lead"
 TEST_SANITY_MEMBER = "test-sanity"
 TEST_QA_MEMBER = "test-qa"
 TEST_REVIEWER = "test-reviewer"
+OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "assignee"}
 
 
 def test_config_round_trip_and_literal_rejection() -> None:
@@ -66,7 +68,11 @@ def test_samples_cover_every_contract_type_populated() -> None:
     for sample in SAMPLES:
         for field in fields(sample):
             value = getattr(sample, field.name)
-            assert value is not None, f"{type(sample).__name__}.{field.name} is None"
+            assert value is not None or field.name in OPTIONAL_ADDITIONS, (
+                f"{type(sample).__name__}.{field.name} is None"
+            )
+            if field.name in OPTIONAL_ADDITIONS and value is None:
+                continue
             assert not (isinstance(value, (tuple, Mapping, str)) and len(value) == 0), (
                 f"{type(sample).__name__}.{field.name} is empty"
             )
@@ -108,6 +114,21 @@ def test_tick_context_round_trip() -> None:
     assert repo.reviewers_round1 == (TEST_REVIEWER,)
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     assert from_json(Inputs, to_json(inputs)) == Ok(inputs)
+
+
+def test_legacy_snapshot_decodes_with_empty_agent_metadata() -> None:
+    import json
+
+    legacy = json.loads((Path(__file__).parent / "fixtures" / "contract" / "snapshot-running.json").read_text())
+    for agent in legacy["agents"]:
+        for field in ("agent_type", "model", "harness", "qa_state"):
+            agent.pop(field, None)
+    for pr in legacy["prs"]:
+        pr.pop("assignee", None)
+    decoded = from_json(Snapshot, json.dumps(legacy))
+    assert isinstance(decoded, Ok)
+    assert all((agent.agent_type, agent.model, agent.harness, agent.qa_state) == (None, None, None, None)
+               for agent in decoded.value.agents)
 
 
 def test_inputs_interval_matches_config_interval() -> None:

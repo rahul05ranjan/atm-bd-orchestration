@@ -9,7 +9,7 @@ from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
-from atm_bd_console.model import _reconcile_problems, _sprint_views, due, tick
+from atm_bd_console.model import _reconcile_problems, _sprint_views, due, qa_state_from_close, tick
 from atm_bd_console.result import CommandFailed, Err, NotFound, Ok, Timeout
 from atm_bd_console.types import (
     Bead,
@@ -127,6 +127,23 @@ def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
     assert tuple(agent.rows[0].state for agent in snapshot.agents) == ("running", "queued")
 
 
+def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> None:
+    assert qa_state_from_close("PASS: checks complete") == "pass"
+    assert qa_state_from_close("FAIL: checks failed") == "fail"
+    assert qa_state_from_close("needs follow-up") is None
+    older = step("qa-old", "atm-bh-1", kind="qa", status="closed", assignee="quality-mgr",
+                 closed_at=NOW - timedelta(minutes=2), close_reason="FAIL old")
+    newer = step("qa-new", "atm-bh-1", kind="qa", status="closed", assignee="quality-mgr",
+                 closed_at=NOW - timedelta(minutes=1), close_reason="PASS current")
+    qa = Member("quality-mgr", "idle", NOW, agent_type="qa")
+    snapshot, _, _ = tick(inputs(phase(older, newer), members=Ok((qa,))), STATE, NOW, render)
+    assert snapshot.agents[0].qa_state == "pass"
+    active = step("qa-active", "atm-bh-1", kind="qa", status="in_progress", assignee="quality-mgr")
+    task = Task("qa-active", "quality-mgr", "active", 0, NOW, NOW, "QA")
+    snapshot, _, _ = tick(inputs(phase(older, newer, active), members=Ok((qa,)), tasks=Ok((task,))), STATE, NOW, render)
+    assert snapshot.agents[0].qa_state == "running"
+
+
 def test_existing_out_of_phase_bead_is_red_and_missing_bead_is_yellow() -> None:
     member = Member("solar", "active", NOW)
     tasks = (
@@ -232,7 +249,7 @@ def test_dag_label_boundaries_handle_long_assignees_and_unbroken_unicode_words()
         lines = label.split("<br/>")
         assert 1 <= len(lines) <= 3
         assert all(cell_len(line) <= 30 for line in lines)
-    assert labels[0].startswith("🌀 bh-8 dev:")
+    assert labels[0].startswith("\U000f051f bh-8 dev:·")
     assert labels[0].endswith("…")
     assert views[0].title == title and views[1].title == unicode_title
     assert views[0].steps[0].bead_id == active.bead_id

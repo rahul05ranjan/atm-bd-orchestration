@@ -32,6 +32,10 @@ def test_members_maps_every_presence_and_records_presence_since(fake_bin, monkey
         ("eli", "unknown"),
     ]
     assert result.value[3].presence_since == datetime(2026, 10, 15, 9, 3, tzinfo=UTC)
+    assert (result.value[0].agent_type, result.value[0].model, result.value[0].harness) == (
+        "dev", "GPT-5.6-Sol", "codex-cli",
+    )
+    assert result.value[2].agent_type == "sanity"
     assert fake_bin.argv() == [("atm", "members", "--team", "atm-dev", "--json")]
 
 

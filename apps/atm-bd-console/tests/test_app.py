@@ -107,7 +107,7 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             build = app.query_one("#build")
-            text = f"atm-bd-console {display_identity()}"
+            text = f"atm-bd console {display_identity()}"
             assert build.render().plain == text and build.display
             assert build.region.y == 0 and build.region.right == 120
             tabs_right = max(tab.region.right for tab in app.query("ContentTab"))
@@ -123,7 +123,9 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             await pilot.click("#--content-tab-diagnostics")
             await settle(pilot)
             assert app.query_one("TabbedContent").active == "diagnostics"
-            assert f"Build: {identity()}" in app.query_one("#diagnostics-text").render().plain
+            shown = app.query_one("#diagnostics-text").render().plain
+            assert f"Build: {identity()}" in shown
+            assert "Agents: ·arch-ctm" in shown
             await pilot.resize_terminal(120, 40)
             await settle(pilot)
             assert build.display and build.region.right == 120
@@ -285,7 +287,7 @@ def test_tick_that_lands_after_quit_is_ignored() -> None:
 
 
 def test_held_lock_exits_1_with_its_message_before_drawing(tmp_path, monkeypatch, capsys) -> None:
-    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console/bh"))
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd/bh"))
     holder = acquire_lock(config.repo_root, "bh")
     assert isinstance(holder, Ok)
     drawn: list[object] = []
@@ -299,7 +301,7 @@ def test_held_lock_exits_1_with_its_message_before_drawing(tmp_path, monkeypatch
 
 
 def test_run_takes_the_lock_and_returns_the_app_code(tmp_path, monkeypatch) -> None:
-    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console/bh"))
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd/bh"))
     seen: list[tuple] = []
 
     class Recorder:

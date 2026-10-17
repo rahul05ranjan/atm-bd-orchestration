@@ -3,6 +3,7 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 
+from .icons import BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, icon_for
 from .ids import short_id
 from .result import (
     CommandFailed,
@@ -16,7 +17,7 @@ from .result import (
     Timeout,
     Unreachable,
 )
-from .types import Action, AgentView, Row, Snapshot
+from .types import Action, AgentView, Member, Row, Snapshot
 
 _STATUSES = {
     "busy": ("●", "green"),
@@ -69,16 +70,34 @@ def _tag(row: Row) -> Text:
     return result
 
 
-def _icon(row: Row) -> str:
-    if row.state == "running":
-        return "🌀"
+def render_agent(name: str | None, member: Member | AgentView | None) -> Text:
+    """Render one agent name with its roster icon immediately before the name."""
+    if not name:
+        return Text("unassigned")
+    glyph, style = icon_for(member)
+    result = Text()
+    result.append(glyph, style=style)
+    result.append(name, style="bold")
+    return result
+
+
+def _task_marker(row: Row) -> str | None:
     if row.kind == "sprint_qa":
         return "🔍"
     if row.kind == "fix_qa":
         return "🛠️"
     if row.kind in ("dev", "fix"):
-        return {"hard": "💎", "normal": "📥", "fast": "⚡"}.get(row.difficulty, "📥")
-    return "📥"
+        return {"hard": "💎", "fast": "⚡"}.get(row.difficulty)
+    return None
+
+
+def _icon(row: Row) -> Text:
+    status, style = SPRINT_STATE_ICONS["in_progress" if row.state == "running" else "ready"]
+    result = Text(status, style=style)
+    marker = _task_marker(row)
+    if marker:
+        result.append(marker)
+    return result
 
 
 def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
@@ -86,7 +105,7 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     heading = Text()
     heading.append(glyph, style=color)
     heading.append(" ")
-    heading.append(agent.name, style="bold")
+    heading.append_text(render_agent(agent.name, agent))
     heading.append(f"  {agent.depth}")
     red = sum(row.marker == "red" for row in agent.rows)
     yellow = sum(row.marker == "yellow" for row in agent.rows)
@@ -98,7 +117,9 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     rows = sorted(agent.rows, key=lambda row: row.state != "running")
     for row in rows[:3]:
         bead_id = short_id(row.task_id, prefix)
-        line = Text(f" {_icon(row)} {bead_id}")
+        line = Text(" ")
+        line.append_text(_icon(row))
+        line.append(f" {bead_id}")
         line.append(" " * max(1, 22 - cell_len(bead_id)))
         line.append(f"{_age(row.age_s):>4} ")
         tag = _tag(row)
@@ -145,7 +166,9 @@ def _pr_link(line: Text, number: int, snapshot: Snapshot) -> None:
 
 def _sent_line(action: Action, snapshot: Snapshot) -> Text:
     beads = ", ".join(short_id(bead_id, snapshot.bead_prefix) for bead_id in action.bead_ids)
-    line = Text(f" {_clock(action.at)} {beads} → {action.to}")
+    line = Text(f" {_clock(action.at)} {beads} → ")
+    recipient = next((agent for agent in snapshot.agents if agent.name == action.to), None)
+    line.append_text(render_agent(action.to, recipient))
     matching = next((row for row in snapshot.prs if row.bead_id in action.bead_ids), None)
     if matching:
         _pr_link(line, matching.pr.number, snapshot)
@@ -178,9 +201,13 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         beads = tuple(step for sprint in snapshot.sprints for step in sprint.steps)
         lines.extend((Text(), Text(f"== Beads ({len(beads)})")))
         for step in beads:
-            lines.append(Text(
-                f" {short_id(step.bead_id, snapshot.bead_prefix):<22} {step.status:<12} {step.kind}"
-            ))
+            bead_line = Text(f" {short_id(step.bead_id, snapshot.bead_prefix):<22} ")
+            status_glyph, status_style = BEAD_STATUS_ICONS.get(step.status, ("", None))
+            if status_glyph:
+                bead_line.append(status_glyph, style=status_style)
+                bead_line.append(" ")
+            bead_line.append(f"{step.status:<12} {step.kind}")
+            lines.append(bead_line)
     if snapshot.stopped is not None and snapshot.prs:
         lines.extend((Text(), Text(f"== PRs ({len(snapshot.prs)})")))
         for row in snapshot.prs:
@@ -216,4 +243,8 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"
     hours, minutes = divmod(max(0, metrics.active_s) // 60, 60)
     line = Text(f"{segment} | {progress} | active {hours}h{minutes:02d}m | tick {_clock(snapshot.generated_at, seconds=True)}")
+    if snapshot.lead:
+        agent = next((item for item in snapshot.agents if item.name == snapshot.lead), None)
+        line.append(" | lead ")
+        line.append_text(render_agent(snapshot.lead, agent))
     return _fit(line, width)

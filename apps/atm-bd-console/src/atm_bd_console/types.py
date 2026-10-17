@@ -18,6 +18,9 @@ class Member:
     name: str
     presence: Presence
     presence_since: datetime | None
+    agent_type: str | None = None
+    model: str | None = None
+    harness: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class Bead:
     created_at: datetime
     claimed_at: datetime | None
     closed_at: datetime | None
+    close_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,7 @@ class Step:
     sprint_bead: str | None
     qa_round: int | None
     carry_forward: str | None
+    close_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +229,10 @@ class AgentView:
     status_since: datetime
     depth: int
     rows: tuple[Row, ...]
+    agent_type: str | None = None
+    model: str | None = None
+    harness: str | None = None
+    qa_state: Literal["running", "pass", "fail"] | None = None
 
 
 @dataclass(frozen=True)
@@ -284,6 +293,7 @@ class PrRow:
     bead_id: str | None
     top: bool
     merge: Merge | None
+    assignee: str | None = None
 
 
 @dataclass(frozen=True)

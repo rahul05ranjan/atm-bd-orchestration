@@ -84,12 +84,12 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
         rendered = dashboard(value, 120, 40)
         text = rendered.plain
         assert text.startswith("phase-bh · 14:04 · next 60s")
-        assert "● busy  4  ❗1 ⚠️1" in text
-        assert "🌀 running" in text and "💎 hard" in text and "📥 normal" in text
+        assert "● ·busy  4  ❗1 ⚠️1" in text
+        assert "\U000f051f running" in text and "💎 hard" in text and "\U000f040d normal" in text
         assert "… +1 more" in text and "⚡ fast" not in text
-        assert "◐ stalling" in text and "🔍 sprint-qa" in text
-        assert "■ blocked" in text and "🛠️ fix-qa" in text
-        assert "○ offline" in text and "· idle" in text
+        assert "◐ ·stalling" in text and "🔍 sprint-qa" in text
+        assert "■ ·blocked" in text and "🛠️ fix-qa" in text
+        assert "○ ·offline" in text and "· ·idle" in text
         assert "❗bh: description for atm-hard" in text
         assert "⚠️bh: description for atm-normal" in text
         styles = {span.style for span in rendered.spans}
@@ -114,7 +114,7 @@ def test_sections_error_first_sent_last_height_and_links() -> None:
         assert text.index("== Errors (1)") < text.index("== Held (1)") < text.index("== Sent")
         assert "14:04 timeout:" in text and "retry" in text
         assert "bh-6" in text and "3m" in text and "PR #553" in text
-        assert text.count("→ dev-sanity") == 5
+        assert text.count("→ ·dev-sanity") == 5
         assert any("link https://example/pr/553" in str(span.style) for span in rendered.spans)
         clipped = dashboard(value, 80, 10).plain.splitlines()
         assert len(clipped) == 10 and clipped[-1].startswith("… ") and "more rows" in clipped[-1]
@@ -134,7 +134,7 @@ def test_long_titles_with_wide_chars_and_emoji_clip_at_80_and_120() -> None:
         lines = dashboard(value, width, 40).plain.splitlines()
         assert all(cell_len(line) <= width for line in lines), width
         assert any(line.endswith("…") for line in lines), width
-        assert any("🌀 long-title" in line and "❗bh:" in line for line in lines), width
+        assert any("\U000f051f💎 long-title" in line and "❗bh:" in line for line in lines), width
 
     assert any("💎" in line for line in dashboard(value, 120, 40).plain.splitlines())
 
@@ -164,17 +164,17 @@ def test_status_bar_formats_and_cell_width() -> None:
 
     def check() -> None:
         expected = (FIXTURES / "render" / "status-bar-ok.txt").read_text().rstrip("\n")
-        assert status_bar(value, 120).plain == expected
+        assert status_bar(value, 120).plain == expected + " | lead ·fenix"
         assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain == (
-            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
         assert status_bar(failed, 120).plain == (
-            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
         assert status_bar(truncated_ok, 120).plain == (
-            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         for width in (80, 120):
             assert cell_len(status_bar(value, width).plain) <= width
@@ -232,14 +232,14 @@ def test_running_contract_snapshot_renders_its_rows_unmodified() -> None:
     rendered = dashboard(decoded.value, 120, 40).plain
 
     assert rendered.splitlines()[0].startswith("phase-bh ·")
-    assert "● arch-ctm  2 ⚠️1" in rendered
+    assert "● ·arch-ctm  2 ⚠️1" in rendered
     assert "bh-6                    7m ⚠️bh-6: QA bh-6 round 2" in rendered
     assert "== Errors (2)" in rendered
     assert "command_failed: gh api graphql (exit 1): HTTP 502" in rendered
     assert "lock_held: snapshot age 42s" in rendered
     assert "== Blocked (1)" in rendered
     assert "CI failing on the top layer PR #1850" in rendered
-    assert "bh-6.qa → quality-mgr" in rendered
+    assert "bh-6.qa → ·quality-mgr" in rendered
 
 
 def test_stopped_snapshot_renders_beads_and_pr_history() -> None:
