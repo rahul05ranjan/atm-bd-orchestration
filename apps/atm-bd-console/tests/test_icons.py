@@ -49,10 +49,22 @@ def test_qa_icon_color_tracks_state_and_sanity_icon_is_fixed() -> None:
 def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     tables = (BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, PR_STATE_ICONS, CI_STATE_ICONS, MERGE_STATE_ICONS)
     glyphs = [glyph for table in tables for glyph, _ in table.values()]
-    glyphs.extend((icon_for(Member("codex", "active", None, "dev", "GPT-Sol", "codex-cli"))[0],
-                   icon_for(Member("claude", "active", None, "dev", "Claude-Fable", "claude-code"))[0],
-                   icon_for(Member("qa", "idle", None, "qa"))[0],
-                   icon_for(Member("sanity", "idle", None, "sanity"))[0]))
+    model_members = tuple(
+        Member(f"claude-{model}", "active", None, "dev", model, "claude-code")
+        for model in ("haiku", "sonnet", "opus", "fable", "unknown")
+    ) + tuple(
+        Member(f"codex-{model}", "active", None, "dev", model, "codex-cli")
+        for model in ("sol", "luna", "terra", "astra", "unknown")
+    )
+    glyphs.extend(icon_for(member)[0] for member in model_members)
+    glyphs.extend(
+        icon_for(AgentView("qa", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), "qa", qa_state=state))[0]
+        for state in (None, "running", "pass", "fail")
+    )
+    glyphs.extend((
+        icon_for(Member("sanity", "idle", None, "sanity"))[0],
+        icon_for(None)[0],
+    ))
     assert glyphs
     assert len({cell_len(glyph) for glyph in glyphs}) == 1
     assert BEAD_STATUS_ICONS == {
