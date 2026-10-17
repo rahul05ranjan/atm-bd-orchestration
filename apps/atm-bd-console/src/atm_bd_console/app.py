@@ -5,6 +5,7 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -19,6 +20,7 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
 
 from . import prs, render, status
+from .build import identity
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
@@ -94,12 +96,15 @@ class ConsoleApp(App[int]):
     #sprint-steps { width: 1fr; height: 1fr; }
     #sprint-steps-text { width: auto; height: auto; }
     #status-bar { dock: bottom; height: 1; }
+    #build { dock: top; height: 1; }
+    #diagnostics { height: 1fr; overflow: auto; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("m", "toggle_pr_history", "PR history"),
+        Binding("d", "show_diagnostics", "Diagnostics"),
         Binding("ctrl+q", "noop", show=False, priority=True),
     ]
 
@@ -118,8 +123,11 @@ class ConsoleApp(App[int]):
         self._pending_forced_refresh = False
         self._status_view_initialized = False
         self.show_pr_history = False
+        self.diagnostics: list[str] = []
+        self.diagnostics_path = Path(config.state_dir) / "diagnostics.log"
 
     def compose(self) -> ComposeResult:
+        yield Static(f"atm-bd-console {identity()}", id="build")
         with TabbedContent(initial="dispatch"):
             with TabPane("Dispatch", id="dispatch"), VerticalScroll(id="dispatch-panel"):
                 yield Static(id="dashboard")
@@ -134,6 +142,8 @@ class ConsoleApp(App[int]):
                         yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
+            with TabPane("Diagnostics", id="diagnostics"):
+                yield Static(id="diagnostics-text")
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
@@ -154,6 +164,24 @@ class ConsoleApp(App[int]):
     def action_toggle_pr_history(self) -> None:
         self.show_pr_history = not self.show_pr_history
         self.refresh_views()
+
+    def action_show_diagnostics(self) -> None:
+        self.query_one(TabbedContent).active = "diagnostics"
+
+    def _record_error(self, source: str, error: Error | Exception) -> None:
+        if isinstance(error, Exception):
+            message = str(error)
+        else:
+            detail = getattr(error, "message", getattr(error, "path", ""))
+            message = f"{error.kind}: {detail}; {error.fix}"
+        entry = f"{datetime.now(UTC).strftime('%H:%M:%S')} {source}: {message}"
+        self.diagnostics = [*self.diagnostics[-19:], entry]
+        try:
+            self.diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.diagnostics_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(entry + "\n")
+        except OSError as log_error:
+            self.diagnostics = [*self.diagnostics[-19:], f"log: {log_error}"]
 
     def copy_status_selection(self, start: tuple[int, int], end: tuple[int, int], scroll_x: int, scroll_y: int) -> None:
         points = sorted(((start[1] + scroll_y, start[0] + scroll_x), (end[1] + scroll_y, end[0] + scroll_x)))
@@ -220,6 +248,7 @@ class ConsoleApp(App[int]):
         if not self.is_running:
             return
         self.tick_error = error
+        self._record_error("tick", error)
         self.refresh_views()
 
     def _show(self, snapshot: Snapshot, text: str, error: Error | None) -> None:
@@ -229,6 +258,8 @@ class ConsoleApp(App[int]):
         if self.startup_error is not None:
             snapshot = replace(snapshot, errors=(self.startup_error, *snapshot.errors))
         self.snapshot, self.status_text, self.status_error, self.tick_error = snapshot, text, error, None
+        for source_error in (*snapshot.errors, *((error,) if error is not None else ())):
+            self._record_error("source", source_error)
         sprints = self.query_one("#sprints", OptionList)
         highlighted = sprints.highlighted
         sprints.clear_options()
@@ -298,6 +329,9 @@ class ConsoleApp(App[int]):
             dashboard, header = render.tick_error(self.tick_error, dashboard_width)
             self.query_one("#dashboard", Static).update(dashboard)
             self.query_one("#status-header", Static).update(header)
+        log_path = str(self.diagnostics_path)
+        details = "\n".join(self.diagnostics[-20:]) or "No errors recorded."
+        self.query_one("#diagnostics-text", Static).update(f"Log: {log_path}\n\n{details}")
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]

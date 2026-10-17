@@ -1,6 +1,6 @@
 [project]
 name = "atm-bd-console"
-version = "0.1.0"
+version = "0.16.1"
 requires-python = ">=3.11"
 dependencies = ["rich>=15.0.0,<16", "textual>=8.2.8,<9", "sc-observability>=1.5.0,<2"]
 

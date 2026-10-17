@@ -15,6 +15,7 @@ from rich.cells import cell_len
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
+from atm_bd_console.build import identity
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
@@ -65,6 +66,31 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
             assert app.is_running
             shown = str(app.query_one("#dashboard").render())
             assert "== Errors (1)" in shown and "step exploded" in shown
+
+    run_scenario(scenario())
+
+
+def test_injected_source_failure_is_visible_in_diagnostics_and_written_to_its_log(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = replace(CONFIG, state_dir=str(tmp_path / "state"))
+        app = ConsoleApp(config, RaisingStep(), STATE)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "diagnostics"
+            await settle(pilot)
+            shown = app.query_one("#diagnostics-text").render().plain
+            assert "tick: io_failed" in shown and str(app.diagnostics_path) in shown
+            assert "step exploded" in app.diagnostics_path.read_text()
+
+    run_scenario(scenario())
+
+
+def test_header_uses_the_cli_build_identity() -> None:
+    async def scenario() -> None:
+        app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            assert app.query_one("#build").render().plain == f"atm-bd-console {identity()}"
 
     run_scenario(scenario())
 
