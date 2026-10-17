@@ -88,6 +88,21 @@ def test_graphql_and_rest_map_drafts_to_draft_state(fake_bin, monkeypatch) -> No
     assert github_source.open_prs("rest")[0].value[0].state == "draft"
 
 
+def test_graphql_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
+    graph = graphql()
+    node = graph["data"]["repository"]["pullRequests"]["nodes"][0]
+    node.update(state="CLOSED", isDraft=True)
+    fake_gh(fake_bin, monkeypatch, graph)
+    assert github_source.open_prs("graphql")[0].value[0].state == "closed"
+
+
+def test_rest_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
+    rest = copy.deepcopy(RECORDED_REST[:1])
+    rest[0].update(state="closed", draft=True)
+    fake_gh(fake_bin, monkeypatch, rest)
+    assert github_source.open_prs("rest")[0].value[0].state == "closed"
+
+
 
 
 def test_failed_check_runs_and_commit_statuses_are_both_named(fake_bin, monkeypatch) -> None:
