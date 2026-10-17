@@ -1,6 +1,7 @@
 """The interactive console: one Textual app over an injected step function."""
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from collections.abc import Callable
@@ -23,6 +24,7 @@ from . import prs, render, status
 from .build import identity
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
+from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
@@ -109,7 +111,7 @@ class ConsoleApp(App[int]):
     ]
 
     def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> None:
-        super().__init__()
+        super().__init__(driver_class=CONSOLE_DRIVER_CLASS)
         self.config = config
         self.step = step
         self.state = state
@@ -125,6 +127,8 @@ class ConsoleApp(App[int]):
         self.show_pr_history = False
         self.diagnostics: list[str] = []
         self.diagnostics_path = Path(config.state_dir) / "diagnostics.log"
+        # Every mouse press, click, key and tab change with the widget it landed on (#241 evidence).
+        self.input_log_path = Path(config.state_dir) / "input.log"
 
     def compose(self) -> ComposeResult:
         yield Static(f"atm-bd-console {identity()}", id="build")
@@ -145,10 +149,6 @@ class ConsoleApp(App[int]):
             with TabPane("Diagnostics", id="diagnostics"):
                 yield Static(id="diagnostics-text")
         yield Static(id="status-bar")
-
-    def on_mount(self) -> None:
-        self.tick(False)
-        self.set_interval(self.config.interval_s, self._on_interval)
 
     def _on_interval(self) -> None:
         # A stopped snapshot ends ticking until r.
@@ -198,7 +198,34 @@ class ConsoleApp(App[int]):
             self.copy_to_clipboard(text)
             self.notify(f"Copied {len(text)} chars", timeout=2)
 
+    def on_mount(self) -> None:
+        self._trace_input(f"start size={self.size.width}x{self.size.height} driver={type(self._driver).__name__} "
+                          f"TERM={os.environ.get('TERM', '')} TERM_PROGRAM={os.environ.get('TERM_PROGRAM', '')} "
+                          f"TMUX={'yes' if os.environ.get('TMUX') else 'no'}")
+        self.tick(False)
+        self.set_interval(self.config.interval_s, self._on_interval)
+
+    def _trace_input(self, entry: str) -> None:
+        try:
+            self.input_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.input_log_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"{datetime.now(UTC).strftime('%H:%M:%S.%f')[:-3]} {entry}\n")
+        except OSError as log_error:
+            self.diagnostics = [*self.diagnostics[-19:], f"input log: {log_error}"]
+
+    async def on_event(self, event: events.Event) -> None:
+        # Traced before dispatch, so presses the StatusPanel/SprintList stop are recorded too.
+        if isinstance(event, (events.MouseDown, events.MouseUp)) and not event.is_forwarded:
+            widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+            kind = "mouse_down" if isinstance(event, events.MouseDown) else "mouse_up"
+            self._trace_input(f"{kind} x={event.screen_x} y={event.screen_y} button={event.button} "
+                              f"widget={type(widget).__name__}#{widget.id} active={self.query_one(TabbedContent).active}")
+        elif isinstance(event, events.Key) and not event.is_forwarded:
+            self._trace_input(f"key {event.key} active={self.query_one(TabbedContent).active}")
+        await super().on_event(event)
+
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        self._trace_input(f"tab {event.pane.id}")
         if event.pane.id == "prs":
             self.tick(True)
         elif event.pane.id == "status":
@@ -331,7 +358,8 @@ class ConsoleApp(App[int]):
             self.query_one("#status-header", Static).update(header)
         log_path = str(self.diagnostics_path)
         details = "\n".join(self.diagnostics[-20:]) or "No errors recorded."
-        self.query_one("#diagnostics-text", Static).update(f"Log: {log_path}\n\n{details}")
+        self.query_one("#diagnostics-text", Static).update(
+            f"Log: {log_path}\nInput trace: {self.input_log_path}\n\n{details}")
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]
