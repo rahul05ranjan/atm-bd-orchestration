@@ -6,13 +6,18 @@ from pathlib import Path
 from . import __version__, git_source
 from .result import Err
 
+try:
+    from ._build_identity import IDENTITY as BUILT_IDENTITY
+except ImportError:
+    BUILT_IDENTITY: str | None = None
+
 
 def identity(root: Path | None = None) -> str:
     root = root or Path(__file__).resolve().parents[4]
     toplevel = git_source._run(root, "rev-parse", "--show-toplevel")
     package = root / "apps" / ("atm-bd" + "-console") / "pyproject.toml"
     if isinstance(toplevel, Err) or Path(toplevel.value.stdout.strip()).resolve() != root.resolve() or not package.is_file():
-        return f"{__version__}+unknown"
+        return BUILT_IDENTITY or f"{__version__}+unknown"
     revision = git_source._run(root, "rev-parse", "--short", "HEAD")
     count = git_source._run(root, "rev-list", "--count", "HEAD")
     if isinstance(revision, Err) or isinstance(count, Err) or not count.value.stdout.strip().isdigit():

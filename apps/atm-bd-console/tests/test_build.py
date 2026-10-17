@@ -7,6 +7,8 @@ from shutil import copytree
 from atm_bd_console import __version__, build
 from atm_bd_console.build import identity
 
+CONSOLE = Path(__file__).resolve().parents[1]
+
 
 def git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
@@ -58,3 +60,25 @@ def test_identity_rejects_package_copied_under_a_foreign_git_root(tmp_path: Path
     monkeypatch.setattr(build, "__file__", str(copied / "build.py"))
 
     assert build.identity() == f"{__version__}+unknown"
+
+
+def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    copied = checkout / "apps" / "atm-bd-console"
+    copytree(CONSOLE, copied, ignore=__import__("shutil").ignore_patterns(".venv", "__pycache__", "_build_identity.py"))
+    git(checkout, "init")
+    git(checkout, "config", "user.email", "test@example.com")
+    git(checkout, "config", "user.name", "Test")
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "one")
+    (copied / "README.md").write_text("two\n")
+    git(checkout, "commit", "-am", "two")
+    (copied / "README.md").write_text("dirty\n")
+    expected = identity(checkout)
+    dist = tmp_path / "dist"
+    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=copied, check=True)
+    venv = tmp_path / "outside" / "venv"
+    subprocess.run(["uv", "venv", str(venv)], check=True)
+    python = venv / "bin" / "python"
+    subprocess.run(["uv", "pip", "install", "--python", str(python), str(next(dist.glob("*.whl")))], check=True)
+    assert subprocess.check_output([venv / "bin" / "atm-bd-console", "--version"], text=True).strip() == expected
