@@ -16,6 +16,7 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
+from textual.errors import NoWidget
 from textual.message import Message
 from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
@@ -214,15 +215,27 @@ class ConsoleApp(App[int]):
             self.diagnostics = [*self.diagnostics[-19:], f"input log: {log_error}"]
 
     async def on_event(self, event: events.Event) -> None:
-        # Traced before dispatch, so presses the StatusPanel/SprintList stop are recorded too.
-        if isinstance(event, (events.MouseDown, events.MouseUp)) and not event.is_forwarded:
-            widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
-            kind = "mouse_down" if isinstance(event, events.MouseDown) else "mouse_up"
-            self._trace_input(f"{kind} x={event.screen_x} y={event.screen_y} button={event.button} "
-                              f"widget={type(widget).__name__}#{widget.id} active={self.query_one(TabbedContent).active}")
-        elif isinstance(event, events.Key) and not event.is_forwarded:
-            self._trace_input(f"key {event.key} active={self.query_one(TabbedContent).active}")
+        # Traced before dispatch, so presses the StatusPanel/SprintList stop are recorded too. The trace is
+        # evidence only: nothing in it may raise into Textual's event path.
+        if isinstance(event, events.InputEvent) and not event.is_forwarded:
+            try:
+                self._trace_event(event)
+            except Exception as trace_error:  # noqa: BLE001
+                self.diagnostics = [*self.diagnostics[-19:], f"input trace: {trace_error!r}"]
         await super().on_event(event)
+
+    def _trace_event(self, event: events.InputEvent) -> None:
+        active = self.query_one(TabbedContent).active
+        if isinstance(event, (events.MouseDown, events.MouseUp)):
+            kind = "mouse_down" if isinstance(event, events.MouseDown) else "mouse_up"
+            try:
+                widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+                hit = f"{type(widget).__name__}#{widget.id}"
+            except NoWidget:
+                hit = "off-screen"
+            self._trace_input(f"{kind} x={event.screen_x} y={event.screen_y} button={event.button} widget={hit} active={active}")
+        elif isinstance(event, events.Key):
+            self._trace_input(f"key {event.key} active={active}")
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         self._trace_input(f"tab {event.pane.id}")

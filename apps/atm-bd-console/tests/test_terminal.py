@@ -6,6 +6,9 @@ import sys
 import pytest
 from conftest import FakeStep
 from contract_samples import CONFIG, STATE
+from textual import events
+from textual._xterm_parser import XTermParser
+from textual.drivers import linux_driver
 from textual.messages import InBandWindowResize
 
 from atm_bd_console.app import ConsoleApp
@@ -39,3 +42,33 @@ def test_cell_mouse_driver_never_requests_in_band_resize_or_pixel_mouse() -> Non
 
     asyncio.run(drive())
     assert not any(sequence in "".join(written) for sequence in PIXEL_MOUSE_HANDSHAKE), written
+
+
+IN_BAND_RESIZE_REPORT = "\x1b[48;40;120;1200;800t"  # rows;cols;pixel height;pixel width, as a terminal in mode 2048 sends
+SGR_CLICK = "\x1b[<0;60;15M"
+
+
+def _mouse_downs(parser: XTermParser, data: str) -> list[tuple[int, int]]:
+    return [(int(event.x), int(event.y)) for event in parser.feed(data) if isinstance(event, events.MouseDown)]
+
+
+def test_cell_mouse_parser_keeps_cells_after_an_unsolicited_in_band_resize_report() -> None:
+    from atm_bd_console.terminal import CellMouseParser
+
+    # QA .4.35 F1: the stock parser scales the same click to the tab header row once a resize report arrived.
+    stock = XTermParser()
+    list(stock.feed(IN_BAND_RESIZE_REPORT + SGR_CLICK))  # feed is lazy; the report must be consumed
+    assert _mouse_downs(stock, SGR_CLICK) == [(8, 0)]
+    cells = CellMouseParser()
+    list(cells.feed(IN_BAND_RESIZE_REPORT + SGR_CLICK))
+    assert _mouse_downs(cells, SGR_CLICK) == [(59, 14)]
+
+
+def test_input_thread_builds_the_cell_mouse_parser_and_restores_textual_afterwards() -> None:
+    from atm_bd_console.terminal import CellMouseParser, cell_mouse_parser
+
+    assert linux_driver.XTermParser is XTermParser
+    with cell_mouse_parser():
+        assert linux_driver.XTermParser is CellMouseParser
+    assert linux_driver.XTermParser is XTermParser
+    assert "run_input_thread" in CONSOLE_DRIVER_CLASS.__dict__

@@ -477,3 +477,20 @@ def test_input_trace_records_terminal_presses_keys_and_tab_changes(tmp_path: Pat
         assert "key d active=status" in trace and "tab diagnostics" in trace
 
     run_scenario(scenario())
+
+
+def test_off_screen_presses_are_traced_without_raising(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, state_dir=str(tmp_path / "state"), interval_s=3600), FakeStep(), STATE)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(pilot)
+            for x, y in ((500, 500), (-1, -1)):
+                for event in _terminal_press(x, y):
+                    await app.on_event(event)
+            await settle(pilot)
+        trace = [line.split(" ", 1)[1] for line in app.input_log_path.read_text().splitlines()]
+        assert "mouse_down x=500 y=500 button=1 widget=off-screen active=dispatch" in trace
+        assert "mouse_up x=-1 y=-1 button=1 widget=off-screen active=dispatch" in trace
+        assert not any(line.startswith("input trace:") for line in app.diagnostics)
+
+    run_scenario(scenario())
