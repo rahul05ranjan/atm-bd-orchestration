@@ -109,7 +109,12 @@ def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> N
     run_scenario(scenario())
 
 
-def test_status_mouse_events_keep_the_active_tab_and_copy_only_a_drag(monkeypatch) -> None:
+def _move(widget, screen_x: int, screen_y: int) -> events.MouseMove:
+    return events.MouseMove(widget, screen_x - widget.region.x, screen_y - widget.region.y, 0, 0, 1,
+                            False, False, False, screen_x=screen_x, screen_y=screen_y)
+
+
+def test_dag_drag_pans_the_graph_and_copies_nothing(monkeypatch) -> None:
     copied: list[str] = []
     notices: list[str] = []
 
@@ -123,22 +128,44 @@ def test_status_mouse_events_keep_the_active_tab_and_copy_only_a_drag(monkeypatc
             tabs.active = "status"
             await settle(pilot)
             panel = app.query_one("#status-panel")
-            await pilot.mouse_down(panel, offset=(0, 0))
-            panel.on_mouse_move(events.MouseMove(panel, 5, 0, 0, 0, 0, False, False, False))
-            await pilot.mouse_up(panel, offset=(5, 0))
+            before = panel.scroll_x
+            assert panel.max_scroll_x > before + 30
+            x, y = panel.region.x + 20, panel.region.y + 2
+            await pilot.mouse_down(panel, offset=(20, 2))
+            panel.on_mouse_move(_move(panel, x - 7, y))   # drag left: the graph follows the pointer
+            panel.on_mouse_move(_move(panel, x - 12, y))
+            await pilot.mouse_up(panel, offset=(8, 2))
             await settle(pilot)
-            assert tabs.active == "status" and copied and notices == [f"Copied {len(copied[0])} chars"]
-            copied.clear()
-            notices.clear()
-            panel.on_mouse_down(events.MouseDown(panel, 0, 0, 0, 0, 0, False, False, False))
-            panel.on_mouse_move(events.MouseMove(panel, 5, 0, 0, 0, 0, False, False, False))
-            panel.on_mouse_down(events.MouseDown(panel, 0, 0, 0, 0, 0, False, False, False))
-            panel.on_mouse_up(events.MouseUp(panel, 0, 0, 0, 0, 0, False, False, False))
-            await settle(pilot)
-            assert copied == [] and notices == []
+            assert panel.scroll_x == before + 12
+            assert tabs.active == "status" and copied == [] and notices == []
+            assert app.screen.get_selected_text() is None
             await pilot.click("#sprints", offset=(1, 1))
             await settle(pilot)
             assert tabs.active == "status" and copied == [] and notices == []
+
+    run_scenario(scenario())
+
+
+def test_selecting_dashboard_text_copies_it_with_a_toast(monkeypatch) -> None:
+    copied: list[str] = []
+    notices: list[str] = []
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
+        monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+        monkeypatch.setattr(app, "notify", lambda message, **_kwargs: notices.append(message))
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            dashboard = app.query_one("#dashboard")
+            await pilot.click(dashboard, offset=(1, 0))
+            await settle(pilot)
+            assert copied == [] and notices == []
+            await pilot.mouse_down(dashboard, offset=(0, 0))
+            await pilot.hover(dashboard, offset=(8, 0))
+            await pilot.mouse_up(dashboard, offset=(8, 0))
+            await settle(pilot)
+            assert copied == [lines(app, "#dashboard")[0][:9]]
+            assert notices == [f"Copied {len(copied[0])} chars"]
 
     run_scenario(scenario())
 

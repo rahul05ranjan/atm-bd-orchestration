@@ -55,7 +55,17 @@ def _lock_message(error: Error) -> str:
     return f"atm-bd-console: {error.kind}: {error.path}: {error.message}; {error.fix}"
 
 
+class GraphText(Static):
+    """The DAG: never text-selectable, its drag pans (#252)."""
+
+    ALLOW_SELECT = False
+
+
 class StatusPanel(ScrollableContainer):
+    """Scrolls the DAG; a mouse drag pans it by the drag delta (#252), keyboard ←/→ pan as before."""
+
+    ALLOW_SELECT = False
+
     class Resized(Message):
         pass
 
@@ -63,22 +73,22 @@ class StatusPanel(ScrollableContainer):
         self.post_message(self.Resized())
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
-        self._selection_start = (int(event.x), int(event.y))
-        self._selection_end = None
+        self._pan_origin = (event.screen_x, event.screen_y, self.scroll_x, self.scroll_y)
+        self.capture_mouse()
         event.stop()
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        if getattr(self, "_selection_start", None) is not None:
-            self._selection_end = (int(event.x), int(event.y))
+        origin = getattr(self, "_pan_origin", None)
+        if origin is not None:
+            start_x, start_y, scroll_x, scroll_y = origin
+            self.scroll_to(x=scroll_x - (event.screen_x - start_x), y=scroll_y - (event.screen_y - start_y),
+                           animate=False, immediate=True)
         event.stop()
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
-        start = getattr(self, "_selection_start", None)
-        end = getattr(self, "_selection_end", None)
-        self._selection_start = self._selection_end = None
+        self._pan_origin = None
+        self.release_mouse()
         event.stop()
-        if start is not None and end is not None and start != end:
-            self.app.copy_status_selection(start, end, int(self.scroll_x), int(self.scroll_y))
 
 
 class SprintList(OptionList):
@@ -140,7 +150,7 @@ class ConsoleApp(App[int]):
                 yield Static(id="status-header")
                 yield Static("↔ Wide graph · focus graph and use ←/→ to pan", id="status-overflow")
                 with StatusPanel(id="status-panel"):
-                    yield Static(id="status-text")
+                    yield GraphText(id="status-text")
                 with Horizontal(id="sprint-details"):
                     yield SprintList(id="sprints")
                     with VerticalScroll(id="sprint-steps"):
@@ -184,20 +194,13 @@ class ConsoleApp(App[int]):
         except OSError as log_error:
             self.diagnostics = [*self.diagnostics[-19:], f"log: {log_error}"]
 
-    def copy_status_selection(self, start: tuple[int, int], end: tuple[int, int], scroll_x: int, scroll_y: int) -> None:
-        points = sorted(((start[1] + scroll_y, start[0] + scroll_x), (end[1] + scroll_y, end[0] + scroll_x)))
-        (first_line, first_column), (last_line, last_column) = points
-        lines = self.status_text.splitlines()
-        selected = []
-        for line_number in range(first_line, min(last_line + 1, len(lines))):
-            line = lines[line_number]
-            left = first_column if line_number == first_line else 0
-            right = last_column + 1 if line_number == last_line else len(line)
-            selected.append(line[left:right])
-        text = "\n".join(selected)
+    def on_text_selected(self) -> None:
+        """A finished text selection outside the DAG is copied with a toast (#253)."""
+        text = self.screen.get_selected_text()
         if text:
             self.copy_to_clipboard(text)
             self.notify(f"Copied {len(text)} chars", timeout=2)
+            self._trace_input(f"copy {len(text)} chars active={self.query_one(TabbedContent).active}")
 
     def on_mount(self) -> None:
         self._trace_input(f"start size={self.size.width}x{self.size.height} driver={type(self._driver).__name__} "
