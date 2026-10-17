@@ -70,7 +70,7 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
     run_scenario(scenario())
 
 
-def test_injected_source_failure_is_visible_in_diagnostics_and_written_to_its_log(tmp_path: Path) -> None:
+def test_raised_tick_failure_is_visible_in_diagnostics_and_written_to_its_log(tmp_path: Path) -> None:
     async def scenario() -> None:
         config = replace(CONFIG, state_dir=str(tmp_path / "state"))
         app = ConsoleApp(config, RaisingStep(), STATE)
@@ -81,6 +81,21 @@ def test_injected_source_failure_is_visible_in_diagnostics_and_written_to_its_lo
             shown = app.query_one("#diagnostics-text").render().plain
             assert "tick: io_failed" in shown and str(app.diagnostics_path) in shown
             assert "step exploded" in app.diagnostics_path.read_text()
+
+    run_scenario(scenario())
+
+
+def test_snapshot_source_failure_is_visible_in_diagnostics_and_written_to_its_log(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = replace(CONFIG, state_dir=str(tmp_path / "state"))
+        app = ConsoleApp(config, FakeStep(replace(RUNNING, errors=(TIMEOUT,))), STATE)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "diagnostics"
+            await settle(pilot)
+            shown = app.query_one("#diagnostics-text").render().plain
+            assert "source: timeout" in shown
+            assert "source: timeout" in app.diagnostics_path.read_text()
 
     run_scenario(scenario())
 
