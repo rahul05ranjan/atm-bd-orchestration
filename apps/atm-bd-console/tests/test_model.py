@@ -320,6 +320,10 @@ def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     snapshot, _, _ = tick(closed, STATE, NOW, render)
     assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
 
+    historical_pr = PullRequest(99, "url", "pushed", "base", "sha", "success", (), "closed")
+    snapshot, _, _ = tick(replace(success, prs=Ok((historical_pr,))), STATE, NOW, render)
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
+
 
 def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -> None:
     value = phase(step("dev", "atm-bh-1", branch="pushed", assignee="solar"))

@@ -134,7 +134,7 @@ class PullRequest:
     head_sha: str
     ci: Literal["success", "pending", "failure", "none"]
     failed_checks: tuple[str, ...]
-    state: Literal["open", "merged", "closed"] = "open"
+    state: Literal["open", "merged", "closed", "draft"] = "open"
 
 
 @dataclass(frozen=True)

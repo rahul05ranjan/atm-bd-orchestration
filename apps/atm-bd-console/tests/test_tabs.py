@@ -130,6 +130,12 @@ def test_status_mouse_events_keep_the_active_tab_and_copy_only_a_drag(monkeypatc
             assert tabs.active == "status" and copied and notices == [f"Copied {len(copied[0])} chars"]
             copied.clear()
             notices.clear()
+            panel.on_mouse_down(events.MouseDown(panel, 0, 0, 0, 0, 0, False, False, False))
+            panel.on_mouse_move(events.MouseMove(panel, 5, 0, 0, 0, 0, False, False, False))
+            panel.on_mouse_down(events.MouseDown(panel, 0, 0, 0, 0, 0, False, False, False))
+            panel.on_mouse_up(events.MouseUp(panel, 0, 0, 0, 0, 0, False, False, False))
+            await settle(pilot)
+            assert copied == [] and notices == []
             await pilot.click("#sprints", offset=(1, 1))
             await settle(pilot)
             assert tabs.active == "status" and copied == [] and notices == []

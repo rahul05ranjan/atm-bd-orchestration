@@ -11,7 +11,7 @@ from . import command
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
-GRAPHQL = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100) { totalCount nodes { number url state headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
+GRAPHQL = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number url state headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
 # The repository is the checkout gh runs in: gh fills {owner} and {repo} from it (or from GH_REPO).
 GRAPHQL_ARGV = ("gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={GRAPHQL}")
 REST_ARGV = ("gh", "api", "repos/{owner}/{repo}/pulls?state=all&per_page=100")

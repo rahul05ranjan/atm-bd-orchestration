@@ -6,12 +6,13 @@ from .ids import short_id
 from .render import _fit
 from .types import PrRow, Snapshot
 
-_STATE_GLYPHS = {"open": "◉", "merged": "⑂", "closed": "⊗"}
+_STATE_GLYPHS = {"open": "◉", "merged": "⑂", "closed": "⊗", "draft": "○"}
+_STATE_STYLES = {"open": "green", "merged": "magenta", "closed": "red", "draft": "grey70"}
 
 
 def _row(value: PrRow, snapshot: Snapshot) -> Text:
     line = Text("▲ " if value.top else "  ")
-    line.append(f"{_STATE_GLYPHS[value.pr.state]} ")
+    line.append(f"{_STATE_GLYPHS[value.pr.state]} ", style=_STATE_STYLES[value.pr.state])
     line.append(f"#{value.pr.number}", style=f"link {value.pr.url}")
     line.append(f"  {value.pr.head} → {value.pr.base}")
     line.append(f"  L{value.layer}" if value.layer is not None else "  L—")

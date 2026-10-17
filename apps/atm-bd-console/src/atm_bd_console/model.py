@@ -410,7 +410,7 @@ def _problems(
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
     if fresh_github:
-        heads = {pr.head for pr in prs}
+        heads = {pr.head for pr in prs if pr.state == "open"}
         remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
         pushed = {remote.branch for remote in remotes}
         open_branches = {

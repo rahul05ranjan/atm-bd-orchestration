@@ -73,6 +73,10 @@ def test_graphql_is_one_call_and_maps_rollups(fake_bin, monkeypatch, state, expe
     assert status.ok is True and calls.argv() == [github_source.GRAPHQL_ARGV]
 
 
+def test_graphql_requests_newest_prs_before_the_100_row_limit() -> None:
+    assert "orderBy: {field: CREATED_AT, direction: DESC}" in github_source.GRAPHQL
+
+
 
 
 def test_failed_check_runs_and_commit_statuses_are_both_named(fake_bin, monkeypatch) -> None:

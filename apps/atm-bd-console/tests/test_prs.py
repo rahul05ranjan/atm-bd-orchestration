@@ -76,7 +76,11 @@ def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
     base = snapshot()
     merged = replace(base.prs[0], pr=replace(base.prs[0].pr, state="merged"))
     closed = replace(base.prs[1], pr=replace(base.prs[1].pr, state="closed"))
-    value = replace(base, prs=(base.prs[0], merged, closed))
+    draft = replace(base.prs[1], pr=replace(base.prs[1].pr, state="draft"))
+    value = replace(base, prs=(base.prs[0], merged, closed, draft))
     assert render_prs(value, 120).plain.count("#11") == 1
-    rendered = render_prs(value, 120, include_history=True).plain
-    assert "◉ #11" in rendered and "⑂ #11" in rendered and "⊗ #12" in rendered
+    rendered = render_prs(value, 120, include_history=True)
+    assert "◉ #11" in rendered.plain and "⑂ #11" in rendered.plain and "⊗ #12" in rendered.plain and "○ #12" in rendered.plain
+    glyph_styles = {rendered.plain[span.start:span.end]: str(span.style) for span in rendered.spans}
+    assert glyph_styles["◉ "] == "green" and glyph_styles["⑂ "] == "magenta"
+    assert glyph_styles["⊗ "] == "red" and glyph_styles["○ "] == "grey70"
