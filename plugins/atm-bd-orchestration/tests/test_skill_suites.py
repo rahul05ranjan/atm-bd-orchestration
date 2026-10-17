@@ -50,6 +50,14 @@ def test_installed_suite_passes(installed, suite):
     assert proc.returncode == 0, proc.stdout[-16000:]   # room for the pour test's server log tails
 
 
+def test_installed_fixture_does_not_leak_installer_tool_shims(installed):
+    """Installed skill suites inherit the real shell tool path, not installer test fakes."""
+    assert all(path.name != "required-tools" for path in map(Path, os.environ["PATH"].split(os.pathsep)))
+    jq = shutil.which("jq")
+    assert jq is not None
+    assert Path(jq).parent.name != "required-tools"
+
+
 def test_dev_bead_ids_take_the_installed_prefix(installed):
     """The sprint index derives dev bead ids with the repository's bead prefix, not the source repository's."""
     plan = installed / "docs/plans/phase-x.jsonl"
