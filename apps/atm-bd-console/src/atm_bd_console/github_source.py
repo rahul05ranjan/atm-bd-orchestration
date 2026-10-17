@@ -51,7 +51,7 @@ def _from_graphql(node: dict) -> PullRequest:
     # CheckRun reports name/conclusion, StatusContext (commit statuses) context/state.
     failed = tuple(str(row.get("name") or row.get("context")) for row in contexts
                    if row.get("conclusion") in FAILURES or row.get("state") in FAILURES)
-    state = "draft" if node.get("isDraft") else node.get("state", "OPEN").lower()
+    state = "draft" if str(node.get("state", "OPEN")).upper() == "OPEN" and node.get("isDraft") else node.get("state", "OPEN").lower()
     return PullRequest(node["number"], node["url"], node["headRefName"], node["baseRefName"], node["headRefOid"], _ci(rollup.get("state")), failed, state)
 
 
@@ -73,7 +73,7 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
             rows = tuple(_from_graphql(node) for node in pulls["nodes"])
             truncated = pulls["totalCount"] > 100
         else:
-            rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none", (), "merged" if row.get("merged_at") else "draft" if row.get("draft") else row["state"]) for row in body)
+            rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none", (), "merged" if row.get("merged_at") else "draft" if row["state"] == "open" and row.get("draft") else row["state"]) for row in body)
             truncated = len(rows) >= 100
     except (json.JSONDecodeError, KeyError, TypeError, AttributeError, IndexError) as exc:
         # A body that is not JSON, or JSON of the wrong shape, is one typed failure; GitHub failing never stops work.

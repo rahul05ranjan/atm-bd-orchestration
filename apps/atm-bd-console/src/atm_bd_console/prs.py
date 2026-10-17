@@ -4,10 +4,13 @@ from rich.text import Text
 
 from .ids import short_id
 from .render import _fit
-from .types import PrRow, Snapshot
+from .types import PrRow, PullRequest, Snapshot
 
 _STATE_GLYPHS = {"open": "◉", "merged": "⑂", "closed": "⊗", "draft": "○"}
 _STATE_STYLES = {"open": "green", "merged": "magenta", "closed": "red", "draft": "grey70"}
+
+def active_pr(pr: PullRequest) -> bool:
+    return pr.state in ("open", "draft")
 
 
 def _row(value: PrRow, snapshot: Snapshot) -> Text:
@@ -38,7 +41,7 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
 
 
 def render_prs(snapshot: Snapshot, width: int, include_history: bool = False) -> Text:
-    rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if row.pr.is_open)
+    rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if active_pr(row.pr))
     if not rows:
         if snapshot.gh.mode == "off":
             return Text("GitHub checks are off")

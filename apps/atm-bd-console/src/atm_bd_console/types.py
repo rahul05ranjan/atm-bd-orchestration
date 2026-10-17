@@ -136,9 +136,6 @@ class PullRequest:
     failed_checks: tuple[str, ...]
     state: Literal["open", "merged", "closed", "draft"] = "open"
 
-    @property
-    def is_open(self) -> bool:
-        return self.state in ("open", "draft")
 
 
 @dataclass(frozen=True)
