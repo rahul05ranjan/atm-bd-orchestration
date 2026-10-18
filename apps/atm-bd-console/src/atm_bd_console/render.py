@@ -3,7 +3,20 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 
-from .icons import BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, icon_for
+from .enums import SprintState
+from .icons import (
+    BEAD_STATUS_ICONS,
+    MARKER_FAST,
+    MARKER_FIX_QA,
+    MARKER_HARD,
+    MARKER_QA,
+    MARKER_RED,
+    MARKER_YELLOW,
+    SPRINT_STATE_ICONS,
+    STATUS_FAIL,
+    STATUS_OK,
+    icon_for,
+)
 from .ids import short_id
 from .result import (
     CommandFailed,
@@ -51,7 +64,7 @@ def _fit(line: Text, width: int) -> Text:
 
 def tick_error(error: Error, width: int) -> tuple[Text, Text]:
     """Render a tick error as single-line, width-fitted dashboard and header text."""
-    message = " ".join(error.message.split())
+    message = " ".join(getattr(error, "message", error.kind).split())
     dashboard = Text("\n").join((
         _fit(Text("== Errors (1)", style="red"), width),
         _fit(Text(f" {error.kind}: {message}", style="red"), width),
@@ -63,9 +76,9 @@ def tick_error(error: Error, width: int) -> tuple[Text, Text]:
 def _tag(row: Row) -> Text:
     result = Text()
     if row.marker == "red":
-        result.append("❗", style="red")
+        result.append(MARKER_RED, style="red")
     elif row.marker == "yellow":
-        result.append("⚠️", style="yellow")
+        result.append(MARKER_YELLOW, style="yellow")
     result.append(row.tag)
     return result
 
@@ -83,17 +96,17 @@ def render_agent(name: str | None, member: Member | AgentView | None) -> Text:
 
 def _task_marker(row: Row) -> str | None:
     if row.kind == "sprint_qa":
-        return "🔍"
+        return MARKER_QA
     if row.kind == "fix_qa":
-        return "🛠️"
+        return MARKER_FIX_QA
     if row.kind in ("dev", "fix"):
-        return {"hard": "💎", "fast": "⚡"}.get(row.difficulty)
+        return {"hard": MARKER_HARD, "fast": MARKER_FAST}.get(row.difficulty or "")
     return None
 
 
 def _icon(row: Row) -> Text:
-    status, style = SPRINT_STATE_ICONS["in_progress" if row.state == "running" else "ready"]
-    result = Text(status, style=style)
+    status, style = SPRINT_STATE_ICONS[SprintState.IN_PROGRESS if row.state == "running" else SprintState.READY]
+    result = Text(status, style=style or "")
     marker = _task_marker(row)
     if marker:
         result.append(marker)
@@ -110,9 +123,9 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     red = sum(row.marker == "red" for row in agent.rows)
     yellow = sum(row.marker == "yellow" for row in agent.rows)
     if red:
-        heading.append(f"  ❗{red}", style="red")
+        heading.append(f"  {MARKER_RED}{red}", style="red")
     if yellow:
-        heading.append(f" ⚠️{yellow}", style="yellow")
+        heading.append(f" {MARKER_YELLOW}{yellow}", style="yellow")
     lines = [heading]
     rows = sorted(agent.rows, key=lambda row: row.state != "running")
     for row in rows[:3]:
@@ -202,7 +215,8 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         lines.extend((Text(), Text(f"== Beads ({len(beads)})")))
         for step in beads:
             bead_line = Text(f" {short_id(step.bead_id, snapshot.bead_prefix):<22} ")
-            status_glyph, status_style = BEAD_STATUS_ICONS.get(step.status, ("", None))
+            status_glyph, status_style = next((value for key, value in BEAD_STATUS_ICONS.items()
+                                              if key.value == step.status), ("", None))
             if status_glyph:
                 bead_line.append(status_glyph, style=status_style)
                 bead_line.append(" ")
@@ -233,9 +247,9 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
         read_at = _clock(gh.at) if gh.at else "--:--"
         if gh.error is not None or gh.ok is False:
             kind = gh.error.kind if gh.error is not None else "unavailable"
-            segment = f"gh: {gh.mode} ⛔ {kind} {read_at}"
+            segment = f"gh: {gh.mode} {STATUS_FAIL} {kind} {read_at}"
         else:
-            segment = f"gh: {gh.mode} ✅ {read_at}"
+            segment = f"gh: {gh.mode} {STATUS_OK} {read_at}"
     if gh.truncated:
         segment += " 100+"
     metrics = snapshot.metrics

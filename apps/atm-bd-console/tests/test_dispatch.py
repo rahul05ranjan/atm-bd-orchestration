@@ -7,6 +7,7 @@ from contract_samples import PHASE_TEMPLATES
 
 from atm_bd_console.atm_bd import dispatch_spec
 from atm_bd_console.dispatch import candidates, dispatch
+from atm_bd_console.enums import CiState, MergeState, PrState
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.types import (
     DispatchContext,
@@ -47,13 +48,13 @@ def run(value: Step, *, remotes=None, worktrees=None, merges=None, prs=(), spec=
     worktree_values = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),) if worktrees is None else worktrees
     renderer = spec or (lambda context: Ok(DispatchSpec("qa", {"checked_bead": context.step.checked_bead})))
     if merges is None:
-        merges = (Merge("sprint/bh-6", "sprint/bh-1", "clean", (), (), NOW),)
+        merges = (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),)
     return dispatch(phase(value), (), worktree_values, remote_values, merges, prs, REPO, "fenix", NOW, renderer)
 
 
 def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
-    unavailable = Merge("sprint/bh-6", "sprint/bh-1", "error", (), ("timeout; retry the merge check",), NOW)
-    wrong_target = replace(unavailable, target="other", state="clean")
+    unavailable = Merge("sprint/bh-6", "sprint/bh-1", MergeState.ERROR, (), ("timeout; retry the merge check",), NOW)
+    wrong_target = replace(unavailable, target="other", state=MergeState.CLEAN)
     for merges in ((), (unavailable,), (wrong_target,)):
         outcome = run(step(), merges=merges)
         assert outcome.actions == ()
@@ -82,7 +83,7 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
 
 
 def test_each_hold_is_flat_and_does_not_assign() -> None:
-    conflict = Merge("sprint/bh-6", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
+    conflict = Merge("sprint/bh-6", "sprint/bh-1", MergeState.CONFLICT, ("model.py",), (), NOW)
     cases = (
         (run(step(ready=False)), "not ready"),
         (run(step(), remotes=()), "branch not on origin"),
@@ -96,7 +97,7 @@ def test_each_hold_is_flat_and_does_not_assign() -> None:
 
 
 def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
-    pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "abc123", "failure", ("test",))
+    pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "abc123", CiState.FAIL_BUG, ("test",))
     seen: list[DispatchContext] = []
 
     def render(context: DispatchContext):
@@ -116,15 +117,15 @@ def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
 
 
 def test_closed_pr_cannot_replace_an_open_dispatch_context() -> None:
-    open_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "open", "success", ())
-    closed_pr = replace(open_pr, number=133, head_sha="closed", state="closed")
+    open_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "open", CiState.PASS, ())
+    closed_pr = replace(open_pr, number=133, head_sha="closed", state=PrState.CLOSED)
     seen: list[DispatchContext] = []
     outcome = run(step(), prs=(open_pr, closed_pr), spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
     assert outcome.actions and seen[0].pr == open_pr and seen[0].layer_prs == (open_pr,)
 
 
 def test_draft_pr_remains_in_the_dispatch_context() -> None:
-    draft_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "draft", "success", (), "draft")
+    draft_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "draft", CiState.PASS, (), PrState.DRAFT)
     seen: list[DispatchContext] = []
     outcome = run(step(), prs=(draft_pr,), spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
     assert outcome.actions and seen[0].pr == draft_pr and seen[0].layer_prs == (draft_pr,)
@@ -151,7 +152,7 @@ def _context() -> DispatchContext:
     )
     sprint = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6-tick", "integrate/phase-bh", "phase-bh", (), False, 0)
     repo = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", ("req-qa",), "/plans")
-    pr = PullRequest(12, "https://example.invalid/pull/12", "sprint/bh-6-tick", "integrate/phase-bh", "abc123", "success", ())
+    pr = PullRequest(12, "https://example.invalid/pull/12", "sprint/bh-6-tick", "integrate/phase-bh", "abc123", CiState.PASS, ())
     return DispatchContext(step, sprint, "bh", "console", "fenix", "abc123", "integrate/phase-bh", "/worktrees/bh-6", pr, (pr,), repo)
 
 

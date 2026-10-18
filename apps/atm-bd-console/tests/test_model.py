@@ -9,6 +9,7 @@ from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
+from atm_bd_console.enums import CiState, MergeState, PrState, SprintState
 from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _reconcile_problems, _sprint_views, due, qa_state_from_close, tick
 from atm_bd_console.result import CommandFailed, Err, NotFound, Ok, Timeout
@@ -76,7 +77,7 @@ def phase(*steps: Step, sprints=None, closed=False, step_errors=()) -> Phase:
 def inputs(value: Phase, **changes) -> Inputs:
     original = Inputs(
         NOW, "fenix", REPO, 60, Ok(value), Ok(()), Ok(()), Ok(()), Ok(()), (), Ok(()),
-        GhStatus("off", None, None, None, False), Ok(()),
+        GhStatus("graphql", True, None, None, False), Ok(()),
     )
     return replace(original, **changes)
 
@@ -315,9 +316,9 @@ def test_pr_rows_are_layer_ordered_and_only_top_ci_is_a_problem() -> None:
                   for number in (1, 2, 3))
     sprints = (sprint(1), sprint(2), sprint(3))
     prs = (
-        PullRequest(3, "url3", "branch-3", "branch-2", "sha3", "failure", ("test",)),
-        PullRequest(1, "url1", "branch-1", "base", "sha1", "success", ()),
-        PullRequest(2, "url2", "branch-2", "branch-1", "sha2", "failure", ("lint",)),
+        PullRequest(3, "url3", "branch-3", "branch-2", "sha3", CiState.FAIL_BUG, ("test",)),
+        PullRequest(1, "url1", "branch-1", "base", "sha1", CiState.PASS, ()),
+        PullRequest(2, "url2", "branch-2", "branch-1", "sha2", CiState.FAIL_BUG, ("lint",)),
     )
     snapshot, _, _ = tick(inputs(
         phase(*steps, sprints=sprints), prs=Ok(prs),
@@ -326,7 +327,7 @@ def test_pr_rows_are_layer_ordered_and_only_top_ci_is_a_problem() -> None:
     ), STATE, NOW, render)
     assert [row.layer for row in snapshot.prs] == [1, 2, 3]
     assert [row.top for row in snapshot.prs] == [False, False, True]
-    assert snapshot.top_pr == 3 and snapshot.top_ci == "failure"
+    assert snapshot.top_pr == 3 and snapshot.top_ci == CiState.FAIL_BUG
     assert [problem.key for problem in snapshot.problems] == ["top_ci:sha3"]
 
 
@@ -335,9 +336,9 @@ def test_sprint_layer_above_holding_no_step_takes_its_sprint_layer_and_top() -> 
     steps = tuple(step(f"dev-{number}", f"atm-bh-{number}", branch=f"branch-{number}", layer=number)
                   for number in (1, 2))
     prs = (
-        PullRequest(1, "url1", "sprint/bh-3", "branch-2", "sha3", "success", ()),
-        PullRequest(3, "url3", "branch-2", "branch-1", "sha2", "success", ()),
-        PullRequest(2, "url2", "branch-1", "base", "sha1", "success", ()),
+        PullRequest(1, "url1", "sprint/bh-3", "branch-2", "sha3", CiState.PASS, ()),
+        PullRequest(3, "url3", "branch-2", "branch-1", "sha2", CiState.PASS, ()),
+        PullRequest(2, "url2", "branch-1", "base", "sha1", CiState.PASS, ()),
     )
     snapshot, _, _ = tick(inputs(
         phase(*steps, sprints=(sprint(1), sprint(2), sprint(3))), prs=Ok(prs),
@@ -364,7 +365,7 @@ def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     snapshot, _, _ = tick(closed, STATE, NOW, render)
     assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
 
-    historical_pr = PullRequest(99, "url", "pushed", "base", "sha", "success", (), "closed")
+    historical_pr = PullRequest(99, "url", "pushed", "base", "sha", CiState.PASS, (), PrState.CLOSED)
     snapshot, _, _ = tick(replace(success, prs=Ok((historical_pr,))), STATE, NOW, render)
     assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
 
@@ -381,7 +382,7 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
 
     unread = replace(first, prs=None, gh=GhStatus("off", None, None, None, False))
     snapshot, actions, state = tick(unread, state, NOW + timedelta(minutes=5), render)
-    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
+    assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed", "github_unavailable"]
     assert snapshot.problems[0].first_seen == NOW
     assert actions == ()
     assert state.batch_due["solar"] == NOW + timedelta(minutes=10)
@@ -393,7 +394,7 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
     assert [action.kind for action in actions] == ["batch"]
     assert state.batch_due["solar"] == NOW + timedelta(minutes=20)
 
-    found_pr = PullRequest(1, "url", "pushed", "base", "sha", "success", ())
+    found_pr = PullRequest(1, "url", "pushed", "base", "sha", CiState.PASS, ())
     snapshot, actions, state = tick(replace(first, prs=Ok((found_pr,)),
                                             gh=GhStatus("graphql", True, None,
                                                         NOW + timedelta(minutes=20), False)),
@@ -404,40 +405,40 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
 
 def test_ci_and_conflict_problems_survive_until_their_sources_are_refreshed() -> None:
     value = phase(step("dev", "atm-bh-1", branch="pushed", assignee="solar"))
-    failed_pr = PullRequest(1, "url", "pushed", "base", "sha", "failure", ("lint",))
+    failed_pr = PullRequest(1, "url", "pushed", "base", "sha", CiState.FAIL_BUG, ("lint",))
     first = inputs(value, prs=Ok((failed_pr,)), gh=GhStatus("graphql", True, None, NOW, False))
     snapshot, _, state = tick(first, STATE, NOW, render)
     assert [problem.key for problem in snapshot.problems] == ["top_ci:sha"]
     unread = replace(first, prs=Err(NotFound("not_found", "prs", "retry")),
                      gh=GhStatus("graphql", False, None, NOW, False))
     snapshot, actions, state = tick(unread, state, NOW + timedelta(minutes=5), render)
-    assert [problem.key for problem in snapshot.problems] == ["top_ci:sha"]
+    assert [problem.key for problem in snapshot.problems] == ["top_ci:sha", "github_unavailable"]
     assert actions == ()
-    clean_pr = replace(failed_pr, ci="success", failed_checks=())
+    clean_pr = replace(failed_pr, ci=CiState.PASS, failed_checks=())
     snapshot, _, _ = tick(replace(first, prs=Ok((clean_pr,)),
                                   gh=GhStatus("graphql", True, None, NOW + timedelta(minutes=10), False)),
                           state, NOW + timedelta(minutes=10), render)
     assert snapshot.problems == ()
 
-    conflict = Merge("pushed", "base", "conflict", ("model.py",), (), NOW)
+    conflict = Merge("pushed", "base", MergeState.CONFLICT, ("model.py",), (), NOW)
     with_merge = replace(first, prs=None, gh=GhStatus("off", None, None, None, False), merges=(Ok(conflict),))
     snapshot, _, state = tick(with_merge, STATE, NOW, render)
-    assert [problem.key for problem in snapshot.problems] == ["conflict:pushed"]
+    assert [problem.key for problem in snapshot.problems] == ["conflict:pushed", "github_unavailable"]
     snapshot, actions, state = tick(replace(with_merge, merges=(Err(NotFound("not_found", "merge", "retry")),)),
                                     state, NOW + timedelta(minutes=5), render)
-    assert [problem.key for problem in snapshot.problems] == ["conflict:pushed"]
+    assert [problem.key for problem in snapshot.problems] == ["conflict:pushed", "github_unavailable"]
     assert actions == ()
-    clean_merge = replace(conflict, state="clean", files=())
+    clean_merge = replace(conflict, state=MergeState.CLEAN, files=())
     snapshot, _, _ = tick(replace(with_merge, merges=(Ok(clean_merge),)), state,
                           NOW + timedelta(minutes=10), render)
-    assert snapshot.problems == ()
+    assert [problem.key for problem in snapshot.problems] == ["github_unavailable"]
 
 
 def test_shared_branch_reports_one_problem_per_kind_to_work_owner() -> None:
     dev = step("dev", "atm-bh-1", branch="shared", assignee="solar", status="closed")
     qa = step("qa", "atm-bh-1", kind="qa", branch="shared", assignee=None)
     qa_task = Task("qa", "quality-mgr", "assigned", 1, NOW, NOW, "review")
-    conflict = Merge("shared", "base", "conflict", ("model.py",), (), NOW)
+    conflict = Merge("shared", "base", MergeState.CONFLICT, ("model.py",), (), NOW)
     for steps in ((dev, qa), (qa, dev)):
         supplied = inputs(
             phase(*steps), tasks=Ok((qa_task,)), remotes=Ok((RemoteRef("shared", "sha"),)),
@@ -462,7 +463,7 @@ def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
     snapshot, _, new_state = tick(inputs(value), STATE, NOW, render)
     assert (snapshot.metrics.done, snapshot.metrics.total, snapshot.metrics.pct, snapshot.metrics.active_s) == (2, 6, 33, 95)
     assert snapshot.mermaid == (FIXTURES / "mermaid.txt").read_text().rstrip("\n")
-    assert [view.state for view in snapshot.sprints] == ["closed", "closed", "in_progress", "ready"]
+    assert [view.state for view in snapshot.sprints] == [SprintState.CLOSED, SprintState.CLOSED, SprintState.IN_PROGRESS, SprintState.READY]
     assert snapshot.stopped is None and new_state.idle_since is None
     closed, actions, _ = tick(inputs(replace(value, closed=True)), STATE, NOW, render)
     assert closed.stopped == "closed" and actions == ()
@@ -578,7 +579,7 @@ def test_ready_step_without_branch_reports_one_meaningful_configuration_problem(
 
 def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="topic", target="base")
-    conflict = Merge("topic", "base", "conflict", ("model.py", "dispatch.py"), (), NOW)
+    conflict = Merge("topic", "base", MergeState.CONFLICT, ("model.py", "dispatch.py"), (), NOW)
     supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
                       worktrees=Ok(()), merges=(Ok(conflict),))
 
@@ -614,14 +615,14 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
                      worktree="/worktrees/atm-bh-1")
     common = inputs(phase(candidate), remotes=Ok((RemoteRef("sprint/bh-1", "sha"),)),
                     worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
-    conflict = Merge("sprint/bh-1", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
+    conflict = Merge("sprint/bh-1", "sprint/bh-1", MergeState.CONFLICT, ("model.py",), (), NOW)
     snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)
     assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
     assert [problem.key for problem in snapshot.problems] == ["conflict:sprint/bh-1"]
     assert "model.py" in snapshot.problems[0].text
 
     error = NotFound("not_found", "checked_bead", "repair metadata")
-    verified = replace(common, merges=(Ok(replace(conflict, state="clean", files=())),))
+    verified = replace(common, merges=(Ok(replace(conflict, state=MergeState.CLEAN, files=())),))
     snapshot, actions, _ = tick(verified, STATE, NOW, lambda context: Err(error))
     assert actions == ()
     assert error in snapshot.errors
@@ -647,7 +648,7 @@ def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
         assert error.stderr in snapshot.problems[0].text
     elif isinstance(error, Timeout):
         assert "timed out after 30s" in snapshot.problems[0].text
-    verified = replace(supplied, merges=(Ok(Merge("topic", "base", "clean", (), (), NOW)),))
+    verified = replace(supplied, merges=(Ok(Merge("topic", "base", MergeState.CLEAN, (), (), NOW)),))
     recovered, actions, _ = tick(verified, state, NOW, lambda context: Ok(DispatchSpec("qa", {})))
     assert [action.kind for action in actions] == ["assign"]
     assert recovered.sections == () and recovered.problems == ()

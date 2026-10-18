@@ -4,6 +4,7 @@ import asyncio
 import threading
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import FakeStep, run_scenario, settle
@@ -15,9 +16,43 @@ from textual import events
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
 from atm_bd_console.build import display_identity, identity
+from atm_bd_console.enums import SprintState
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
+
+
+def test_dispatch_uses_shared_status_rows(monkeypatch):
+    from atm_bd_console import status_table
+
+    values = status_table.rows(RUNNING)
+    seen = []
+    real_rows = status_table.rows
+
+    def shared_rows(snapshot):
+        seen.append(snapshot)
+        return real_rows(snapshot)
+
+    class Node:
+        size = SimpleNamespace(width=120, height=40)
+
+        def update(self, value):
+            self.value = value
+
+    nodes = {}
+
+    def query(selector, *_args):
+        return nodes.setdefault(selector, Node())
+
+    dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
+                            show_pr_history=False, status_error=None, status_text="", diagnostics_path="log",
+                            input_log_path="input", diagnostics=[], call_after_refresh=lambda *_: None,
+                            _refresh_status_viewport=lambda: None)
+    monkeypatch.setattr(status_table, "rows", shared_rows)
+    ConsoleApp.refresh_views(dummy)
+    assert seen == [RUNNING]
+    rendered = nodes["#status-table"].value
+    assert list(rendered.columns[0]._cells) == [row.sprint for row in values]
 
 
 class RaisingStep:
@@ -340,7 +375,7 @@ def test_opening_prs_then_r_forces_github_exactly_twice() -> None:
 def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(all_closed: bool) -> None:
     sprints = tuple(SprintView(
         f"atm-bh-{number}", f"sprint {number}",
-        "closed" if all_closed or number == 1 else "in_progress", (),
+        SprintState.CLOSED if all_closed or number == 1 else SprintState.IN_PROGRESS, (),
         (StepView(f"atm-bh-{number}.dev", "dev", "closed" if all_closed else "in_progress", "solar"),),
     ) for number in (1, 2, 3))
     step = FakeStep(replace(RUNNING, sprints=sprints))
@@ -379,9 +414,9 @@ def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tup
     six_steps = tuple(StepView(f"atm-bh-6.dev-{number}", "dev", "open", "solar") for number in range(6))
     overflowing_steps = tuple(StepView(f"atm-bh-7.dev-{number}", "dev", "open", "solar") for number in range(14))
     sprints = (
-        SprintView("atm-bh-2", "bh-2: two steps", "ready", (), two_steps),
-        SprintView("atm-bh-6", "bh-6: six steps", "in_progress", (), six_steps),
-        SprintView("atm-bh-7", "bh-7: overflowing steps", "ready", (), overflowing_steps),
+        SprintView("atm-bh-2", "bh-2: two steps", SprintState.READY, (), two_steps),
+        SprintView("atm-bh-6", "bh-6: six steps", SprintState.IN_PROGRESS, (), six_steps),
+        SprintView("atm-bh-7", "bh-7: overflowing steps", SprintState.READY, (), overflowing_steps),
     )
     step = FakeStep(replace(RUNNING, sprints=sprints, mermaid="graph TD\n    one --> two"))
 

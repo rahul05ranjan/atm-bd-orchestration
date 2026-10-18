@@ -8,6 +8,7 @@ import pytest
 from contract_samples import BEAD, MERGE, PHASE_TEMPLATES, REMOTE_REF, SPRINT, WORKTREE
 
 from atm_bd_console import atm_bd, cli, config, runner
+from atm_bd_console.enums import MergeState
 from atm_bd_console.result import ConfigInvalid, Err, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot
 from atm_bd_console.types import INITIAL_STATE
@@ -128,7 +129,7 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok((WORKTREE,)))
     monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
     monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok((REMOTE_REF,)))
-    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Ok(replace(MERGE, state="clean", files=(), messages=())))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Ok(replace(MERGE, state=MergeState.CLEAN, files=(), messages=())))
     fake_bin.make("bd", "exit 97\n")
     fake_bin.make("git", "exit 97\n")
     fake_bin.make("atm", '''case "$1:$2" in

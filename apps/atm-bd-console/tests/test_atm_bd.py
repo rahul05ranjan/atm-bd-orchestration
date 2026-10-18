@@ -44,6 +44,7 @@ from atm_bd_console.atm_bd import (
     repo_config,
     step,
 )
+from atm_bd_console.enums import CiState
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.types import (
     Bead,
@@ -495,9 +496,9 @@ DISPATCH_REPO = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktr
 SPRINT = Sprint("atm-bh-5", "git and GitHub sources", 5, "sprint/bh-5-git-github-source", "sprint/bh-1-contract",
                 "phase-bh", ("atm-bh-1",), False, 2)
 PR = PullRequest(148, "https://github.com/randlee/atm-bd-orchestration/pull/148", "fix/bh-5-qa-r1",
-                 "sprint/bh-10-textual-tabs", "77543fe", "pending", ())
+                 "sprint/bh-10-textual-tabs", "77543fe", CiState.RUNNING, ())
 LAYER_PRS = (PullRequest(140, "https://github.com/randlee/atm-bd-orchestration/pull/140",
-                          "sprint/bh-5-git-github-source", "fix/bh-1-qa-r1", "235f3a7", "success", ()),)
+                          "sprint/bh-5-git-github-source", "fix/bh-1-qa-r1", "235f3a7", CiState.PASS, ()),)
 COMMIT = "77543fe41def472179cfe4554e7ca27d64eff481"
 
 

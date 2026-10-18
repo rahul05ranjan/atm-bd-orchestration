@@ -1,13 +1,14 @@
 """Build identity visible to operators and bug reports."""
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 
 from . import __version__, git_source
 from .result import Err
 
 try:
-    from ._build_identity import IDENTITY as BUILT_IDENTITY
+    BUILT_IDENTITY = import_module("._build_identity", __package__).IDENTITY
 except ImportError:
     BUILT_IDENTITY: str | None = None
 

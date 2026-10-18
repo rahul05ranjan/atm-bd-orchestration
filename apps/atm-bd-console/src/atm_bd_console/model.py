@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import Literal
 
 from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
+from .enums import CiState, MergeState, PrState, SprintState
 from .icons import SPRINT_STATE_ICONS
 from .ids import short_id
 from .prs import active_pr
@@ -94,7 +96,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
             if step.branch and (target := _target(step, phase, inputs.repo.bead_prefix))
             and (step.branch, target) not in checked_pairs
         }
-        merges += tuple(Merge(branch, target, "error", (), tuple(
+        merges += tuple(Merge(branch, target, MergeState.ERROR, (), tuple(
             verification_reason(error) for error in merge_errors
         ), now) for branch, target in sorted(unavailable))
     prs = inputs.prs.value if isinstance(inputs.prs, Ok) else ()
@@ -171,7 +173,38 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         sent=sent,
         prs=pr_rows,
         files={},
+        phase_data=phase,
+        task_data=tasks,
+        member_data=members,
+        task_bead_data=inputs.task_beads.value if isinstance(inputs.task_beads, Ok) else (),
+        worktree_data=worktrees,
     )
+    from .facts import collisions
+
+    collision_rows = collisions(snapshot) if stopped is None else ()
+    collision_problems = tuple(Problem(f"collision:{key}", sprint_id, inputs.lead, message, now)
+                               for key, sprint_id, message in collision_rows)
+    unknown_problems = tuple(Problem(f"unknown_sprint_state:{sprint.id}", sprint.id, inputs.lead,
+                                     f"unknown sprint state {sprint.raw_status!r} for {sprint.id}", now)
+                             for sprint in phase.sprints if sprint.status == SprintState.UNKNOWN) if phase else ()
+    unknown_problems += tuple(Problem(f"unknown_pr_state:{pr.number}", None, inputs.lead,
+                                      f"unknown PR state {pr.raw_state!r} for #{pr.number}", now)
+                              for pr in prs if pr.state == PrState.UNKNOWN)
+    unknown_problems += tuple(Problem(f"unknown_ci_state:{pr.number}", None, inputs.lead,
+                                      f"unknown CI state {pr.raw_ci!r} for #{pr.number}", now)
+                              for pr in prs if pr.ci == CiState.UNKNOWN)
+    github_problems = ()
+    if inputs.gh.mode == "off" or inputs.gh.ok is not True or inputs.gh.truncated:
+        cause = "off" if inputs.gh.mode == "off" else "truncated" if inputs.gh.truncated else (
+            inputs.gh.error.kind if inputs.gh.error else "unavailable"
+        )
+        github_problems = (Problem("github_unavailable", None, inputs.lead, f"GitHub data {cause}", now),)
+    collision_actions = tuple(Action(now, "send", inputs.lead, (sprint_id,), message, None)
+                              for key, sprint_id, message in collision_rows if key not in state.collision_notices)
+    snapshot = replace(snapshot, problems=(*snapshot.problems, *collision_problems, *unknown_problems, *github_problems))
+    actions = (*actions, *collision_actions)
+    new_state = replace(new_state, collision_notices=(*state.collision_notices,
+                        *(key for key, _, _ in collision_rows if key not in state.collision_notices)))
     return snapshot, actions, new_state
 
 
@@ -249,7 +282,7 @@ def _agent_views(
     return tuple(views)
 
 
-def qa_state_from_close(reason: str | None) -> str | None:
+def qa_state_from_close(reason: str | None) -> Literal["pass", "fail"] | None:
     """Interpret the first token of a closed QA step's close reason."""
     if reason is None:
         return None
@@ -306,9 +339,9 @@ def _sprint_views(
     by_name = {agent.name: agent for agent in agents}
     for sprint in phase.sprints:
         steps = tuple(step for step in phase.steps if sprint_of(step, phase, bead_prefix) == sprint)
-        state = "closed" if sprint.closed else (
-            "in_progress" if any(step.status == "in_progress" for step in steps) else (
-                "ready" if any(step.ready for step in steps) else "not_ready"
+        state = SprintState.CLOSED if sprint.closed else (
+            SprintState.IN_PROGRESS if any(step.status == "in_progress" for step in steps) else (
+                SprintState.READY if any(step.ready for step in steps) else SprintState.NOT_READY
             )
         )
         views.append(SprintView(sprint.id, sprint.title, state, sprint.depends_on, tuple(
@@ -356,7 +389,8 @@ def _metrics(phase: Phase | None, now: datetime) -> Metrics:
         elif current_end is not None and start <= current_end:
             current_end = max(current_end, end)
         else:
-            active_s += max(0, int((current_end - current_start).total_seconds()))
+            if current_end is not None:
+                active_s += max(0, int((current_end - current_start).total_seconds()))
             current_start, current_end = start, end
     if current_start is not None and current_end is not None:
         active_s += max(0, int((current_end - current_start).total_seconds()))
@@ -368,7 +402,7 @@ def _pr_rows(
 ) -> tuple[tuple[PrRow, ...], PullRequest | None]:
     if phase is None:
         return (), None
-    by_branch = _branch_owners(phase)
+    by_branch: dict[str, Step | None] = dict(_branch_owners(phase))
     by_branch.update({sprint.branch: None for sprint in phase.sprints if sprint.branch not in by_branch})
     relevant = tuple(pr for pr in prs if pr.head in by_branch)
     bases = {pr.base for pr in relevant}
@@ -376,15 +410,15 @@ def _pr_rows(
     merge_by_branch = {merge.branch: merge for merge in merges}
     rows = tuple(PrRow(
         pr=pr,
-        layer=by_branch[pr.head].layer if by_branch[pr.head] else next(
+        layer=owner.layer if (owner := by_branch[pr.head]) else next(
             (sprint.layer for sprint in phase.sprints if sprint.branch == pr.head), None
         ),
-        bead_id=by_branch[pr.head].bead_id if by_branch[pr.head] else next(
+        bead_id=owner.bead_id if owner else next(
             (sprint.id for sprint in phase.sprints if sprint.branch == pr.head), None
         ),
         top=pr == top,
         merge=merge_by_branch.get(pr.head),
-        assignee=by_branch[pr.head].assignee if by_branch[pr.head] else None,
+        assignee=owner.assignee if owner else None,
     ) for pr in relevant)
     return tuple(sorted(rows, key=lambda row: (row.layer if row.layer is not None else -1, row.pr.number))), top
 
@@ -423,7 +457,7 @@ def _problems(
             f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
         )
         for merge in merges
-        if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
+        if merge.state == MergeState.CONFLICT and (step := by_branch.get(merge.branch)) is not None
     }
     problems: list[Problem] = []
     not_ready = {row.bead_id for row in held if row.reason == "not ready"}
@@ -443,6 +477,11 @@ def _problems(
             continue
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
     problems.extend(conflicts.values())
+    problems.extend(
+        Problem(f"merge_error:{merge.branch}:{merge.target}", None, inputs.lead,
+                f"merge check failed for {merge.branch} against {merge.target}", now)
+        for merge in merges if merge.state == MergeState.ERROR
+    )
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
@@ -460,14 +499,14 @@ def _problems(
                     f"missing_pr:{branch}", step.bead_id, step.assignee or inputs.lead,
                     f"pushed branch {branch} has no open PR", now,
                 ))
-    if fresh_github and top_pr is not None and top_pr.ci == "failure":
+    if fresh_github and top_pr is not None and top_pr.ci in (CiState.FAIL_MACOS, CiState.FAIL_WINDOWS, CiState.FAIL_LINUX, CiState.FAIL_BUG):
         checks = ", ".join(top_pr.failed_checks)
         problems.append(Problem(
-            f"top_ci:{top_pr.head_sha}", by_branch.get(top_pr.head).bead_id if by_branch.get(top_pr.head) else None,
+            f"top_ci:{top_pr.head_sha}", owner.bead_id if (owner := by_branch.get(top_pr.head)) else None,
             inputs.lead, f"top PR #{top_pr.number} CI failed: {checks}", now,
         ))
     current_keys = {problem.key for problem in problems}
-    refreshed_merges = {merge.branch for merge in merges if merge.state != "error"}
+    refreshed_merges = {merge.branch for merge in merges if merge.state != MergeState.ERROR}
     for previous in state.problems:
         if previous.key in current_keys:
             continue

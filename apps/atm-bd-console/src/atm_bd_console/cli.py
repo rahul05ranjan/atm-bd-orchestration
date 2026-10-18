@@ -7,7 +7,7 @@ import shutil
 import sys
 from datetime import UTC, datetime
 
-from . import atm_bd, render, runner
+from . import atm_bd, render, runner, status_table
 from . import config as config_source
 from .build import identity
 from .codec import snapshot_stale, to_json
@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("console", "cron", "show", "snapshot"):
         sub = commands.add_parser(name, help="run one tick and exit" if name == "cron" else None)
         sub.add_argument("--phase")
+        if name == "cron":
+            sub.add_argument("--md-table", action="store_true")
         if name != "show":
             sub.add_argument("--github", choices=("graphql", "rest", "off"))
             sub.add_argument("--interval", type=int)
@@ -63,7 +65,8 @@ def main(argv: list[str] | None = None) -> int:
         last = f" (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})" if isinstance(snapshot, Ok) else ""
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
-    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot", no_fetch=args.no_fetch)
+    md_table = getattr(args, "md_table", False)
+    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
     if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3
@@ -74,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in ("cron", "snapshot"):
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
+            if md_table:
+                print(f"{invocation}: {_error_text(lock.error)}", file=sys.stderr)
+                return 2
             print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(lock.error)}"}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
@@ -83,8 +89,15 @@ def main(argv: list[str] | None = None) -> int:
         with lock.value:
             saved = lock.value.load_state()
             state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
-            result = runner.step(loaded.value, state, False, lock.value)
+            result = runner.step(loaded.value, state, md_table, lock.value)
             snapshot, _ = result
+        if md_table:
+            if snapshot.errors or snapshot.phase_data is None:
+                detail = _error_text(snapshot.errors[0]) if snapshot.errors else "partial_snapshot: phase unavailable"
+                print(f"{invocation}: {detail}", file=sys.stderr)
+                return 2
+            print(status_table.markdown(status_table.rows(snapshot)))
+            return 0
         if args.command == "cron" and snapshot.stopped is None:
             for action in result.reported:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))

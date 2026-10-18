@@ -5,9 +5,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import MISSING, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
+from .enums import CiState
 from .result import (
     Err,
     Error,
@@ -104,6 +106,11 @@ def _decode(cls: Any, value: Any, path: str) -> Any:
     if cls is Any:
         return value
     origin, args = get_origin(cls), get_args(cls)
+    if isinstance(cls, type) and issubclass(cls, StrEnum):
+        try:
+            return cls(value)
+        except (ValueError, TypeError):
+            raise _DecodeError(path, f"unknown {cls.__name__} value {value!r}") from None
     if cls is datetime:
         if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
             raise _DecodeError(path, "expected UTC datetime YYYY-MM-DDTHH:MM:SSZ")
@@ -155,6 +162,17 @@ def _decode(cls: Any, value: Any, path: str) -> Any:
 def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
     if not isinstance(value, dict):
         raise _DecodeError(path, "expected object")
+    if cls.__name__ == "Snapshot" and value.get("top_ci") in ("success", "pending", "failure"):
+        value = dict(value)
+        value["top_ci"] = {"success": CiState.PASS, "pending": CiState.RUNNING,
+                           "failure": CiState.FAIL_BUG}[value["top_ci"]]
+    if cls.__name__ == "PullRequest" and value.get("ci") in ("success", "pending", "failure"):
+        from .icons import ci_failure_key
+
+        value = dict(value)
+        legacy = value["ci"]
+        value["ci"] = {"success": CiState.PASS, "pending": CiState.RUNNING,
+                       "failure": ci_failure_key(tuple(value.get("failed_checks", ())))}[legacy]
     hints = get_type_hints(cls)
     names = [field.name for field in fields(cls)]
     unknown = sorted(set(value) - set(names))

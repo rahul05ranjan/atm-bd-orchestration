@@ -8,6 +8,7 @@ import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
+from atm_bd_console.enums import CiState, MergeState, PrState
 from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS, ci_failure_key
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
@@ -20,13 +21,13 @@ NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 def snapshot() -> Snapshot:
     decoded = from_json(Snapshot, (FIXTURES / "snapshot-running.json").read_text())
     assert isinstance(decoded, Ok)
-    lower = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", "failure", ("lint", "test"))
-    top = PullRequest(12, "https://example/pr/12", "branch-2", "branch-1", "sha2", "success", ())
+    lower = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", CiState.FAIL_BUG, ("lint", "test"))
+    top = PullRequest(12, "https://example/pr/12", "branch-2", "branch-1", "sha2", CiState.PASS, ())
     rows = (
         PrRow(lower, 1, "atm-bh-1.group-dev", False,
-              Merge("branch-1", "base", "conflict", ("model.py",), (), NOW)),
+              Merge("branch-1", "base", MergeState.CONFLICT, ("model.py",), (), NOW)),
         PrRow(top, 2, "atm-bh-2.group-dev", True,
-              Merge("branch-2", "branch-1", "clean", (), (), NOW)),
+              Merge("branch-2", "branch-1", MergeState.CLEAN, (), (), NOW)),
     )
     return replace(decoded.value, prs=rows, gh=GhStatus("graphql", True, None, NOW, False))
 
@@ -45,9 +46,9 @@ def test_lower_red_and_green_top_are_display_only() -> None:
 
 def test_merge_error_uses_the_failure_glyph_without_a_file_list() -> None:
     # The merge error keeps the GH failure glyph and does not name files when none were reported.
-    lower = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", "success", ())
+    lower = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", CiState.PASS, ())
     failed = PrRow(lower, 1, "atm-bh-1.group-dev", False,
-                   Merge("branch-1", "base", "error", (), ("merge-tree failed",), NOW))
+                   Merge("branch-1", "base", MergeState.ERROR, (), ("merge-tree failed",), NOW))
     line = render_prs(replace(snapshot(), prs=(failed,)), 120).plain
     assert "merge \U000f062d  CI \U000f062c" in line
 
@@ -64,7 +65,7 @@ def test_merge_error_uses_the_failure_glyph_without_a_file_list() -> None:
 )
 def test_failing_pr_renders_the_platform_or_bug_glyph_in_red(failed_checks: tuple[str, ...], glyph: str) -> None:
     base = snapshot()
-    red = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", "failure", failed_checks)
+    red = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", ci_failure_key(failed_checks), failed_checks)
     row = replace(base.prs[0], pr=red, merge=None)
     rendered = render_prs(replace(base, prs=(row,)), 120)
     assert f"CI {glyph} " in rendered.plain
@@ -74,7 +75,9 @@ def test_failing_pr_renders_the_platform_or_bug_glyph_in_red(failed_checks: tupl
 
 def test_rest_mode_and_width() -> None:
     value = replace(snapshot(), gh=GhStatus("rest", True, None, NOW, False))
-    assert all("CI \U000f01d8" in line for line in render_prs(value, 120).plain.splitlines())
+    lines = render_prs(value, 120).plain.splitlines()
+    assert len(lines) == 2
+    assert "CI \U000f00e4" in lines[0] and "CI \U000f062c" in lines[1]
     for width in (80, 120):
         assert all(cell_len(line) <= width for line in render_prs(snapshot(), width).plain.splitlines())
 
@@ -102,9 +105,9 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
 
 def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
     base = snapshot()
-    merged = replace(base.prs[0], pr=replace(base.prs[0].pr, state="merged"))
-    closed = replace(base.prs[1], pr=replace(base.prs[1].pr, state="closed"))
-    draft = replace(base.prs[1], pr=replace(base.prs[1].pr, state="draft"))
+    merged = replace(base.prs[0], pr=replace(base.prs[0].pr, state=PrState.MERGED))
+    closed = replace(base.prs[1], pr=replace(base.prs[1].pr, state=PrState.CLOSED))
+    draft = replace(base.prs[1], pr=replace(base.prs[1].pr, state=PrState.DRAFT))
     value = replace(base, prs=(base.prs[0], merged, closed, draft))
     assert render_prs(value, 120).plain.count("#11") == 1
     rendered = render_prs(value, 120, include_history=True)
@@ -118,11 +121,11 @@ def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
 def test_pr_list_pins_passing_failing_running_merged_and_closed_rows() -> None:
     base = snapshot()
     cases = (
-        ("open", "success"),
-        ("open", "failure"),
-        ("open", "pending"),
-        ("merged", "success"),
-        ("closed", "success"),
+        (PrState.OPEN, CiState.PASS),
+        (PrState.OPEN, CiState.FAIL_BUG),
+        (PrState.OPEN, CiState.RUNNING),
+        (PrState.MERGED, CiState.PASS),
+        (PrState.CLOSED, CiState.PASS),
     )
     rows = tuple(
         replace(
@@ -138,8 +141,7 @@ def test_pr_list_pins_passing_failing_running_merged_and_closed_rows() -> None:
     assert len(lines) == len(cases)
     for line, (state, ci) in zip(lines, cases, strict=True):
         pr_glyph, pr_color = PR_STATE_ICONS[state]
-        ci_key = ci_failure_key(base.prs[0].pr.failed_checks) if ci == "failure" else ci
-        ci_glyph, ci_color = CI_STATE_ICONS[ci_key]
+        ci_glyph, ci_color = CI_STATE_ICONS[ci]
         assert f"{pr_glyph} " in line.plain
         assert f"CI {ci_glyph}" in line.plain
         segments = tuple((line.plain[span.start:span.end], str(span.style)) for span in line.spans)

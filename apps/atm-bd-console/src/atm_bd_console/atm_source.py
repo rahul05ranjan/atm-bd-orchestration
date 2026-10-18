@@ -6,6 +6,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .enums import SprintState
 from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeout, Unreachable
 from .types import DispatchSpec, Member, Task
 
@@ -15,6 +16,13 @@ TIMEOUT_S = 20
 TASK_KEYS = frozenset({"task_id", "assignee", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
 MEMBER_STATES = frozenset({"active", "idle", "offline", "blocked"})
+
+
+def sprint_state_of(raw: str) -> SprintState:
+    try:
+        return SprintState(raw)
+    except ValueError:
+        return SprintState.UNKNOWN
 
 
 # Own runner: ATM sends stdin text and maps missing binaries or undecodable output to Unreachable.
@@ -91,7 +99,9 @@ def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]
         times = tuple((_time(item["assigned_at"]), _time(item["updated_at"])) for item in items)
         if any(None in pair for pair in times):
             return Err(ParseFailed("parse_failed", "atm task list", "atm task timestamps must be ISO-8601 with a UTC offset", fix))
-        return Ok(tuple(_task(index, item, *pair) for index, (item, pair) in enumerate(zip(items, times))))
+        return Ok(tuple(_task(index, item, assigned, updated)
+                        for index, (item, (assigned, updated)) in enumerate(zip(items, times))
+                        if assigned is not None and updated is not None))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "atm task list", str(error), fix))
 

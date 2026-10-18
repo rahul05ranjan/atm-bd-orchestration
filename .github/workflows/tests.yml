@@ -49,6 +49,9 @@ jobs:
       - name: Console tests
         working-directory: apps/atm-bd-console
         run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q
+      - name: Console type check
+        working-directory: apps/atm-bd-console
+        run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pyright src
       - name: Console CLI smoke tests
         working-directory: apps/atm-bd-console
         env:

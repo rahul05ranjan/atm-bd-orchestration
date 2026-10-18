@@ -33,13 +33,13 @@ FIELDS: dict[str, str] = {
     "Bead": "id title status labels parent blocked_by assignee metadata created_at claimed_at closed_at close_reason",
     "Step": "bead_id sprint kind quick_fix anchor status ready assignee branch target worktree layer difficulty tag "
             "top_epic claimed_at closed_at title checked_bead sprint_bead qa_round carry_forward close_reason",
-    "Sprint": "id title layer branch target stack depends_on closed findings",
+    "Sprint": "id title layer branch target stack depends_on closed findings status raw_status",
     "Phase": "root_id label title closed sprints steps step_errors",
     "DispatchSpec": "template vars",
     "RemoteRef": "branch sha",
     "Merge": "branch target state files messages checked_at",
     "Worktree": "path branch head",
-    "PullRequest": "number url head base head_sha ci failed_checks state",
+    "PullRequest": "number url head base head_sha ci failed_checks state raw_ci raw_state",
     "GhStatus": "mode ok error at truncated",
     "RepoConfig": "bead_prefix sanity_member qa_member primary_checkout worktree_base lint_command policy_path "
                   "reviewers_round1 plans_dir",
@@ -58,8 +58,8 @@ FIELDS: dict[str, str] = {
     "Metrics": "done total pct active_s",
     "Due": "fetch merges github",
     "Snapshot": "schema generated_at phase root_closed stopped agents sections problems errors metrics gh top_pr "
-                "top_ci mermaid sprints interval_s lead bead_prefix sent prs files",
-    "State": "problems cycle_first_send last_batch last_cycle idle_since sent remotes batch_due",
+                "top_ci mermaid sprints interval_s lead bead_prefix sent prs files phase_data task_data member_data task_bead_data worktree_data",
+    "State": "problems cycle_first_send last_batch last_cycle idle_since sent remotes batch_due collision_notices",
     "PhaseFile": "phase root_id label sprints depends_on lead templates",
     "MergeFile": "checked_at merges",
     "PrsFile": "read_at gh prs",
@@ -77,8 +77,6 @@ LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Step", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
     ("Step", "status"): BEAD_STATUS,
     ("Step", "difficulty"): DIFFICULTY,
-    ("Merge", "state"): ("clean", "conflict", "error"),
-    ("PullRequest", "ci"): ("success", "pending", "failure", "none"),
     ("GhStatus", "mode"): GITHUB_MODE,
     ("Config", "github"): GITHUB_MODE,
     ("Row", "state"): ("running", "queued"),
@@ -88,7 +86,6 @@ LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("AgentView", "status"): ("busy", "stalling", "blocked", "offline", "idle"),
     ("AgentView", "qa_state"): ("running", "pass", "fail"),
     ("StepView", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
-    ("SprintView", "state"): ("closed", "in_progress", "ready", "not_ready"),
     ("Action", "kind"): ("assign", "send", "batch"),
     ("Snapshot", "stopped"): ("closed", "idle"),
     ("ActionLine", "kind"): ("assign", "send", "batch", "hold", "dry_run"),
@@ -147,7 +144,7 @@ def test_key_field_annotations() -> None:
 
 def test_tick_context_contract_field_names_are_pinned() -> None:
     assert tuple(field.name for field in fields(types.Sprint)) == (
-        "id", "title", "layer", "branch", "target", "stack", "depends_on", "closed", "findings",
+        "id", "title", "layer", "branch", "target", "stack", "depends_on", "closed", "findings", "status", "raw_status",
     )
     assert tuple(field.name for field in fields(types.RepoConfig)) == (
         "bead_prefix", "sanity_member", "qa_member", "primary_checkout", "worktree_base", "lint_command",

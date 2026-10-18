@@ -48,11 +48,14 @@ def ready(label: str) -> Result[tuple[Bead, ...]]:
 def ancestors(beads: tuple[Bead, ...]) -> Result[tuple[Bead, ...]]:
     known = {bead.id: bead for bead in beads}
     frontier = {bead.parent for bead in beads if bead.parent and bead.parent not in known}
+    visited: set[str] = set()
     while frontier:
+        visited.update(frontier)
         found = show(tuple(sorted(frontier)))
         if isinstance(found, Err):
             return found
         for bead in found.value:
             known[bead.id] = bead
-        frontier = {bead.parent for bead in found.value if bead.parent and bead.parent not in known}
+        frontier = {bead.parent for bead in found.value if bead.parent and bead.parent not in known
+                    and bead.parent not in visited}
     return Ok(tuple(known.values()))

@@ -2,19 +2,20 @@ from __future__ import annotations
 
 from rich.text import Text
 
-from .icons import CI_STATE_ICONS, MERGE_STATE_ICONS, PR_STATE_ICONS, ci_failure_key
+from .enums import CiState, MergeState, PrState
+from .icons import icon, merge_icon
 from .ids import short_id
 from .render import _fit, render_agent
 from .types import PrRow, PullRequest, Snapshot
 
 
 def active_pr(pr: PullRequest) -> bool:
-    return pr.state in ("open", "draft")
+    return pr.state in (PrState.OPEN, PrState.DRAFT)
 
 
 def _row(value: PrRow, snapshot: Snapshot) -> Text:
     line = Text("▲ " if value.top else "  ")
-    glyph, style = PR_STATE_ICONS[value.pr.state]
+    glyph, style = icon(value.pr.state)
     line.append(f"{glyph} ", style=style)
     line.append(f"#{value.pr.number}", style=f"link {value.pr.url}")
     line.append(f"  {value.pr.head} → {value.pr.base}")
@@ -28,17 +29,13 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
     if value.merge is None:
         line.append("  merge —")
     else:
-        glyph, style = MERGE_STATE_ICONS[value.merge.state]
-        files = f" {', '.join(value.merge.files)}" if value.merge.files and value.merge.state != "clean" else ""
+        glyph, style = merge_icon(value.merge.state)
+        files = f" {', '.join(value.merge.files)}" if value.merge.files and value.merge.state != MergeState.CLEAN else ""
         line.append(f"  merge {glyph}{files}", style=style)
-    if snapshot.gh.mode == "rest" or value.pr.ci == "none":
-        glyph, style = CI_STATE_ICONS["none"]
-        line.append(f"  CI {glyph}", style=style)
-    else:
-        key = ci_failure_key(value.pr.failed_checks) if value.pr.ci == "failure" else value.pr.ci
-        glyph, style = CI_STATE_ICONS[key]
-        checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci == "failure" else ""
-        line.append(f"  CI {glyph}{checks}", style=style)
+    glyph, style = icon(value.pr.ci)
+    checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci in (
+        CiState.FAIL_MACOS, CiState.FAIL_WINDOWS, CiState.FAIL_LINUX, CiState.FAIL_BUG) else ""
+    line.append(f"  CI {glyph}{checks}", style=style)
     return line
 
 

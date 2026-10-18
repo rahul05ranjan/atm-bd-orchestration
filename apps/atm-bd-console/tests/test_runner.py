@@ -134,7 +134,7 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     monkeypatch.setattr(runner.model, "tick", tick)
 
-    def github(mode):
+    def github(mode, *_args):
         calls.append(mode)
         status = GhStatus(mode, False, TIMEOUT, SNAPSHOT.generated_at, False)
         return Err(TIMEOUT), status
@@ -184,7 +184,7 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     assert snapshot.agents == SNAPSHOT.agents
     assert [row.pr.number for row in snapshot.prs] == [PRS_FILE.prs[0].number]
     assert [(action.text, action.outcome) for action in snapshot.sent] == [("QA completed", "recorded")]
-    assert snapshot.errors == ()
+    assert snapshot.errors == (PRS_FILE.gh.error,)
 
 
 def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch) -> None:
@@ -286,6 +286,26 @@ def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypa
     assert snapshot.errors[0].source == f"{actions_path}:7"
 
 
+def test_closed_phase_forced_github_refresh_uses_sprint_groups(monkeypatch, tmp_path):
+    closed = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    config = replace(CONFIG, repo_root=str(tmp_path), github="rest", dry_run=True)
+    calls = []
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=True, step_errors=())))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *args: (
+        calls.append(args) or Ok(()), GhStatus("rest", True, None, NOW, False)))
+    monkeypatch.setattr(runner.atm_source, "send", lambda *_: pytest.fail("unexpected send"))
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: pytest.fail("unexpected assignment"))
+    locked = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(locked, Ok)
+    with locked.value as store:
+        snapshot, _ = runner.step(config, INITIAL_STATE, True, store)
+    assert snapshot.stopped == "closed" and snapshot.gh.ok is True
+    assert calls == [("rest", str(tmp_path), runner._branch_groups(PHASE, REPO_CONFIG))]
+
+
 def test_runner_passes_the_configured_interval_to_inputs(github_runtime) -> None:
     store, _, _, inputs = github_runtime
     config = replace(CONFIG, interval_s=137)
@@ -336,7 +356,7 @@ def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -
     monkeypatch.setattr(
         runner.github_source,
         "open_prs",
-        lambda mode: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
+        lambda mode, *_args: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
     )
 
     class Store(StoreReads):
@@ -374,7 +394,7 @@ def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -
     monkeypatch.setattr(
         runner.github_source,
         "open_prs",
-        lambda mode: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
+        lambda mode, *_args: calls.append(mode) or (Ok(()), GhStatus(mode, True, None, None, False)),
     )
 
     class Store(StoreReads):

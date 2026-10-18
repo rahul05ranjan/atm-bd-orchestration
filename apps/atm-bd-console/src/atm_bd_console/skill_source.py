@@ -6,10 +6,11 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 
 from . import __version__, command
-from .result import Err
+from .result import Err, Timeout
 
 REPOSITORY = "https://github.com/randlee/atm-bd-orchestration"
 _PLUGIN = Path("plugins/atm-bd-orchestration")
@@ -45,7 +46,7 @@ def _run_git(args: list[str]) -> str:
     if isinstance(result, Err):
         error = result.error
         detail = getattr(error, "stderr", "") or (
-            f"timed out after {error.seconds}s" if hasattr(error, "seconds") else error.kind
+            f"timed out after {error.seconds}s" if isinstance(error, Timeout) else error.kind
         )
         raise SkillSourceError(f"{REPOSITORY}: git {' '.join(args)} failed: {detail}")
     return result.value.stdout
@@ -83,7 +84,7 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
         pkg_dir = bundled_directory()
         _validate_pkg_dir(pkg_dir, "bundled")
         try:
-            from ._build_identity import COMMIT
+            COMMIT = import_module("._build_identity", __package__).COMMIT
         except ImportError:
             COMMIT = None
         commit = COMMIT if isinstance(COMMIT, str) and _COMMIT_RE.fullmatch(COMMIT) else "unknown"

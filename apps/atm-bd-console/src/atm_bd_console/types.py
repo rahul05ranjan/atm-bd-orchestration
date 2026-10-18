@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, TypeAlias
 
+from .enums import CiState, MergeState, PrState, SprintState
 from .result import Error, Result
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
@@ -88,6 +89,8 @@ class Sprint:
     depends_on: tuple[str, ...]
     closed: bool
     findings: int
+    status: SprintState | None = None
+    raw_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,7 +120,7 @@ class RemoteRef:
 class Merge:
     branch: str
     target: str
-    state: Literal["clean", "conflict", "error"]
+    state: MergeState
     files: tuple[str, ...]
     messages: tuple[str, ...]
     checked_at: datetime
@@ -137,9 +140,11 @@ class PullRequest:
     head: str
     base: str
     head_sha: str
-    ci: Literal["success", "pending", "failure", "none"]
+    ci: CiState
     failed_checks: tuple[str, ...]
-    state: Literal["open", "merged", "closed", "draft"] = "open"
+    state: PrState = PrState.OPEN
+    raw_ci: str = ""
+    raw_state: str = ""
 
 
 
@@ -261,7 +266,7 @@ class StepView:
 class SprintView:
     id: str
     title: str
-    state: Literal["closed", "in_progress", "ready", "not_ready"]
+    state: SprintState
     depends_on: tuple[str, ...]
     steps: tuple[StepView, ...]
 
@@ -325,7 +330,7 @@ class Snapshot:
     metrics: Metrics
     gh: GhStatus
     top_pr: int | None
-    top_ci: str | None
+    top_ci: CiState | None
     mermaid: str
     sprints: tuple[SprintView, ...]
     interval_s: int
@@ -334,6 +339,11 @@ class Snapshot:
     sent: tuple[Action, ...]
     prs: tuple[PrRow, ...]
     files: Mapping[str, str]
+    phase_data: Phase | None = None
+    task_data: tuple[Task, ...] = ()
+    member_data: tuple[Member, ...] = ()
+    task_bead_data: tuple[Bead, ...] = ()
+    worktree_data: tuple[Worktree, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -346,6 +356,7 @@ class State:
     sent: tuple[Action, ...]
     remotes: tuple[RemoteRef, ...]
     batch_due: Mapping[str, datetime]
+    collision_notices: tuple[str, ...] = ()
 
 
 INITIAL_STATE = State((), None, None, None, None, (), (), {})

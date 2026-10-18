@@ -59,9 +59,11 @@ def run(argv: list[str] | None = None) -> int:
     if args.version and args.latest:
         parser.error("a version cannot be combined with --latest")
 
+    source_name = "bundled"
     try:
         installer = _installer()
         with skill_source.resolve_source(version=args.version, latest=args.latest) as source:
+            source_name = source.name
             installer.check_tools()
             dest = args.dest.expanduser().resolve()
             if dest.name not in {".claude", ".codex"}:
@@ -84,7 +86,7 @@ def run(argv: list[str] | None = None) -> int:
         print(f"atm-bd skill: {error}", file=sys.stderr)
         return 1
     except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
-        name = source.name if "source" in locals() else "bundled"
+        name = source_name
         if name != "bundled":
             message = f"{name} is not installable by atm-bd {__version__}: {error}"
         else:

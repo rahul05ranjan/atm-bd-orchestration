@@ -10,6 +10,7 @@ import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
+from atm_bd_console.enums import CiState
 from atm_bd_console.render import _age, _error_text, dashboard, status_bar
 from atm_bd_console.result import (
     CommandFailed,
@@ -100,7 +101,7 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
 
 def test_sections_error_first_sent_last_height_and_links() -> None:
     error = Timeout("timeout", ("atm",), 5, "retry")
-    pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", "pending", ())
+    pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", CiState.RUNNING, ())
     actions = tuple(Action(NOW - timedelta(minutes=number), "send", "dev-sanity", ("atm-bh-5",), "sent", None)
                     for number in range(6))
     value = replace(

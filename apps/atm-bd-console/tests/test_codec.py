@@ -11,6 +11,7 @@ from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO,
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
+from atm_bd_console.enums import CiState, MergeState, PrState
 from atm_bd_console.icons import icon_for
 from atm_bd_console.result import (
     CommandFailed,
@@ -33,6 +34,16 @@ TEST_SANITY_MEMBER = "test-sanity"
 TEST_QA_MEMBER = "test-qa"
 TEST_REVIEWER = "test-reviewer"
 OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "assignee"}
+
+
+def test_pre_enum_snapshot_decodes_to_typed_states() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "snapshot" / "pre-enums.json"
+    decoded = from_json(Snapshot, fixture.read_text())
+    assert isinstance(decoded, Ok)
+    pr = decoded.value.prs[0]
+    assert isinstance(pr.pr.ci, CiState)
+    assert isinstance(pr.pr.state, PrState)
+    assert pr.merge is not None and isinstance(pr.merge.state, MergeState)
 
 
 def test_config_round_trip_and_literal_rejection() -> None:

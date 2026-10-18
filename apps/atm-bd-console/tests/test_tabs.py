@@ -9,6 +9,7 @@ from rich.cells import cell_len
 from textual import events
 
 from atm_bd_console.app import ConsoleApp, sprint_steps, status_header
+from atm_bd_console.enums import PrState, SprintState
 from atm_bd_console.model import _sprint_views
 from atm_bd_console.prs import render_prs
 from atm_bd_console.render import dashboard, status_bar
@@ -19,9 +20,9 @@ WIDE = "x" * 200
 TEST_ASSIGNEE = "test-dev"
 SPRINTS = (
     SPRINT_VIEW,
-    SprintView("atm-bh-1", "contract", "closed", (), ()),
-    SprintView("atm-bh-9", "runner", "not_ready", ("atm-bh-6",), ()),
-    SprintView("atm-bh-8", "renderers", "ready", (), (
+    SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),
+    SprintView("atm-bh-9", "runner", SprintState.NOT_READY, ("atm-bh-6",), ()),
+    SprintView("atm-bh-8", "renderers", SprintState.READY, (), (
         StepView("atm-bh-8.group-dev", "dev", "in_progress", "solar"),
         StepView("atm-bh-8.group-sanity", "sanity", "open", None),
         StepView("atm-bh-8.group-qa", "qa", "open", "quality-mgr"),
@@ -144,7 +145,7 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
 
 
 def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> None:
-    merged = replace(RUNNING.prs[0], pr=replace(RUNNING.prs[0].pr, state="merged"))
+    merged = replace(RUNNING.prs[0], pr=replace(RUNNING.prs[0].pr, state=PrState.MERGED))
     snapshot = replace(RUNNING, prs=(RUNNING.prs[0], merged))
 
     async def scenario() -> None:

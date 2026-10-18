@@ -5,14 +5,20 @@ from datetime import UTC, datetime
 import pytest
 from rich.cells import cell_len
 
+from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
 from atm_bd_console.icons import (
+    AGENT_ICONS,
     BEAD_STATUS_ICONS,
+    CI_ICONS,
     CI_STATE_ICONS,
-    MERGE_STATE_ICONS,
+    PR_ICONS,
     PR_STATE_ICONS,
+    SPRINT_ICONS,
     SPRINT_STATE_ICONS,
     ci_failure_key,
+    icon,
     icon_for,
+    merge_icon,
 )
 from atm_bd_console.types import AgentView, Member
 
@@ -51,7 +57,7 @@ def test_qa_icon_color_tracks_state_and_sanity_icon_is_fixed() -> None:
 
 
 def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
-    tables = (BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, PR_STATE_ICONS, CI_STATE_ICONS, MERGE_STATE_ICONS)
+    tables = (BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, PR_STATE_ICONS, CI_STATE_ICONS)
     glyphs = [glyph for table in tables for glyph, _ in table.values()]
     model_members = tuple(
         Member(f"claude-{model}", "active", None, "dev", model, "claude-code")
@@ -72,44 +78,84 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     assert glyphs
     assert len({cell_len(glyph) for glyph in glyphs}) == 1
     assert BEAD_STATUS_ICONS == {
-        "open": ("\U000f0766", "#2D81E0"),
-        "blocked": ("\U000f033e", "#FA8537"),
-        "in_progress": ("\U000f051f", "#0077FF"),
-        "deferred": ("\U000f03e5", "#FFB726"),
-        "closed": ("\U000f05e0", "#2DE057"),
-        "pinned": ("\U000f0403", "#42C3AB"),
-        "hooked": ("\U000f06e2", "#2DE057"),
-        "accepted": ("\U000f0513", "#E551BA"),
-        "planned": ("\U000f00ef", "#FFB726"),
-        "proposed": ("\U000f06e8", "#FFB726"),
-        "ready": ("\U000f040d", "#0077FF"),
+        SprintState.OPEN: ("\U000f0766", "#2D81E0"),
+        SprintState.BLOCKED: ("\U000f033e", "#FA8537"),
+        SprintState.IN_PROGRESS: ("\U000f051f", "#0077FF"),
+        SprintState.DEFERRED: ("\U000f03e5", "#FFB726"),
+        SprintState.CLOSED: ("\U000f05e0", "#2DE057"),
+        SprintState.PINNED: ("\U000f0403", "#42C3AB"),
+        SprintState.HOOKED: ("\U000f06e2", "#2DE057"),
+        SprintState.ACCEPTED: ("\U000f0513", "#E551BA"),
+        SprintState.PLANNED: ("\U000f00ef", "#FFB726"),
+        SprintState.PROPOSED: ("\U000f06e8", "#FFB726"),
+        SprintState.READY: ("\U000f040d", "#0077FF"),
     }
     assert SPRINT_STATE_ICONS == {
-        "closed": ("\U000f05e0", "#2DE057"),
-        "in_progress": ("\U000f051f", "#0077FF"),
-        "ready": ("\U000f040d", "#0077FF"),
-        "not_ready": ("\U000f137c", "#D97757"),
+        SprintState.CLOSED: ("\U000f05e0", "#2DE057"),
+        SprintState.IN_PROGRESS: ("\U000f051f", "#0077FF"),
+        SprintState.READY: ("\U000f040d", "#0077FF"),
+        SprintState.NOT_READY: ("\U000f137c", "#D97757"),
     }
     assert PR_STATE_ICONS == {
-        "open": ("\U000f04c2", "#2D81E0"),
-        "draft": ("\U000f0cb6", "#FFA60D"),
-        "merged": ("\U000f062d", "#8957E5"),
-        "closed": ("\U000f073a", "#F85149"),
+        PrState.OPEN: ("\U000f04c2", "#2D81E0"),
+        PrState.DRAFT: ("\U000f0cb6", "#FFA60D"),
+        PrState.MERGED: ("\U000f062d", "#8957E5"),
+        PrState.CLOSED: ("\U000f073a", "#F85149"),
     }
     assert CI_STATE_ICONS == {
-        "success": ("\U000f062c", "#2EA043"),
-        "fail_macos": ("\U000f0035", "#F85149"),
-        "fail_windows": ("\U000f05b3", "#F85149"),
-        "fail_linux": ("\U000f033d", "#F85149"),
-        "fail_bug": ("\U000f00e4", "#F85149"),
-        "pending": ("\U000f0898", "#58A6FF"),
-        "none": ("\U000f01d8", "#2D81E0"),
+        CiState.PASS: ("\U000f062c", "#2EA043"),
+        CiState.FAIL_MACOS: ("\U000f0035", "#F85149"),
+        CiState.FAIL_WINDOWS: ("\U000f05b3", "#F85149"),
+        CiState.FAIL_LINUX: ("\U000f033d", "#F85149"),
+        CiState.FAIL_BUG: ("\U000f00e4", "#F85149"),
+        CiState.RUNNING: ("\U000f0898", "#58A6FF"),
+        CiState.NONE: ("\U000f01d8", "#2D81E0"),
+        CiState.UNKNOWN: ("?", "#F85149"),
     }
-    assert MERGE_STATE_ICONS == {
-        "clean": ("\U000f062d", "#2EA043"),
-        "conflict": ("\U000f062c", "#F85149"),
-        "error": ("\U000f062d", "#F85149"),
+    assert {state: merge_icon(state) for state in MergeState} == {
+        MergeState.CLEAN: ("\U000f062d", "#2EA043"),
+        MergeState.CONFLICT: ("\U000f062c", "#F85149"),
+        MergeState.ERROR: ("\U000f062d", "#F85149"),
+        MergeState.UNKNOWN: ("?", "#F85149"),
     }
+
+
+def test_enum_icon_tables_are_complete_and_exact():
+    expected_agents = {
+        AgentIcon.HAIKU: ("\U000f0156", "#FF6533"), AgentIcon.SONNET: ("\U000f0382", "#FF784D"),
+        AgentIcon.OPUS: ("\U000f06c4", "#FF8C66"), AgentIcon.FABLE: ("\U000f0717", "#FF9F80"),
+        AgentIcon.ASTRA: ("\U000f0674", "#FFE066"), AgentIcon.TERRA: ("\U000f01e7", "#2DE057"),
+        AgentIcon.LUNA: ("\U000f0f65", "#FFE066"), AgentIcon.SOL: ("\U000f05a8", "#FFA60D"),
+        AgentIcon.OTHER: ("·", None), AgentIcon.SEVERITY: ("\U000f01a6", "#E551BA"),
+        AgentIcon.QA_RUNNING: ("\U000f029b", "#4A5AF8"), AgentIcon.QA_PASS: ("\U000f029b", "#2EA043"),
+        AgentIcon.QA_FAIL: ("\U000f029b", "#F85149"),
+    }
+    expected_sprints = {
+        SprintState.OPEN: ("\U000f0766", "#2D81E0"), SprintState.IN_PROGRESS: ("\U000f051f", "#0077FF"),
+        SprintState.BLOCKED: ("\U000f033e", "#FA8537"), SprintState.DEFERRED: ("\U000f03e5", "#FFB726"),
+        SprintState.CLOSED: ("\U000f05e0", "#2DE057"), SprintState.PINNED: ("\U000f0403", "#42C3AB"),
+        SprintState.HOOKED: ("\U000f06e2", "#2DE057"), SprintState.ACCEPTED: ("\U000f0513", "#E551BA"),
+        SprintState.PLANNED: ("\U000f00ef", "#FFB726"), SprintState.PROPOSED: ("\U000f06e8", "#FFB726"),
+        SprintState.READY: ("\U000f040d", "#0077FF"), SprintState.NOT_READY: ("\U000f137c", "#D97757"),
+        SprintState.UNKNOWN: ("?", "#F85149"),
+    }
+    expected_ci = {
+        CiState.NONE: ("\U000f01d8", "#2D81E0"), CiState.RUNNING: ("\U000f0898", "#58A6FF"),
+        CiState.PASS: ("\U000f062c", "#2EA043"), CiState.FAIL_MACOS: ("\U000f0035", "#F85149"),
+        CiState.FAIL_WINDOWS: ("\U000f05b3", "#F85149"), CiState.FAIL_LINUX: ("\U000f033d", "#F85149"),
+        CiState.FAIL_BUG: ("\U000f00e4", "#F85149"), CiState.UNKNOWN: ("?", "#F85149"),
+    }
+    expected_prs = {
+        PrState.NONE: ("-", None), PrState.OPEN: ("\U000f04c2", "#2D81E0"),
+        PrState.DRAFT: ("\U000f0cb6", "#FFA60D"), PrState.MERGED: ("\U000f062d", "#8957E5"),
+        PrState.CLOSED: ("\U000f073a", "#F85149"), PrState.CONFLICT: ("\U000f062c", "#F85149"),
+        PrState.UNKNOWN: ("?", "#F85149"),
+    }
+    for enum, table, expected in ((AgentIcon, AGENT_ICONS, expected_agents), (SprintState, SPRINT_ICONS, expected_sprints),
+                                  (CiState, CI_ICONS, expected_ci), (PrState, PR_ICONS, expected_prs)):
+        assert set(table) == set(enum)
+        assert table == expected
+        assert all(icon(member) == expected[member] for member in enum)
 
 
 @pytest.mark.parametrize(

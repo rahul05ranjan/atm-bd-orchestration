@@ -31,8 +31,10 @@ from rich.text import Text
 
 from atm_bd_console import app, cli, runner
 from atm_bd_console.build import identity
+from atm_bd_console.enums import MergeState
 from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
+from atm_bd_console.status_table import markdown, rows
 from atm_bd_console.types import INITIAL_STATE, Due
 
 PKG = Path(__file__).resolve().parents[1]
@@ -52,6 +54,33 @@ def cli_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(cli, "now", lambda: datetime(2026, 10, 15, tzinfo=UTC))
     return config
+
+
+def test_cron_markdown_uses_shared_rows_and_dry_run(cli_runtime, monkeypatch, capsys):
+    snapshot = replace(SNAPSHOT, errors=())
+    calls = []
+
+    def step(config, state, force, store):
+        calls.append((config.dry_run, force))
+        return runner.StepResult(snapshot, state)
+
+    monkeypatch.setattr(cli.runner, "step", step)
+    monkeypatch.setattr(runner.atm_source, "send", lambda *args: pytest.fail("unexpected send"))
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *args: pytest.fail("unexpected assignment"))
+    assert cli.main(["cron", "--phase", "x", "--md-table"]) == 0
+    output = capsys.readouterr()
+    assert output.out == markdown(rows(snapshot)) + "\n"
+    assert output.err == ""
+    assert calls == [(True, True)]
+
+
+def test_cron_markdown_rejects_partial_snapshot(cli_runtime, monkeypatch, capsys):
+    snapshot = replace(SNAPSHOT, errors=(TIMEOUT,))
+    monkeypatch.setattr(cli.runner, "step", lambda config, state, force, store: runner.StepResult(snapshot, state))
+    assert cli.main(["cron", "--phase", "x", "--md-table"]) != 0
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "timeout" in output.err
 
 
 def test_as_is_not_a_console_option(capsys) -> None:
@@ -658,7 +687,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
         },
     )
     beads = {root.id: root, sprint.id: sprint, sanity.id: sanity}
-    merge = replace(MERGE, branch=SPRINT.branch, target=SPRINT.target, state="clean", files=(), messages=())
+    merge = replace(MERGE, branch=SPRINT.branch, target=SPRINT.target, state=MergeState.CLEAN, files=(), messages=())
     repo = tmp_path / "repo"
     repo.mkdir()
     config = replace(

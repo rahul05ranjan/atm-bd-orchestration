@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from atm_bd_console.codec import from_json
+from atm_bd_console.enums import SprintState
 from atm_bd_console.result import CommandFailed, ConfigInvalid, NotFound, Ok, Timeout
 from atm_bd_console.status import status_text
 from atm_bd_console.types import Snapshot, SprintView, StepView
@@ -16,10 +17,10 @@ def snapshot() -> Snapshot:
     decoded = from_json(Snapshot, (FIXTURES / "contract" / "snapshot-running.json").read_text())
     assert isinstance(decoded, Ok)
     sprints = (
-        SprintView("atm-bh-1", "contract", "closed", (), ()),
-        SprintView("atm-bh-2", "source", "in_progress", ("atm-bh-1",),
+        SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),
+        SprintView("atm-bh-2", "source", SprintState.IN_PROGRESS, ("atm-bh-1",),
                    (StepView("atm-bh-2.group-dev", "dev", "in_progress", "fenix"),)),
-        SprintView("atm-bh-3", "later", "not_ready", ("atm-bh-1", "atm-bh-2"), ()),
+        SprintView("atm-bh-3", "later", SprintState.NOT_READY, ("atm-bh-1", "atm-bh-2"), ()),
     )
     return replace(decoded.value, mermaid="graph TD\n    a --> b", sprints=sprints)
 
@@ -71,11 +72,11 @@ def test_missing_binary_uses_dependency_depth_fallback(monkeypatch) -> None:
 
 def test_fallback_is_one_row_per_sprint_in_dependency_depth_order(monkeypatch) -> None:
     sprints = (
-        SprintView("atm-bh-3", "later", "not_ready", ("atm-bh-2",), ()),
-        SprintView("atm-bh-2", "source", "in_progress", ("atm-bh-1",),
+        SprintView("atm-bh-3", "later", SprintState.NOT_READY, ("atm-bh-2",), ()),
+        SprintView("atm-bh-2", "source", SprintState.IN_PROGRESS, ("atm-bh-1",),
                    (StepView("atm-bh-2.group-dev", "dev", "in_progress", "fenix"),)),
-        SprintView("atm-bh-1", "contract", "closed", (), ()),
-        SprintView("atm-bh-4", "other", "ready", (),
+        SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),
+        SprintView("atm-bh-4", "other", SprintState.READY, (),
                    (StepView("atm-bh-4.group-dev", "dev", "open", None),)),
     )
     value = replace(snapshot(), sprints=sprints)

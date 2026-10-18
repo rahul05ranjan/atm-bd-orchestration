@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 
+from .enums import SprintState
 from .icons import SPRINT_STATE_ICONS
 from .ids import short_id
 from .render import render_agent
@@ -27,7 +28,7 @@ def _fallback(snapshot: Snapshot) -> str:
     for _, sprint in ordered:
         sprint_id = short_id(sprint.id, snapshot.bead_prefix)
         current = next((step for step in sprint.steps if step.status == "in_progress"), None)
-        if current is None and sprint.state == "ready":
+        if current is None and sprint.state == SprintState.READY:
             current = next((step for step in sprint.steps if step.status == "open"), None)
         line = f"{SPRINT_STATE_ICONS[sprint.state][0]} {sprint_id}"
         if current is not None:

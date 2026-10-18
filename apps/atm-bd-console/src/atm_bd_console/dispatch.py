@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .enums import MergeState
 from .ids import short_id
 from .prs import active_pr
 from .result import CommandFailed, Err, Error, NotFound, Timeout
@@ -95,15 +96,15 @@ def dispatch(
             worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
         ):
             reasons.append(f"no worktree for {step.branch or '<missing>'}")
-        merge = merge_by_pair.get((step.branch, target))
-        if merge is not None and merge.state == "conflict":
+        merge = merge_by_pair.get((step.branch, target)) if step.branch and target else None
+        if merge is not None and merge.state == MergeState.CONFLICT:
             reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
         elif step.ready and step.branch in remote_by_branch and remote_error is None:
             if target is None:
                 reasons.append("merge verification unavailable: set the step or sprint PR target")
             elif merge is None:
                 reasons.append(f"merge verification unavailable for {target}: no current result; retry the merge check")
-            elif merge.state != "clean":
+            elif merge.state != MergeState.CLEAN:
                 detail = "; ".join(merge.messages) or "retry the merge check"
                 reasons.append(f"merge verification unavailable for {target}: {detail}")
 
