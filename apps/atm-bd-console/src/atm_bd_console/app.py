@@ -218,23 +218,6 @@ class ConsoleApp(App[int]):
     def action_show_diagnostics(self) -> None:
         self.query_one(TabbedContent).active = "diagnostics"
 
-    def _record_error(self, source: str, error: Error | Exception) -> None:
-        if isinstance(error, Exception):
-            message = str(error)
-        else:
-            detail = getattr(error, "message", getattr(error, "path", ""))
-            message = f"{error.kind}: {detail}; {error.fix}"
-        now = datetime.now(UTC)
-        entry = f"{render._clock(now, seconds=True)} {source}: {message}"
-        self.diagnostics = [*self.diagnostics[-19:], entry]
-        try:
-            self.diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.diagnostics_path.open("a", encoding="utf-8") as log_file:
-                timestamp = now.isoformat(timespec="seconds").replace("+00:00", "Z")
-                log_file.write(f"{timestamp} {source}: {message}\n")
-        except OSError as log_error:
-            self.diagnostics = [*self.diagnostics[-19:], f"log: {log_error}"]
-
     def on_text_selected(self) -> None:
         """A finished text selection outside the DAG is copied with a toast (#253)."""
         text = self.screen.get_selected_text()
@@ -257,8 +240,8 @@ class ConsoleApp(App[int]):
             with self.input_log_path.open("a", encoding="utf-8") as log_file:
                 timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                 log_file.write(f"{timestamp} {entry}\n")
-        except OSError as log_error:
-            self.diagnostics = [*self.diagnostics[-19:], f"input log: {log_error}"]
+        except OSError:
+            pass
 
     async def on_event(self, event: events.Event) -> None:
         # Traced before dispatch, so presses the StatusPanel/SprintList stop are recorded too. The trace is

@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -158,32 +159,58 @@ def test_diagnostics_view_reads_structured_log_entries(tmp_path: Path) -> None:
     run_scenario(scenario())
 
 
-def test_display_clocks_are_local_and_diagnostic_files_are_zulu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_display_clocks_are_local_and_structured_log_stays_zulu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     original_tz = os.environ.get("TZ")
     monkeypatch.setenv("TZ", "Etc/GMT+8")
     time.tzset()
     try:
         fixed_now = SNAPSHOT.generated_at
-        monkeypatch.setattr(console, "datetime", SimpleNamespace(now=lambda _tz: fixed_now))
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, _tz=None):
+                return fixed_now
+
+        monkeypatch.setattr(console, "datetime", FixedDateTime)
         snapshot = replace(SNAPSHOT, generated_at=fixed_now)
         no_pr_snapshot = replace(snapshot, prs=(), gh=GhStatus("graphql", True, None, fixed_now, False))
-        dummy = SimpleNamespace(
-            diagnostics=[], diagnostics_path=tmp_path / "diagnostics.log", input_log_path=tmp_path / "input.log",
-        )
-
         dashboard_header = render.dashboard(snapshot, 120, 40).plain.splitlines()[0]
         dispatch_row = render._sent_line(snapshot.sent[0], snapshot).plain
         pr_sheet = prs.render_prs(no_pr_snapshot, 120).plain
-        ConsoleApp._record_error(dummy, "tick", TIMEOUT)
-        ConsoleApp._trace_input(dummy, "key d")
-        log_view = "\n".join(dummy.diagnostics[-20:]) or "No errors recorded."
-
         assert dashboard_header.startswith("phase-bh · 04:00 ·")
         assert dispatch_row.startswith(" 04:00 ")
         assert "checked 04:00" in pr_sheet
-        assert log_view.startswith("04:00:00 tick: timeout")
-        assert dummy.diagnostics_path.read_text().startswith("2026-10-14T12:00:00Z tick: timeout")
-        assert dummy.input_log_path.read_text().startswith("2026-10-14T12:00:00.000Z key d")
+
+        repo_root = tmp_path / "repo"
+        logger = create_console_logger(repo_root)
+        assert isinstance(logger, Ok)
+        assert logger.value.event("error", level="error", message="fixed diagnostic event") == Ok(None)
+        assert logger.value.flush() == Ok(None)
+        events = logger.value.query(levels=("error",), limit=1, order="newest_first")
+        assert isinstance(events, Ok) and len(events.value) == 1
+        event = events.value[0]
+        assert event.timestamp.endswith("Z")
+        expected_clock = datetime.fromisoformat(event.timestamp).astimezone().strftime("%H:%M:%S")
+
+        app = ConsoleApp(
+            replace(CONFIG, repo_root=str(repo_root), state_dir=str(tmp_path / "state"), interval_s=3600),
+            FakeStep(snapshot), STATE,
+        )
+
+        async def scenario() -> None:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await settle(pilot)
+                app.query_one("TabbedContent").active = "diagnostics"
+                app.refresh_views()
+                await settle(pilot)
+                shown = app.query_one("#diagnostics-text").render().plain
+                assert f"{expected_clock} error: fixed diagnostic event" in shown
+                assert not (tmp_path / "state" / "diagnostics.log").exists()
+
+        run_scenario(scenario())
+        assert not hasattr(app, "_record_error")
+        assert not hasattr(app, "diagnostics_path")
+        assert app.input_log_path.read_text().startswith("2026-10-14T12:00:00.000Z start")
     finally:
         if original_tz is None:
             monkeypatch.delenv("TZ", raising=False)
