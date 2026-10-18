@@ -243,13 +243,22 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
         segment = "gh: off"
     else:
         read_at = _clock(gh.at) if gh.at else "--:--"
-        if gh.error is not None or gh.ok is False:
+        if gh.paused:
+            resource = "graphql" if gh.mode == "graphql" else "core"
+            reset = _clock(gh.quota_reset) if gh.quota_reset else "unknown"
+            reason = "rate limited" if gh.rate_limited else f"below {gh.quota_threshold} percent"
+            segment = f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource} remaining, {reason}, resets {reset}"
+            if width < 100:
+                short_reason = "rate limited" if gh.rate_limited else f"below {gh.quota_threshold}%"
+                segment = f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource}, {short_reason}, reset {reset}"
+        elif gh.error is not None or gh.ok is False:
             kind = gh.error.kind if gh.error is not None else "unavailable"
             segment = f"gh: {gh.mode} {STATUS_FAIL} {kind} {read_at}"
         else:
             segment = f"gh: {gh.mode} {STATUS_OK} {read_at}"
     if gh.truncated:
         segment += " 100+"
+    segment += f" | gh poll {gh.poll_interval_s}s / {gh.quota_threshold}%"
     metrics = snapshot.metrics
     filled = min(9, max(0, round(metrics.pct * 9 / 100)))
     progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"

@@ -43,6 +43,17 @@ and app version. Use `atm-bd skill --help` for release and destination options.
 
 ## Launch settings
 
+GitHub polling defaults to GraphQL every 600 seconds, with a minimum remaining
+quota of 50 percent. Set `github_poll_interval` (seconds) and
+`github_quota_threshold` (integer percent, 0–100) under `[console]` in
+`.atm-bd/console.toml`, or override them with `--github-poll-interval` and
+`--github-quota-threshold`. The status bar shows both settings. Each GitHub
+request checks the applicable shared `gh api rate_limit` resource first. Below
+the threshold it retains cached PRs and shows the local reset time; forced
+refreshes obey the same limit. GitHub's quota endpoint can be stale, so a
+rate-limit response also pauses requests until the reported reset. GraphQL
+requests paginate through all PRs and check quota before every page.
+
 Run `atm-bd console --phase bh` from the repository root. For one cron tick,
 use `atm-bd cron --phase bh`; add `--dry-run` to preview actions.
 The phase file `.atm-bd/phase-bh.toml` supplies the assignment identity and

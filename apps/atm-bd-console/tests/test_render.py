@@ -221,22 +221,35 @@ def test_status_bar_formats_and_cell_width() -> None:
 
     def check() -> None:
         expected = (FIXTURES / "render" / "status-bar-ok.txt").read_text().rstrip("\n")
-        assert status_bar(value, 120).plain == expected + " | lead ·fenix"
+        assert status_bar(value, 120).plain == expected.replace(" | ", " | gh poll 600s / 50% | ", 1) + " | lead ·fenix"
         assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain == (
-            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+            "gh: off | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
-        assert status_bar(failed, 120).plain == (
-            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+        assert status_bar(failed, 160).plain == (
+            "gh: graphql ⛔ timeout 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
-        assert status_bar(truncated_ok, 120).plain == (
-            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+        assert status_bar(truncated_ok, 160).plain == (
+            "gh: graphql ✅ 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         for width in (80, 120):
             assert cell_len(status_bar(value, width).plain) <= width
             assert cell_len(status_bar(failed, width).plain) <= width
 
+    pacific_test(check)
+
+
+def test_status_bar_reports_paused_quota_and_local_reset() -> None:
+    def check() -> None:
+        reset = datetime(2026, 10, 14, 15, 14, tzinfo=UTC)
+        gh = replace(GhStatus("graphql", False, None, NOW, False), paused=True,
+                     quota_remaining=2450, quota_limit=5000, quota_reset=reset,
+                     poll_interval_s=120, quota_threshold=50)
+        text = status_bar(replace(snapshot(), gh=gh), 160).plain
+        assert "GitHub paused: 2450/5000 graphql remaining, below 50 percent, resets 08:14" in text
+        assert "gh poll 120s / 50%" in text
+        assert "gh poll 120s / 50%" in status_bar(replace(snapshot(), gh=gh), 80).plain
     pacific_test(check)
 
 

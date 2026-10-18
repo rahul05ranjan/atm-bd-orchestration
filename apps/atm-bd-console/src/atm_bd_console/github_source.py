@@ -15,12 +15,58 @@ from .pr_selection import select_pr
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
-GRAPHQL = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number url state isDraft headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { totalCount nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
+GRAPHQL = """query($owner: String!, $name: String!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount pageInfo { hasNextPage endCursor } nodes { number url state isDraft headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { totalCount nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
 # The repository is the checkout gh runs in: gh fills {owner} and {repo} from it (or from GH_REPO).
 GRAPHQL_ARGV = ("gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={GRAPHQL}")
 REST_ARGV = ("gh", "api", "repos/{owner}/{repo}/pulls?state=all&per_page=100")
 FAILURES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}
 REQUEST_TIMEOUT_S = 20
+QUOTA_ARGV = ("gh", "api", "rate_limit")
+
+
+class Budget:
+    def __init__(self, mode: Literal["graphql", "rest"], repo_root: str | Path | None,
+                 threshold: int, interval_s: int, now: datetime, previous: GhStatus):
+        self.mode, self.repo_root, self.now = mode, repo_root, now
+        if previous.mode != mode:
+            previous = GhStatus(mode, None, None, None, False)
+        self.status = replace(previous, mode=mode, quota_threshold=threshold, poll_interval_s=interval_s)
+
+    def run(self, argv, fix, **kwargs):
+        status = self.status
+        if status.paused and status.quota_reset is not None and self.now < status.quota_reset:
+            return Err(CommandFailed("command_failed", argv, 1, "GitHub polling paused until reset", "wait for the quota reset"))
+        quota = command.run(QUOTA_ARGV, "check GitHub quota and retry", cwd=self.repo_root, timeout_s=REQUEST_TIMEOUT_S)
+        if isinstance(quota, Err):
+            return quota
+        resource = "graphql" if self.mode == "graphql" else "core"
+        try:
+            entry = json.loads(quota.value.stdout)["resources"][resource]
+            remaining, limit, reset = entry["remaining"], entry["limit"], entry["reset"]
+            if any(type(value) is not int for value in (remaining, limit, reset)) or limit <= 0 or remaining < 0 or reset < 0:
+                raise ValueError("invalid quota values")
+            reset_at = datetime.fromtimestamp(reset, UTC)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
+            return Err(ParseFailed("parse_failed", "github quota", str(exc), "retry the GitHub quota request"))
+        paused = remaining * 100 < limit * status.quota_threshold
+        self.status = replace(status, quota_remaining=remaining, quota_limit=limit, quota_reset=reset_at,
+                              paused=paused, rate_limited=False)
+        if paused:
+            return Err(CommandFailed("command_failed", argv, 1, "GitHub quota below threshold", "wait for quota recovery"))
+        response = command.run(argv, fix, **kwargs)
+        if isinstance(response, Err):
+            detail = str(response.error).lower()
+        else:
+            try:
+                body = json.loads(response.value.stdout)
+                detail = json.dumps(body.get("errors", [])).lower() if isinstance(body, dict) else ""
+            except (json.JSONDecodeError, TypeError):
+                detail = ""
+        if any(marker in detail for marker in ("rate_limit", "rate limit", "rate-limited", "rate limited", "http 429")):
+            self.status = replace(self.status, paused=True, rate_limited=True)
+            if isinstance(response, Ok):
+                return Err(CommandFailed("command_failed", argv, 1, detail, "wait for the quota reset"))
+        return response
 
 
 def ci_state_of(conclusion: str | None, status: str | None, failed_checks: tuple[str, ...]) -> CiState:
@@ -89,32 +135,70 @@ def _from_graphql(node: dict) -> PullRequest:
 
 
 def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | None = None,
-             branch_groups: tuple[tuple[str, ...], ...] = ()):
+             branch_groups: tuple[tuple[str, ...], ...] = (), budget: Budget | None = None):
     """Open pull requests of the repository checked out at `repo_root` (default: the current directory)."""
+    result, status = _open_prs(mode, repo_root, branch_groups, budget)
+    if budget is not None:
+        status = replace(status, quota_remaining=budget.status.quota_remaining, quota_limit=budget.status.quota_limit,
+                         quota_reset=budget.status.quota_reset, paused=budget.status.paused,
+                         rate_limited=budget.status.rate_limited, poll_interval_s=budget.status.poll_interval_s,
+                         quota_threshold=budget.status.quota_threshold)
+    return result, status
+
+
+def _open_prs(mode, repo_root, branch_groups, budget):
     if mode == "off":
         return Ok(()), _status("off", None)
+    run = budget.run if budget is not None else command.run
     argv = GRAPHQL_ARGV if mode == "graphql" else REST_ARGV
-    completed = command.run(argv, "check GitHub connectivity and retry", cwd=repo_root, timeout_s=REQUEST_TIMEOUT_S)
+    completed = run(argv, "check GitHub connectivity and retry", cwd=repo_root, timeout_s=REQUEST_TIMEOUT_S)
     if isinstance(completed, Err):
         failure = completed.error
         if isinstance(failure, CommandFailed):
-            return _error(mode, argv, failure.code, failure.stderr)
+            return _error(mode, failure.argv, failure.code, failure.stderr)
         return completed, _status(mode, False, failure)
     try:
         body = json.loads(completed.value.stdout)
         if mode == "graphql":
             pulls = body["data"]["repository"]["pullRequests"]
             rows = tuple(_from_graphql(node) for node in pulls["nodes"])
-            truncated = pulls["totalCount"] > 100
+            truncated = False
             for node in pulls["nodes"]:
                 commits = (node.get("commits") or {}).get("nodes") or []
                 rollup = ((commits[-1].get("commit") or {}).get("statusCheckRollup") or {}) if commits else {}
                 contexts = rollup.get("contexts") or {}
                 truncated = truncated or contexts.get("totalCount", len(contexts.get("nodes") or [])) > len(contexts.get("nodes") or [])
+            cursors = set()
+            page = pulls.get("pageInfo")
+            if page is not None and (not isinstance(page, dict) or type(page.get("hasNextPage")) is not bool):
+                raise ValueError("invalid GitHub pagination information")
+            while page and page["hasNextPage"]:
+                cursor = page.get("endCursor")
+                if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                    raise ValueError("invalid or repeated GitHub pagination cursor")
+                cursors.add(cursor)
+                page_argv = (*GRAPHQL_ARGV, "-f", f"cursor={cursor}")
+                response = run(page_argv, "check GitHub connectivity and retry", cwd=repo_root, timeout_s=REQUEST_TIMEOUT_S)
+                if isinstance(response, Err):
+                    return response, _status(mode, False, response.error)
+                pulls = json.loads(response.value.stdout)["data"]["repository"]["pullRequests"]
+                page = pulls.get("pageInfo")
+                if not isinstance(page, dict) or type(page.get("hasNextPage")) is not bool:
+                    raise ValueError("invalid GitHub pagination information")
+                rows += tuple(_from_graphql(node) for node in pulls["nodes"])
+                for node in pulls["nodes"]:
+                    commits = (node.get("commits") or {}).get("nodes") or []
+                    rollup = ((commits[-1].get("commit") or {}).get("statusCheckRollup") or {}) if commits else {}
+                    contexts = rollup.get("contexts") or {}
+                    truncated = truncated or contexts.get("totalCount", len(contexts.get("nodes") or [])) > len(contexts.get("nodes") or [])
+            if "pageInfo" not in pulls and pulls["totalCount"] > 100:
+                if budget is not None:
+                    raise ValueError("missing GitHub pagination information")
+                truncated = True
         else:
             rows = tuple(PullRequest(row["number"], row["html_url"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], CiState.NONE, (), pr_state_of("MERGED" if row.get("merged_at") else row["state"], bool(row.get("draft"))), "", row["state"]) for row in body)
             truncated = len(rows) >= 100
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError, IndexError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError, IndexError, ValueError) as exc:
         # A body that is not JSON, or JSON of the wrong shape, is one typed failure; GitHub failing never stops work.
         error = ParseFailed("parse_failed", f"github {mode} response", f"{type(exc).__name__}: {exc}", "retry the GitHub request")
         return Err(error), _status(mode, False, error)
@@ -128,7 +212,7 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
         updates: dict[int, PullRequest] = {}
         for pr in selected.values():
             checks_argv = ("gh", "api", f"repos/{{owner}}/{{repo}}/commits/{pr.head_sha}/check-runs?per_page=100")
-            response = command.run(checks_argv, "check GitHub connectivity and retry", cwd=repo_root,
+            response = run(checks_argv, "check GitHub connectivity and retry", cwd=repo_root,
                                    timeout_s=REQUEST_TIMEOUT_S)
             if isinstance(response, Err):
                 return response, _status(mode, False, response.error)

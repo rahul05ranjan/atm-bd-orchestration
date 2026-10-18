@@ -337,6 +337,14 @@ def test_startup_error_is_in_the_dashboard_without_waiting_for_delivery(monkeypa
     assert "atm teams add-member tool atm-bd" in cli.render.dashboard(dummy.snapshot, 80, 80).plain
 
 
+@pytest.mark.parametrize("mode", ("console", "cron", "snapshot"))
+def test_github_budget_cli_options_reach_configuration(monkeypatch, mode):
+    seen = []
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **kwargs: seen.append(kwargs) or Err(TIMEOUT))
+    assert cli.main([mode, "--phase", "bh", "--github-poll-interval", "120", "--github-quota-threshold", "65"]) == 3
+    assert seen[0]["github_poll_interval_s"] == 120 and seen[0]["github_quota_threshold"] == 65
+
+
 @pytest.mark.parametrize("failure", ("config", "repo", "bd", "atm", "git"))
 def test_launch_checks_fail_before_running(monkeypatch, capsys, failure) -> None:
     def forbidden(*_args, **_kwargs):

@@ -63,6 +63,22 @@ def test_invalid_repository_yaml_is_a_typed_configuration_error(tmp_path) -> Non
     assert result.error.key == str(path)
 
 
+def test_github_budget_configuration_and_validation(tmp_path) -> None:
+    _team_config(tmp_path)
+    path = tmp_path / ".atm-bd" / "console.toml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("[console]\ngithub_poll_interval = 120\ngithub_quota_threshold = 70\n")
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Ok)
+    assert (result.value.github_poll_interval_s, result.value.github_quota_threshold) == (120, 70)
+    overridden = load_config(tmp_path, "bh", github_poll_interval_s=30, github_quota_threshold=20)
+    assert isinstance(overridden, Ok)
+    assert (overridden.value.github_poll_interval_s, overridden.value.github_quota_threshold) == (30, 20)
+    for values in ({"github_poll_interval_s": 0}, {"github_poll_interval_s": True},
+                   {"github_quota_threshold": -1}, {"github_quota_threshold": 101}):
+        assert isinstance(load_config(tmp_path, "bh", **values), Err)
+
+
 def test_invalid_github_and_short_interval_name_key_value_and_fix(tmp_path) -> None:
     _team_config(tmp_path)
     for text, key, value, allowed in (

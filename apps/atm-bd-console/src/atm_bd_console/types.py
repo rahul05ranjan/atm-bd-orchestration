@@ -159,6 +159,13 @@ class GhStatus:
     error: Error | None
     at: datetime | None
     truncated: bool
+    quota_remaining: int | None = None
+    quota_limit: int | None = None
+    quota_reset: datetime | None = None
+    paused: bool = False
+    rate_limited: bool = False
+    poll_interval_s: int = 600
+    quota_threshold: int = 50
 
 
 @dataclass(frozen=True)
@@ -189,6 +196,8 @@ class Config:
     repo_root: str
     state_dir: str
     notification_sender: str = DEFAULT_NOTIFICATION_SENDER
+    github_poll_interval_s: int = 600
+    github_quota_threshold: int = 50
 
 
 @dataclass(frozen=True)
@@ -392,6 +401,7 @@ class PrsFile:
     read_at: datetime
     gh: GhStatus
     prs: tuple[PullRequest, ...]
+    attempted_at: datetime | None = None
 
 
 @dataclass(frozen=True)

@@ -304,7 +304,35 @@ def test_closed_phase_forced_github_refresh_uses_sprint_groups(monkeypatch, tmp_
     with locked.value as store:
         snapshot, _ = runner.step(config, INITIAL_STATE, True, store)
     assert snapshot.stopped == "closed" and snapshot.gh.ok is True
-    assert calls == [("rest", str(tmp_path), runner._branch_groups(PHASE, REPO_CONFIG))]
+    assert calls[0][:3] == ("rest", str(tmp_path), runner._branch_groups(PHASE, REPO_CONFIG))
+    assert isinstance(calls[0][3], runner.github_source.Budget)
+
+
+def test_closed_phase_forced_refresh_respects_pause_and_keeps_cached_prs(monkeypatch, tmp_path):
+    closed = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
+    config = replace(CONFIG, repo_root=str(tmp_path), github="rest", dry_run=True)
+    status = replace(GhStatus("rest", False, None, NOW, False), paused=True,
+                     quota_remaining=2450, quota_limit=5000, quota_reset=NOW + timedelta(hours=1))
+    cached = replace(PRS_FILE, gh=status)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None): return NOW
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=True, step_errors=())))
+    monkeypatch.setattr(runner.github_source.command, "run", lambda *_args, **_kwargs: pytest.fail("paused GitHub request"))
+    locked = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(locked, Ok)
+    with locked.value as store:
+        assert isinstance(store.write_prs(cached), Ok)
+        snapshot, _ = runner.step(config, INITIAL_STATE, True, store)
+        saved = store.load_prs()
+    assert snapshot.gh.paused
+    assert isinstance(saved, Ok) and saved.value.prs == cached.prs and saved.value.read_at == cached.read_at
 
 
 def test_runner_passes_the_configured_interval_to_inputs(github_runtime) -> None:
@@ -579,7 +607,56 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
     assert tuple(row.pr for row in snapshot.prs) == cached.prs
     assert snapshot.gh == GhStatus(CONFIG.github, False, TIMEOUT, SNAPSHOT.generated_at, False)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
-    assert writes == [replace(cached, gh=snapshot.gh)]
+    assert writes == [replace(cached, gh=snapshot.gh, attempted_at=snapshot.generated_at)]
+
+
+def test_github_interval_is_independent_and_paused_refresh_keeps_cache(github_runtime, monkeypatch):
+    store, _, _, inputs = github_runtime
+    clock = [NOW]
+    cache = [replace(PRS_FILE, read_at=EARLIER, attempted_at=NOW,
+                     gh=GhStatus("rest", True, None, EARLIER, False))]
+    calls = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None): return clock[0]
+
+    def refresh(_config, now, gh, _groups):
+        calls.append(now)
+        if len(calls) == 1:
+            return Err(TIMEOUT), replace(gh, paused=True, quota_remaining=2450, quota_limit=5000,
+                                         quota_reset=NOW + timedelta(hours=1))
+        return Ok(cache[0].prs), replace(gh, paused=False, error=None, ok=True)
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner, "_refresh_github", refresh)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=())))
+    monkeypatch.setattr(store, "load_prs", lambda: Ok(cache[0]))
+    monkeypatch.setattr(store, "write_prs", lambda value: cache.__setitem__(0, value) or Ok(None))
+    config = replace(CONFIG, github_poll_interval_s=120, dry_run=True)
+    runner.step(config, RUNNING_STATE, False, store)
+    assert calls == []
+    clock[0] += timedelta(seconds=120)
+    snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert calls == [clock[0]] and snapshot.gh.paused
+    assert inputs[-1].prs == Ok(PRS_FILE.prs) and cache[0].prs == PRS_FILE.prs
+    assert cache[0].read_at == EARLIER and cache[0].attempted_at == clock[0]
+    clock[0] += timedelta(seconds=119)
+    runner.step(config, RUNNING_STATE, False, store)
+    assert len(calls) == 1
+    clock[0] += timedelta(seconds=1)
+    snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert len(calls) == 2 and not snapshot.gh.paused
+
+
+def test_paused_refresh_preserves_cached_availability_and_read_time(monkeypatch):
+    cached = GhStatus("graphql", True, None, EARLIER, False)
+    paused = replace(cached, ok=False, at=NOW, error=TIMEOUT, paused=True,
+                     quota_remaining=2450, quota_limit=5000, quota_reset=NOW + timedelta(hours=1))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (Err(TIMEOUT), paused))
+    result, status = runner._refresh_github(replace(CONFIG, github="graphql"), NOW, cached)
+    assert isinstance(result, Err)
+    assert status.paused and status.ok is True and status.error is None and status.at == EARLIER
 
 
 def test_github_off_skips_forced_read_and_event(github_runtime) -> None:

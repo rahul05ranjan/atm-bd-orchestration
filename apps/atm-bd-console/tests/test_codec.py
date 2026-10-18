@@ -175,6 +175,20 @@ def test_samples_cover_every_contract_type_populated() -> None:
             )
 
 
+def test_old_pr_cache_decodes_with_quota_defaults() -> None:
+    value = json.loads(to_json(PRS_FILE))
+    value.pop("attempted_at")
+    for name in ("quota_remaining", "quota_limit", "quota_reset", "paused", "rate_limited",
+                 "poll_interval_s", "quota_threshold"):
+        value["gh"].pop(name)
+    decoded = from_json(types.PrsFile, json.dumps(value))
+    assert isinstance(decoded, Ok)
+    assert decoded.value.attempted_at is None
+    assert decoded.value.gh.quota_remaining is None and decoded.value.gh.quota_reset is None
+    assert not decoded.value.gh.paused and not decoded.value.gh.rate_limited
+    assert (decoded.value.gh.poll_interval_s, decoded.value.gh.quota_threshold) == (600, 50)
+
+
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda sample: type(sample).__name__)
 def test_every_contract_type_round_trips(sample: object) -> None:
     text = to_json(sample)
