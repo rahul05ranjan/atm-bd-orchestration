@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from process_helpers import run_process
 
-from atm_bd_console import cli, skill, skill_source
+from atm_bd_console import __version__, cli, skill, skill_source
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 PLUGIN = Path(__file__).resolve().parents[3] / "plugins" / "atm-bd-orchestration"
@@ -238,7 +238,7 @@ def test_bundled_default_calls_installer_functions_in_the_app_interpreter(instal
     assert plan_call[2] == target / ".claude"
     assert plan_call[3:] == ({}, False, False)
     output = capsys.readouterr().out
-    assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd 0.17.3)\n")
+    assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd {__version__})\n")
 
 
 def test_bundled_default_uses_current_directory(installer, tmp_path: Path, monkeypatch) -> None:
@@ -304,7 +304,7 @@ def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_p
     assert skill.run(["0.16.0", "--dest", str(tmp_path / "consumer")]) == 1
     assert not any(call[0] == "apply_plan" for call in fake.calls)
     error = capsys.readouterr().err
-    assert "0.16.0 is not installable by atm-bd 0.17.3: bad manifest" in error
+    assert f"0.16.0 is not installable by atm-bd {__version__}: bad manifest" in error
 
 
 def _raise(error: Exception):
