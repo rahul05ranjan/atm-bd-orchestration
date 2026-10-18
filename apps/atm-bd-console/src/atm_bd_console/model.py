@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Literal
@@ -218,6 +219,11 @@ def _read_errors(inputs: Inputs) -> list[Error]:
     return errors
 
 
+def _task_summary(description: str) -> str:
+    text = re.sub(r"<[^>]*>", "", description.replace("<![CDATA[", "").replace("]]>", ""))
+    return next((" ".join(line.split()) for line in text.splitlines() if line.strip()), "")
+
+
 def _agent_views(
     members, tasks: tuple[Task, ...], phase: Phase | None,
     task_beads: Result[tuple[Bead, ...]], now: datetime,
@@ -261,7 +267,7 @@ def _agent_views(
                 tag=step.tag if step else "",
                 marker=marker,
                 age_s=max(0, int((now - task.state_since).total_seconds())),
-                description=task.description,
+                description=step.title if step else _task_summary(task.description),
             ))
         active = next((task for task in mine if task.state == "active"), None)
         qa_state = None

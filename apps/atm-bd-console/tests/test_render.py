@@ -7,10 +7,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from contract_samples import STEP
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState
+from atm_bd_console.model import _agent_views
 from atm_bd_console.render import _age, _error_text, dashboard, status_bar
 from atm_bd_console.result import (
     CommandFailed,
@@ -28,13 +30,16 @@ from atm_bd_console.types import (
     Action,
     AgentView,
     GhStatus,
+    Member,
     Metrics,
+    Phase,
     PrRow,
     PullRequest,
     Row,
     Section,
     SectionRow,
     Snapshot,
+    Task,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -157,6 +162,35 @@ def test_multiline_task_description_stays_on_one_width_fitted_row(width: int) ->
         assert lines[3].endswith("…")
     else:
         assert lines[3].endswith("<review> Inspect 界 branch and report findings. </review> " + "detail " * 19 + "detail")
+
+
+@pytest.mark.parametrize("known_step", [True, False])
+@pytest.mark.parametrize(("description", "summary"), [
+    (('<atm-task id="atm-bi-6.group-dev" sprint="bi-6"> <description><![CDATA['
+      'Implement dev bead `atm-bi-6.group-dev`…'), 'Implement dev bead `atm-bi-6.group-dev`…'),
+    (('<atm-task id="atm-bi-6.group-dev" sprint="bi-6">\n<description><![CDATA[\n'
+      '  Implement\tdev bead\nLater instructions\n]]></description>\n</atm-task>'), 'Implement dev bead'),
+    ('\n  Plain\ttext summary\nLater instructions', 'Plain text summary'),
+    (' \n\t', ''),
+])
+def test_dispatch_task_uses_bead_title_or_plain_first_line(known_step: bool, description: str, summary: str) -> None:
+    task_id = "atm-bi-6.group-dev"
+    title = "Implement status table"
+    task = Task(task_id, "arch-ctm", "active", 0, NOW, NOW, description)
+    step = replace(STEP, bead_id=task_id, kind="dev", title=title, top_epic="atm-phase-bi", tag="phase-bi")
+    phase = Phase("atm-phase-bi", "phase-bi", "Phase BI", False, (), (step,) if known_step else (), ())
+    agents = _agent_views((Member("arch-ctm", "active", NOW),), (task,), phase, Ok(()), NOW)
+    expected = title if known_step else summary
+    assert agents[0].rows[0].description == expected
+    value = replace(snapshot(), agents=agents, errors=(), sections=(), sent=())
+
+    line = next(line for line in dashboard(value, 240, 40).plain.splitlines() if "bi-6.group-dev" in line)
+
+    assert "<" not in line and "CDATA" not in line and "]]>" not in line
+    assert "Later instructions" not in line
+    assert expected in line
+    if expected:
+        assert line.index("bi-6.group-dev") < line.index(expected)
 
 
 def test_status_bar_formats_and_cell_width() -> None:
