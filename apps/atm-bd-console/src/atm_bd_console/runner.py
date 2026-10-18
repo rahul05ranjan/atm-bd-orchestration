@@ -183,8 +183,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     else:
         phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
     logger.result("phase", phase)
-    members = logger.result("atm.members", atm_source.members(config.team), team=config.team)
-    tasks = logger.result("atm.tasks", atm_source.tasks(config.team), team=config.team)
+    members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
+    tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
     worktrees = logger.result("git.worktrees", git_source.worktrees(config.repo_root))
     task_ids = tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ()
     task_beads = logger.result("beads.show_tasks", beads_source.show(task_ids), task_ids=list(task_ids))
