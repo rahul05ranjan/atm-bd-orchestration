@@ -113,6 +113,8 @@ jobs:
           "$UV_TOOL_BIN_DIR/atm-bd" console --help
           "$UV_TOOL_BIN_DIR/atm-bd" skill --help
           "$UV_TOOL_BIN_DIR/atm-bd" cron --help
+          legacy_command=atm-bd
+          test ! -e "$UV_TOOL_BIN_DIR/${legacy_command}-console"
           ATM_BD_CONSOLE_BIN="$UV_TOOL_BIN_DIR/atm-bd" uv run --frozen --project apps/atm-bd-console pytest -q --basetemp="$RUNNER_TEMP/console-smoke" apps/atm-bd-console/tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick
           python3 - "$RUNNER_TEMP/console-smoke" "$UV_TOOL_BIN_DIR/atm-bd" <<'PY'
           import errno

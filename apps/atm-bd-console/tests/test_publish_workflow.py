@@ -1,6 +1,8 @@
 """Guard the release workflow's same-run artifact and approval contract."""
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -49,3 +51,15 @@ def test_release_workflow_is_serialized_and_actions_are_pinned():
         for step in job["steps"]:
             if "uses" in step:
                 assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])
+
+
+def test_rehearsal_checks_that_legacy_command_is_absent(tmp_path):
+    steps = _workflow()["jobs"]["testpypi"]["steps"]
+    script = next(step["run"] for step in steps if step.get("name") == "Install from TestPyPI and exercise entry points")
+    lines = script.splitlines()
+    start = lines.index("legacy_command=atm-bd")
+    check = "\n".join(lines[start : start + 2])
+    env = {**os.environ, "UV_TOOL_BIN_DIR": str(tmp_path)}
+    assert subprocess.run(["bash", "-c", check], env=env, check=False).returncode == 0
+    (tmp_path / "atm-bd-console").touch()
+    assert subprocess.run(["bash", "-c", check], env=env, check=False).returncode != 0
