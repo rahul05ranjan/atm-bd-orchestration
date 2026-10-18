@@ -318,22 +318,19 @@ def test_console_checks_sender_at_startup(cli_runtime, fake_bin, monkeypatch, se
             assert "could not verify" in error.fix
 
 
-def test_startup_error_is_in_the_dashboard_without_waiting_for_delivery(monkeypatch):
+def test_startup_error_is_in_dashboard_before_first_refresh(monkeypatch):
     monkeypatch.setattr(cli.atm_source, "members", lambda *_: Ok(()))
     error = cli._notification_startup_error(CONFIG)
     assert isinstance(error, NotFound)
-    recorded = []
     sprints = SimpleNamespace(highlighted=None, clear_options=lambda: None, add_options=lambda _options: None)
     dummy = SimpleNamespace(
         is_running=True, startup_error=error, query_one=lambda *_: sprints,
-        _record_error=lambda source, item: recorded.append((source, item)),
         refresh_views=lambda: None, call_after_refresh=lambda _callback: None,
     )
 
     app.ConsoleApp._show(dummy, replace(SNAPSHOT, errors=(), sprints=()), "", None)
 
     assert dummy.snapshot.errors == (error,)
-    assert recorded == [("source", error)]
     assert "atm teams add-member tool atm-bd" in cli.render.dashboard(dummy.snapshot, 80, 80).plain
 
 
