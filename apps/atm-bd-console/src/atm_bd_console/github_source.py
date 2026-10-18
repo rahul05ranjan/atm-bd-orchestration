@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Literal
 
 from . import command
+from .ci import ci_failure_key
 from .enums import CiState, PrState
-from .icons import ci_failure_key
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 

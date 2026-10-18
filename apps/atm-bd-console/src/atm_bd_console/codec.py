@@ -9,6 +9,7 @@ from enum import StrEnum
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
+from .ci import ci_failure_key
 from .enums import CiState
 from .result import (
     Err,
@@ -167,8 +168,6 @@ def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
         value["top_ci"] = {"success": CiState.PASS, "pending": CiState.RUNNING,
                            "failure": CiState.FAIL_BUG}[value["top_ci"]]
     if cls.__name__ == "PullRequest" and value.get("ci") in ("success", "pending", "failure"):
-        from .icons import ci_failure_key
-
         value = dict(value)
         legacy = value["ci"]
         value["ci"] = {"success": CiState.PASS, "pending": CiState.RUNNING,

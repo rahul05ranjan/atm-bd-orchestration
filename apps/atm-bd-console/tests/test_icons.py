@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from rich.cells import cell_len
 
+from atm_bd_console.ci import ci_failure_key
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.icons import (
     AGENT_ICONS,
@@ -14,7 +15,6 @@ from atm_bd_console.icons import (
     PR_ICONS,
     PR_STATE_ICONS,
     SPRINT_ICONS,
-    ci_failure_key,
     icon,
     icon_for,
     merge_icon,

@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len
 
+from atm_bd_console.ci import ci_failure_key
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState, MergeState, PrState
-from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS, ci_failure_key
+from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
 from atm_bd_console.types import AgentView, GhStatus, Merge, PrRow, PullRequest, Snapshot
