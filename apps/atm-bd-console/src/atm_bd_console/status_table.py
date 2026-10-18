@@ -10,7 +10,6 @@ from rich.text import Text
 from .enums import AgentIcon, CiState, PrState, SprintState
 from .facts import SprintFacts, sprint_facts
 from .icons import icon
-from .ids import short_id
 from .types import Snapshot
 
 StateCell = tuple[AgentIcon | SprintState, ...]
@@ -27,11 +26,11 @@ class StatusRow:
 
 
 def _agents(facts: SprintFacts) -> StateCell:
-    return facts.agents
+    return tuple(agent.icon for agent in facts.active)
 
 
 def _qa(facts: SprintFacts) -> StateCell:
-    return (facts.qa_result,) if facts.status == SprintState.IN_PROGRESS and facts.qa_result else ()
+    return (facts.last_qa,) if facts.status == SprintState.IN_PROGRESS and facts.last_qa else ()
 
 
 def _sprint(facts: SprintFacts) -> StateCell:
@@ -42,15 +41,17 @@ STATE: tuple[Callable[[SprintFacts], StateCell], ...] = (_agents, _qa, _sprint)
 
 
 def _ci_unknown(facts: SprintFacts) -> CiState | None:
-    return CiState.UNKNOWN if facts.ci == CiState.UNKNOWN else None
+    return CiState.UNKNOWN if facts.ci and facts.ci.status == CiState.UNKNOWN else None
 
 
 def _ci_none(facts: SprintFacts) -> CiState | None:
-    return CiState.NONE if facts.ci == CiState.NONE else None
+    return CiState.NONE if facts.ci is None or facts.ci.status == CiState.NONE else None
 
 
 def _ci_platform(facts: SprintFacts) -> CiState | None:
-    match facts.ci:
+    if facts.ci is None:
+        return None
+    match facts.ci.status:
         case CiState.FAIL_MACOS:
             return CiState.FAIL_MACOS
         case CiState.FAIL_WINDOWS:
@@ -64,15 +65,15 @@ def _ci_platform(facts: SprintFacts) -> CiState | None:
 
 
 def _ci_bug(facts: SprintFacts) -> CiState | None:
-    return CiState.FAIL_BUG if facts.ci == CiState.FAIL_BUG else None
+    return CiState.FAIL_BUG if facts.ci and facts.ci.status == CiState.FAIL_BUG else None
 
 
 def _ci_running(facts: SprintFacts) -> CiState | None:
-    return CiState.RUNNING if facts.ci == CiState.RUNNING else None
+    return CiState.RUNNING if facts.ci and facts.ci.status == CiState.RUNNING else None
 
 
 def _ci_pass(facts: SprintFacts) -> CiState | None:
-    return CiState.PASS if facts.ci == CiState.PASS else None
+    return CiState.PASS if facts.ci and facts.ci.status == CiState.PASS else None
 
 
 CI: tuple[Callable[[SprintFacts], CiState | None], ...] = (
@@ -81,19 +82,19 @@ CI: tuple[Callable[[SprintFacts], CiState | None], ...] = (
 
 
 def _pr_unknown(facts: SprintFacts) -> PrState | None:
-    return PrState.UNKNOWN if facts.pr_state == PrState.UNKNOWN else None
+    return PrState.UNKNOWN if facts.pr and facts.pr.state == PrState.UNKNOWN else None
 
 
 def _pr_none(facts: SprintFacts) -> PrState | None:
-    return PrState.NONE if facts.pr_state == PrState.NONE else None
+    return PrState.NONE if facts.pr is None else None
 
 
 def _pr_conflict(facts: SprintFacts) -> PrState | None:
-    return PrState.CONFLICT if facts.pr_state == PrState.CONFLICT else None
+    return PrState.CONFLICT if facts.pr and facts.pr.state == PrState.CONFLICT else None
 
 
 def _pr_state(facts: SprintFacts) -> PrState | None:
-    return facts.pr_state
+    return facts.pr.state if facts.pr else None
 
 
 PR: tuple[Callable[[SprintFacts], PrState | None], ...] = (_pr_unknown, _pr_none, _pr_conflict, _pr_state)
@@ -105,8 +106,8 @@ def rows(snapshot: Snapshot) -> tuple[StatusRow, ...]:
         state = next(value for producer in STATE if (value := producer(facts)))
         ci = next(value for producer in CI if (value := producer(facts)) is not None)
         pr_state = next(value for producer in PR if (value := producer(facts)) is not None)
-        pr = facts.pr.pr if facts.pr else None
-        result.append(StatusRow(short_id(facts.sprint.id, snapshot.bead_prefix), state, ci, pr_state,
+        pr = facts.pr.row.pr if facts.pr and facts.pr.row else None
+        result.append(StatusRow(facts.slug, state, ci, pr_state,
                                 pr.number if pr else None, pr.url if pr else None))
     return tuple(result)
 

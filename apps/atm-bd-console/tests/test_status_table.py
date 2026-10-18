@@ -5,7 +5,7 @@ from contract_samples import BEAD, CONFIG, GH_STATUS, INPUTS, MEMBER, PHASE, PR_
 
 from atm_bd_console import runner
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
-from atm_bd_console.facts import SprintFacts, sprint_facts
+from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, sprint_facts
 from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
 from atm_bd_console.result import Ok
@@ -47,13 +47,13 @@ def test_child_task_inherits_qa_step_role_through_parent_chain():
 def test_sprint_facts_cover_active_queued_qa_and_pr_sources():
     snapshot = _snapshot()
     sprint = snapshot.phase_data.sprints[0]
-    base = SprintFacts(sprint, SprintState.IN_PROGRESS, (), None, CiState.NONE, PrState.NONE, None)
-    assert sprint_facts(snapshot) == (replace(base, agents=(AgentIcon.TERRA,)),)
+    base = SprintFacts(sprint.id, "bh-6", SprintState.IN_PROGRESS, (), None, None, CiFacts(CiState.NONE), ())
+    assert sprint_facts(snapshot) == (replace(base, active=(ActiveAgent("arch-ctm", AgentIcon.TERRA, NOW),)),)
     queued = replace(snapshot, task_data=(replace(snapshot.task_data[0], state="assigned"),))
     assert sprint_facts(queued) == (base,)
     qa = replace(snapshot.phase_data.steps[0], kind="qa")
     running_qa = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(qa,)))
-    assert sprint_facts(running_qa) == (replace(base, agents=(AgentIcon.QA_RUNNING,)),)
+    assert sprint_facts(running_qa) == (replace(base, active=(ActiveAgent("arch-ctm", AgentIcon.QA_RUNNING, NOW),)),)
     closed_qa = replace(qa, closed_at=NOW, close_reason="PASS")
     fix = replace(qa, bead_id="fix", kind="fix", closed_at=NOW + timedelta(seconds=1))
     invalidated = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(closed_qa, fix)))
@@ -64,11 +64,12 @@ def test_sprint_facts_cover_active_queued_qa_and_pr_sources():
     merge = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.CONFLICT)
     merged_row = replace(PR_ROW, pr=merged_pr, merge=merge)
     with_prs = replace(snapshot, task_data=(), prs=(merged_row, open_row))
-    assert sprint_facts(with_prs) == (replace(base, ci=CiState.PASS, pr_state=PrState.OPEN, pr=open_row),)
+    assert sprint_facts(with_prs) == (replace(base, ci=CiFacts(CiState.PASS), pr=PrFacts(PrState.OPEN, open_row)),)
     merged_only = replace(with_prs, prs=(merged_row,))
-    assert sprint_facts(merged_only) == (replace(base, ci=CiState.PASS, pr_state=PrState.MERGED, pr=merged_row),)
+    assert sprint_facts(merged_only) == (replace(base, ci=CiFacts(CiState.PASS), pr=PrFacts(PrState.MERGED, merged_row)),)
     gh_off = replace(with_prs, gh=replace(snapshot.gh, mode="off", ok=None))
-    assert sprint_facts(gh_off) == (replace(base, ci=CiState.UNKNOWN, pr_state=PrState.UNKNOWN, pr=open_row),)
+    assert sprint_facts(gh_off) == (replace(base, ci=CiFacts(CiState.UNKNOWN), pr=PrFacts(PrState.UNKNOWN, open_row),
+                                           problems=("GitHub data off",)),)
 
 
 def test_latest_qa_is_invalidated_by_later_dev():
@@ -91,9 +92,8 @@ def test_pr_preference_and_conflict_require_matching_base():
     merged_row = replace(open_row, pr=replace(pr, number=pr.number + 10, state=PrState.MERGED))
     snapshot = replace(snapshot, prs=(merged_row, open_row))
     facts = sprint_facts(snapshot)[0]
-    assert facts.pr == open_row
-    assert facts.ci is CiState.FAIL_WINDOWS
-    assert facts.pr_state is PrState.CONFLICT
+    assert facts.pr == PrFacts(PrState.CONFLICT, open_row)
+    assert facts.ci == CiFacts(CiState.FAIL_WINDOWS)
     snapshot = replace(snapshot, prs=(replace(open_row, merge=replace(conflict, target="wrong")),))
     assert rows(snapshot)[0].pr_state is PrState.OPEN
 

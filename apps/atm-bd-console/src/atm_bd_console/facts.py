@@ -6,6 +6,7 @@ from datetime import datetime
 
 from .dispatch import sprint_of
 from .enums import AgentIcon, CiState, MergeState, PrState, SprintState
+from .ids import short_id
 from .types import AgentView, Member, PrRow, Snapshot, Sprint, Step, Task
 
 
@@ -30,14 +31,33 @@ def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIco
 
 
 @dataclass(frozen=True)
+class ActiveAgent:
+    name: str
+    icon: AgentIcon
+    since: datetime
+
+
+@dataclass(frozen=True)
+class PrFacts:
+    state: PrState
+    row: PrRow | None
+
+
+@dataclass(frozen=True)
+class CiFacts:
+    status: CiState
+
+
+@dataclass(frozen=True)
 class SprintFacts:
-    sprint: Sprint
+    id: str
+    slug: str
     status: SprintState
-    agents: tuple[AgentIcon, ...]
-    qa_result: AgentIcon | None
-    ci: CiState
-    pr_state: PrState
-    pr: PrRow | None
+    active: tuple[ActiveAgent, ...]
+    last_qa: AgentIcon | None
+    pr: PrFacts | None
+    ci: CiFacts | None
+    problems: tuple[str, ...]
 
 
 def _task_step(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Step | None:
@@ -111,7 +131,8 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
     result: list[SprintFacts] = []
     for sprint in phase.sprints:
         steps = tuple(step for step in phase.steps if sprint_of(step, phase, snapshot.bead_prefix) == sprint)
-        agents = tuple(agent_icon_of(by_member.get(task.agent), step.kind if step else "other")
+        agents = tuple(ActiveAgent(task.agent, agent_icon_of(by_member.get(task.agent), step.kind if step else "other"),
+                                   task.state_since)
                        for task in active if _task_sprint(task, snapshot, by_step) == sprint
                        for step in (_task_step(task, snapshot, by_step),))
         selected = _selected_pr(sprint, steps, snapshot)
@@ -130,7 +151,25 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
                 pr_state = PrState.CONFLICT
         view = next((view for view in snapshot.sprints if view.id == sprint.id), None)
         state = sprint.status or (view.state if view else SprintState.UNKNOWN)
-        result.append(SprintFacts(sprint, state, agents, _qa_result(steps), ci, pr_state, selected))
+        problems = []
+        if state == SprintState.UNKNOWN:
+            problems.append(f"unknown sprint state {sprint.raw_status!r} for {sprint.id}")
+        if not available:
+            cause = "off" if snapshot.gh.mode == "off" else "truncated" if snapshot.gh.truncated else (
+                snapshot.gh.error.kind if snapshot.gh.error else "unavailable"
+            )
+            problems.append(f"GitHub data {cause}")
+        elif selected is not None:
+            if ci == CiState.UNKNOWN:
+                problems.append(f"unknown CI state {selected.pr.raw_ci!r} for #{selected.pr.number}")
+            if pr_state == PrState.UNKNOWN:
+                problems.append(f"unknown PR state {selected.pr.raw_state!r} for #{selected.pr.number}")
+            merge = selected.merge
+            if merge is not None and merge.state == MergeState.ERROR and merge.branch == selected.pr.head and merge.target == selected.pr.base:
+                problems.append(f"merge check failed for {merge.branch} against {merge.target}")
+        pr_facts = None if pr_state == PrState.NONE else PrFacts(pr_state, selected)
+        result.append(SprintFacts(sprint.id, short_id(sprint.id, snapshot.bead_prefix), state, agents,
+                                  _qa_result(steps), pr_facts, CiFacts(ci), tuple(problems)))
     return tuple(result)
 
 
