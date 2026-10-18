@@ -1,0 +1,279 @@
+name: Publish atm-bd
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_to_pypi:
+        description: Publish the rehearsed distributions to PyPI after lead approval
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atm-bd-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+      - name: Build and inspect both distributions
+        run: |
+          set -euo pipefail
+          uv build apps/atm-bd-console --out-dir "$RUNNER_TEMP/dist"
+          uvx twine check "$RUNNER_TEMP"/dist/*
+          python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+          import tarfile
+          import zipfile
+
+          path = pathlib.Path(sys.argv[1])
+          wheels = list(path.glob('*.whl'))
+          sdists = list(path.glob('*.tar.gz'))
+          assert len(wheels) == len(sdists) == 1
+          with zipfile.ZipFile(wheels[0]) as archive:
+              assert any('atm_bd_console/_skills/install.py' in name for name in archive.namelist())
+          with tarfile.open(sdists[0]) as archive:
+              assert any('atm_bd_console/_skills/install.py' in name for name in archive.getnames())
+          for item in wheels + sdists:
+              print(f'{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+          retention-days: 90
+
+  testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: testpypi
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/rehearsed-dist
+      - name: Check production project availability before rehearsal
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://pypi.org/pypi/atm-bd/json)"
+          test "$status" = 404
+      - name: Publish the build artifacts to TestPyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: uv publish --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ "$RUNNER_TEMP"/rehearsed-dist/*
+      - name: Verify published rehearsal files match this run's artifact
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/rehearsed-dist" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import tomllib
+          import urllib.request
+
+          with open('apps/atm-bd-console/pyproject.toml', 'rb') as source:
+              version = tomllib.load(source)['project']['version']
+          files = list(pathlib.Path(sys.argv[1]).iterdir())
+          with urllib.request.urlopen(f'https://test.pypi.org/pypi/atm-bd/{version}/json') as response:
+              uploaded = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
+          assert len(files) == 2
+          assert {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files} == uploaded
+          PY
+      - name: Install from TestPyPI and exercise entry points
+        env:
+          UV_TOOL_DIR: ${{ github.workspace }}/../rehearsal-tools
+          UV_TOOL_BIN_DIR: ${{ github.workspace }}/../rehearsal-bin
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("apps/atm-bd-console/pyproject.toml", "rb"))["project"]["version"])')"
+          uv tool install --default-index https://pypi.org/simple --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match "atm-bd==$version"
+          "$UV_TOOL_BIN_DIR/atm-bd" --help
+          "$UV_TOOL_BIN_DIR/atm-bd" console --help
+          "$UV_TOOL_BIN_DIR/atm-bd" skill --help
+          "$UV_TOOL_BIN_DIR/atm-bd" cron --help
+          legacy_command=atm-bd
+          test ! -e "$UV_TOOL_BIN_DIR/${legacy_command}-console"
+          ATM_BD_CONSOLE_BIN="$UV_TOOL_BIN_DIR/atm-bd" uv run --frozen --project apps/atm-bd-console pytest -q --basetemp="$RUNNER_TEMP/console-smoke" apps/atm-bd-console/tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick
+          python3 - "$RUNNER_TEMP/console-smoke" "$UV_TOOL_BIN_DIR/atm-bd" <<'PY'
+          import errno
+          import fcntl
+          import os
+          import pathlib
+          import pty
+          import struct
+          import subprocess
+          import sys
+          import termios
+
+          fixture = next(pathlib.Path(sys.argv[1]).glob('test_installed_cron_command_ru*'))
+          env = {**os.environ, 'PATH': f'{fixture / "bin"}:/usr/bin:/bin', 'TERM': 'xterm-256color'}
+          master, slave = pty.openpty()
+          fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+          process = subprocess.Popen([sys.argv[2], 'console', '--phase', 'bh', '--dry-run', '--no-fetch', '--github', 'off'], cwd=fixture / 'repo', env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+          os.close(slave)
+          output = b''
+          while b'bh-1' not in output:
+              chunk = os.read(master, 65536)
+              if not chunk:
+                  raise SystemExit('console exited before rendering the fixture sprint')
+              output += chunk
+          os.write(master, b'q')
+          while True:
+              try:
+                  if not os.read(master, 65536):
+                      break
+              except OSError as error:
+                  if error.errno == errno.EIO:
+                      break
+                  raise
+          assert process.wait() == 0
+          os.close(master)
+          print('Installed TestPyPI console rendered fixture sprint and exited successfully')
+          PY
+      - name: Install bundled skill without network
+        env:
+          UV_TOOL_BIN_DIR: ${{ github.workspace }}/../rehearsal-bin
+        run: |
+          set -euo pipefail
+          python3 -m pip install pydantic pyyaml 'sc-compose==1.7.0'
+          asset=sc-compose_1.7.0_x86_64-unknown-linux-gnu.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$asset" "https://github.com/randlee/sc-compose/releases/download/v1.7.0/$asset"
+          echo "5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/sc-compose" "$RUNNER_TEMP/skill-target"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/sc-compose"
+          bin="$(find "$RUNNER_TEMP/sc-compose" -type f -name sc-compose | head -n 1)"
+          test -n "$bin"
+          install -m 0755 "$bin" "$UV_TOOL_BIN_DIR/sc-compose"
+          asset=atm_1.6.1_x86_64-unknown-linux-gnu.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$asset" "https://github.com/randlee/atm-core/releases/download/v1.6.1/$asset"
+          echo "8507648880840a083da1cf101b6379cce68905f71a37c13ab254fcb5a154954e  $RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/atm_1.6.1_x86_64-unknown-linux-gnu/bin/atm" "$UV_TOOL_BIN_DIR/atm"
+          asset=beads_1.3.0_linux_amd64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$asset" "https://github.com/steveyegge/beads/releases/download/v1.3.0/$asset"
+          echo "2f92b904ecf35b607e44dc5c39229173af69c54f1183e8d709f1773540cdcf3b  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bd"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/bd"
+          bin="$(find "$RUNNER_TEMP/bd" -type f -name bd | head -n 1)"
+          test -n "$bin"
+          install -m 0755 "$bin" "$UV_TOOL_BIN_DIR/bd"
+          git -C "$RUNNER_TEMP/skill-target" init -q
+          git -C "$RUNNER_TEMP/skill-target" remote add origin https://github.com/example/fixture.git
+          mkdir -p "$RUNNER_TEMP/skill-target/.claude/agents" "$RUNNER_TEMP/skill-target/.beads"
+          printf '%s\n' '{"backend":"dolt","dolt_mode":"server"}' > "$RUNNER_TEMP/skill-target/.beads/metadata.json"
+          printf '%s\n' '# fixture' > "$RUNNER_TEMP/skill-target/.claude/agents/quality-mgr.md"
+          printf '%s\n' '# fixture' > "$RUNNER_TEMP/skill-target/.claude/agents/req-qa.md"
+          printf '%s\n' '# fixture' > "$RUNNER_TEMP/skill-target/.claude/agents/arch-qa.md"
+          tee "$RUNNER_TEMP/skill-target/.claude/agents/registry.yaml" >/dev/null <<'YAML'
+          bead_prefix: test
+          worktree_base: /tmp/test-worktrees
+          test_command: pytest
+          lint_command: ruff
+          integration_branch_pattern: integrate/{phase}
+          plans_dir: docs/plans
+          requirements_globs: [docs/requirements.md]
+          adr_globs: [docs/adr/*.md]
+          policy_path: docs/policy.md
+          reviewers_round1: [req-qa, arch-qa]
+          roles:
+            dev-sanity: quality-mgr
+            quality-mgr: quality-mgr
+          YAML
+          sudo unshare --net --setgid "$(id -g)" --setuid "$(id -u)" env PATH="$UV_TOOL_BIN_DIR:$PATH" HOME="$HOME" "$UV_TOOL_BIN_DIR/atm-bd" skill --dest "$RUNNER_TEMP/skill-target" | tee "$RUNNER_TEMP/skill-output"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("apps/atm-bd-console/pyproject.toml", "rb"))["project"]["version"])')"
+          grep -F "bundled @ $GITHUB_SHA (atm-bd $version)" "$RUNNER_TEMP/skill-output"
+          test -f "$RUNNER_TEMP/skill-target/.claude/skills/atm-bd-orchestration/SKILL.md"
+
+  pypi:
+    # Only the lead dispatches with this input after Rand's go-ahead and QA.
+    needs: testpypi
+    if: inputs.publish_to_pypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/dist
+      - name: Verify identical rehearsed files and production name availability
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          files = sorted(pathlib.Path(sys.argv[1]).iterdir())
+          assert len(files) == 2
+          version = next(f.name.removeprefix('atm_bd-').split('-')[0] for f in files if f.suffix == '.whl')
+          with urllib.request.urlopen(f'https://test.pypi.org/pypi/atm-bd/{version}/json') as response:
+              rehearsed = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
+          assert {item.name: hashlib.sha256(item.read_bytes()).hexdigest() for item in files} == rehearsed
+          for item in files:
+              print(f'{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}')
+          try:
+              urllib.request.urlopen('https://pypi.org/pypi/atm-bd/json')
+          except urllib.error.HTTPError as error:
+              assert error.code == 404
+          else:
+              raise SystemExit('PyPI project already exists; stop for review')
+          PY
+      - name: Publish the same rehearsed files
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish "$RUNNER_TEMP"/dist/*
+      - name: Verify production hashes and install
+        env:
+          UV_TOOL_DIR: ${{ github.workspace }}/../production-tools
+          UV_TOOL_BIN_DIR: ${{ github.workspace }}/../production-bin
+        run: |
+          set -euo pipefail
+          version="$(python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import urllib.request
+
+          files = sorted(pathlib.Path(sys.argv[1]).iterdir())
+          assert len(files) == 2
+          version = next(f.name.removeprefix('atm_bd-').split('-')[0] for f in files if f.suffix == '.whl')
+          with urllib.request.urlopen(f'https://pypi.org/pypi/atm-bd/{version}/json') as response:
+              published = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
+          assert {item.name: hashlib.sha256(item.read_bytes()).hexdigest() for item in files} == published
+          print(version)
+          PY
+          )"
+          uv tool install "atm-bd==$version"
+          "$UV_TOOL_BIN_DIR/atm-bd" console --help
+          "$UV_TOOL_BIN_DIR/atm-bd" skill --help
+          "$UV_TOOL_BIN_DIR/atm-bd" cron --help
