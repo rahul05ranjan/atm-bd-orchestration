@@ -10,7 +10,7 @@ from rich.cells import cell_len
 from atm_bd_console.ci import ci_failure_key
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState, MergeState, PrState
-from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS
+from atm_bd_console.icons import icon
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
 from atm_bd_console.types import AgentView, GhStatus, Merge, PrRow, PullRequest, Snapshot
@@ -141,8 +141,8 @@ def test_pr_list_pins_passing_failing_running_merged_and_closed_rows() -> None:
 
     assert len(lines) == len(cases)
     for line, (state, ci) in zip(lines, cases, strict=True):
-        pr_glyph, pr_color = PR_STATE_ICONS[state]
-        ci_glyph, ci_color = CI_STATE_ICONS[ci]
+        pr_glyph, pr_color = icon(state)
+        ci_glyph, ci_color = icon(ci)
         assert f"{pr_glyph} " in line.plain
         assert f"CI {ci_glyph}" in line.plain
         segments = tuple((line.plain[span.start:span.end], str(span.style)) for span in line.spans)

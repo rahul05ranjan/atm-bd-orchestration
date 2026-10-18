@@ -12,7 +12,7 @@ from rich.cells import cell_len
 
 from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
-from atm_bd_console.enums import CiState
+from atm_bd_console.enums import CiState, SprintState
 from atm_bd_console.model import _agent_views
 from atm_bd_console.render import _age, _error_text, dashboard, status_bar
 from atm_bd_console.result import (
@@ -311,3 +311,16 @@ def test_stopped_snapshot_renders_beads_and_pr_history() -> None:
     assert "== PRs (1)" in rendered
     assert "PR #1850" in rendered
     assert "== Sent" in rendered
+
+
+def test_stopped_snapshot_renders_unknown_bead_status_icon() -> None:
+    decoded = from_json(Snapshot, (FIXTURES / "contract" / "snapshot-stopped-closed.json").read_text())
+    assert isinstance(decoded, Ok)
+    sprint = decoded.value.sprints[0]
+    step = replace(sprint.steps[0], status=SprintState.UNKNOWN)
+    value = replace(decoded.value, sprints=(replace(sprint, steps=(step,)),))
+
+    rendered = dashboard(value, 120, 40).plain
+
+    assert "bh-6.qa" in rendered
+    assert "? unknown" in rendered

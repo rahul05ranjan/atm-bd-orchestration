@@ -5,7 +5,6 @@ from rich.text import Text
 
 from .enums import SprintState
 from .icons import (
-    BEAD_STATUS_ICONS,
     MARKER_FAST,
     MARKER_FIX_QA,
     MARKER_HARD,
@@ -15,6 +14,7 @@ from .icons import (
     SPRINT_ICONS,
     STATUS_FAIL,
     STATUS_OK,
+    icon,
     icon_for,
 )
 from .ids import short_id
@@ -215,10 +215,9 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         lines.extend((Text(), Text(f"== Beads ({len(beads)})")))
         for step in beads:
             bead_line = Text(f" {short_id(step.bead_id, snapshot.bead_prefix):<22} ")
-            status_glyph, status_style = BEAD_STATUS_ICONS.get(step.status, ("", None))
-            if status_glyph:
-                bead_line.append(status_glyph, style=status_style)
-                bead_line.append(" ")
+            status_glyph, status_style = icon(step.status)
+            bead_line.append(status_glyph, style=status_style or "")
+            bead_line.append(" ")
             bead_line.append(f"{step.status:<12} {step.kind}")
             lines.append(bead_line)
     if snapshot.stopped is not None and snapshot.prs:

@@ -9,11 +9,8 @@ from atm_bd_console.ci import ci_failure_key
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.icons import (
     AGENT_ICONS,
-    BEAD_STATUS_ICONS,
     CI_ICONS,
-    CI_STATE_ICONS,
     PR_ICONS,
-    PR_STATE_ICONS,
     SPRINT_ICONS,
     icon,
     icon_for,
@@ -89,7 +86,7 @@ def test_qa_and_sanity_icons_override_harness_and_model(
 
 
 def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
-    tables = (BEAD_STATUS_ICONS, SPRINT_ICONS, PR_STATE_ICONS, CI_STATE_ICONS)
+    tables = (SPRINT_ICONS, PR_ICONS, CI_ICONS)
     glyphs = [glyph for table in tables for glyph, _ in table.values()]
     model_members = tuple(
         Member(f"claude-{model}", "active", None, "dev", model, "claude-code")
@@ -109,35 +106,6 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     ))
     assert glyphs
     assert len({cell_len(glyph) for glyph in glyphs}) == 1
-    assert BEAD_STATUS_ICONS == {
-        SprintState.OPEN: ("\U000f0766", "#2D81E0"),
-        SprintState.BLOCKED: ("\U000f033e", "#FA8537"),
-        SprintState.IN_PROGRESS: ("\U000f051f", "#0077FF"),
-        SprintState.DEFERRED: ("\U000f03e5", "#FFB726"),
-        SprintState.CLOSED: ("\U000f05e0", "#2DE057"),
-        SprintState.PINNED: ("\U000f0403", "#42C3AB"),
-        SprintState.HOOKED: ("\U000f06e2", "#2DE057"),
-        SprintState.ACCEPTED: ("\U000f0513", "#E551BA"),
-        SprintState.PLANNED: ("\U000f00ef", "#FFB726"),
-        SprintState.PROPOSED: ("\U000f06e8", "#FFB726"),
-        SprintState.READY: ("\U000f040d", "#0077FF"),
-    }
-    assert PR_STATE_ICONS == {
-        PrState.OPEN: ("\U000f04c2", "#2D81E0"),
-        PrState.DRAFT: ("\U000f0cb6", "#FFA60D"),
-        PrState.MERGED: ("\U000f062d", "#8957E5"),
-        PrState.CLOSED: ("\U000f073a", "#F85149"),
-    }
-    assert CI_STATE_ICONS == {
-        CiState.PASS: ("\U000f062c", "#2EA043"),
-        CiState.FAIL_MACOS: ("\U000f0035", "#F85149"),
-        CiState.FAIL_WINDOWS: ("\U000f05b3", "#F85149"),
-        CiState.FAIL_LINUX: ("\U000f033d", "#F85149"),
-        CiState.FAIL_BUG: ("\U000f00e4", "#F85149"),
-        CiState.RUNNING: ("\U000f0898", "#58A6FF"),
-        CiState.NONE: ("\U000f01d8", "#2D81E0"),
-        CiState.UNKNOWN: ("?", "#2D81E0"),
-    }
     assert {state: merge_icon(state) for state in MergeState} == {
         MergeState.CLEAN: ("\U000f062d", "#2EA043"),
         MergeState.CONFLICT: ("\U000f062c", "#F85149"),
