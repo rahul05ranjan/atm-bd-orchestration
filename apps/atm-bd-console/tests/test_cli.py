@@ -223,6 +223,18 @@ def test_ci_job_tool_paths_use_a_supported_context() -> None:
     assert "UV_TOOL_BIN_DIR: ${{ github.workspace }}/../console-bin" in job_environment
 
 
+@pytest.mark.parametrize("stopped", (None, "closed", "idle"))
+def test_show_returns_failure_for_missing_phase(monkeypatch, capsys, stopped) -> None:
+    value = replace(SNAPSHOT, generated_at=FIXED_NOW, stopped=stopped, phase_data=None, errors=(TIMEOUT,))
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Ok(value))
+    monkeypatch.setattr(cli, "now", lambda: FIXED_NOW)
+    assert cli.main(["show", "--phase", "bh"]) == 2
+    output = capsys.readouterr().out
+    assert f"beads unavailable: {TIMEOUT.kind}; {TIMEOUT.fix}" in output
+    if stopped is None:
+        assert f"beads ⛔ {TIMEOUT.kind}" in output
+
+
 def test_show_reads_snapshot_only(monkeypatch, capsys) -> None:
     clock = datetime(2026, 10, 15, tzinfo=UTC)
     monkeypatch.setattr(cli, "now", lambda: clock)

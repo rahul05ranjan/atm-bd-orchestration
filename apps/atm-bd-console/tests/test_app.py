@@ -53,6 +53,16 @@ def test_dispatch_uses_shared_status_rows(monkeypatch):
     assert seen == [RUNNING]
     rendered = nodes["#status-table"].value
     assert list(rendered.columns[0]._cells) == [row.sprint for row in values]
+    assert nodes["#status-table"].display is True
+    dummy.snapshot = replace(RUNNING, phase_data=None, errors=(TIMEOUT,))
+    ConsoleApp.refresh_views(dummy)
+    assert nodes["#status-table"].display is False
+    assert f"beads unavailable: {TIMEOUT.kind}; {TIMEOUT.fix}" in nodes["#dashboard"].value.plain
+    assert seen == [RUNNING]
+    dummy.snapshot = RUNNING
+    ConsoleApp.refresh_views(dummy)
+    assert nodes["#status-table"].display is True
+    assert seen == [RUNNING, RUNNING]
 
 
 class RaisingStep:

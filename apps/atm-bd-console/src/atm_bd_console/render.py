@@ -188,12 +188,21 @@ def _sent_line(action: Action, snapshot: Snapshot) -> Text:
     return line
 
 
+def _beads_error(snapshot: Snapshot) -> tuple[str, str]:
+    if snapshot.errors:
+        return snapshot.errors[0].kind, snapshot.errors[0].fix
+    return "unavailable", "retry the phase read"
+
+
 def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
     lines = [Text(f"phase-{snapshot.phase} · {_clock(snapshot.generated_at)} · next {snapshot.interval_s}s")]
     if snapshot.stopped == "closed":
         lines.append(Text(f"stopped: phase closed {_clock(snapshot.generated_at)}"))
     elif snapshot.stopped == "idle":
         lines.append(Text("stopped: idle 60 min"))
+    if snapshot.phase_data is None:
+        kind, fix = _beads_error(snapshot)
+        lines.append(Text(f"beads unavailable: {kind}; {fix}", style="red"))
     lines.append(Text())
     for agent in snapshot.agents:
         lines.extend(_agent_lines(agent, snapshot.bead_prefix))
@@ -251,8 +260,12 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     if gh.truncated:
         segment += " 100+"
     metrics = snapshot.metrics
-    filled = min(9, max(0, round(metrics.pct * 9 / 100)))
-    progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"
+    if snapshot.phase_data is None:
+        kind, _ = _beads_error(snapshot)
+        progress = f"beads ⛔ {kind}"
+    else:
+        filled = min(9, max(0, round(metrics.pct * 9 / 100)))
+        progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"
     hours, minutes = divmod(max(0, metrics.active_s) // 60, 60)
     line = Text(f"{segment} | {progress} | active {hours}h{minutes:02d}m | tick {_clock(snapshot.generated_at, seconds=True)}")
     if snapshot.lead:
