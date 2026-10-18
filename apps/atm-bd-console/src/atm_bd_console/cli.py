@@ -28,6 +28,13 @@ def _error_text(error: Error) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    values = sys.argv[1:] if argv is None else argv
+    # Skill has its own parser; dispatch it before the console parser to pass through its options.
+    if values and values[0] == "skill":
+        from .skill import run as run_skill
+
+        return run_skill(values[1:])
+
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("--version", action="version", version=identity())
     commands = parser.add_subparsers(dest="command", required=True)
@@ -42,14 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             if name != "snapshot":
                 sub.add_argument("--dry-run", action="store_true")
             sub.add_argument("--no-fetch", action="store_true")
-    skill_parser = commands.add_parser("skill", help="install or list orchestration skills", add_help=False)
-    skill_parser.add_argument("-h", "--help", action="store_true", dest="skill_help")
-    skill_parser.add_argument("skill_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
-    if args.command == "skill":
-        from .skill import run as run_skill
-
-        return run_skill(["--help", *args.skill_args] if args.skill_help else args.skill_args)
     invocation = f"{CONSOLE_NAME} {args.command}"
     if not args.phase:
         print(f"{invocation}: --phase <phase> is required; name the phase to run")

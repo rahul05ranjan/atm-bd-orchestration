@@ -285,10 +285,11 @@ def test_list_rejects_install_options(args: list[str]) -> None:
     assert error.value.code == 2
 
 
-def test_cli_passes_skill_arguments_to_skill_parser(tmp_path: Path) -> None:
+def test_cli_passes_skill_arguments_to_skill_parser(tmp_path: Path, capsys) -> None:
     with pytest.raises(SystemExit) as error:
         cli.main(["skill", "--list", "--dest", str(tmp_path)])
     assert error.value.code == 2
+    assert "--list cannot be combined" in capsys.readouterr().err
 
 
 def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_path: Path, monkeypatch, capsys) -> None:
@@ -383,7 +384,7 @@ def test_skill_is_wired_into_cli_and_help(capsys) -> None:
     with pytest.raises(SystemExit) as top:
         cli.main(["--help"])
     assert top.value.code == 0
-    assert "skill" in capsys.readouterr().out
+    assert "skill" not in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as sub:
         cli.main(["skill", "--help"])
