@@ -25,34 +25,19 @@ class StatusRow:
     pr_url: str | None
 
 
-def _agents(facts: SprintFacts) -> StateCell:
+def _agents_working(facts: SprintFacts) -> StateCell:
     return tuple(agent.icon for agent in facts.active)
 
 
-def _qa(facts: SprintFacts) -> StateCell:
-    match facts.status:
-        case SprintState.IN_PROGRESS:
-            return (facts.last_qa,) if facts.last_qa else ()
-        case (
-            SprintState.OPEN
-            | SprintState.BLOCKED
-            | SprintState.DEFERRED
-            | SprintState.CLOSED
-            | SprintState.PINNED
-            | SprintState.HOOKED
-            | SprintState.ACCEPTED
-            | SprintState.PLANNED
-            | SprintState.PROPOSED
-            | SprintState.READY
-            | SprintState.NOT_READY
-            | SprintState.UNKNOWN
-        ):
-            return ()
-        case _ as unreachable:
-            assert_never(unreachable)
+def _blocked_or_ready(facts: SprintFacts) -> StateCell:
+    return (facts.status,) if facts.status in (SprintState.BLOCKED, SprintState.READY) else ()
 
 
-def _sprint(facts: SprintFacts) -> StateCell:
+def _qa_from_open_blocking_children(facts: SprintFacts) -> StateCell:
+    return (facts.gavel,) if facts.gavel and facts.status != SprintState.CLOSED else ()
+
+
+def _sprint_status(facts: SprintFacts) -> StateCell:
     match facts.status:
         case (
             SprintState.OPEN
@@ -74,7 +59,9 @@ def _sprint(facts: SprintFacts) -> StateCell:
             assert_never(unreachable)
 
 
-STATE: tuple[Callable[[SprintFacts], StateCell], ...] = (_agents, _qa, _sprint)
+STATE: tuple[Callable[[SprintFacts], StateCell], ...] = (
+    _agents_working, _blocked_or_ready, _qa_from_open_blocking_children, _sprint_status,
+)
 
 
 def rows(snapshot: Snapshot) -> tuple[StatusRow, ...]:
