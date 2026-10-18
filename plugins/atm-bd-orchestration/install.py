@@ -733,9 +733,29 @@ def write_roles(registry: Path, roles: Dict[str, str]) -> bool:
     return True
 
 
+def provision_tool_identity(repo_root: Path) -> None:
+    """Create the default notification identity, tolerating a verified existing member."""
+    command = ["atm", "teams", "add-member", "tool", "atm-bd", "--agent-type", "tool", "--model", "none"]
+    try:
+        added = subprocess.run(command, cwd=repo_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if added.returncode == 0:
+            return
+        existing = subprocess.run(["atm", "members", "--team", "tool", "--json"], cwd=repo_root,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if existing.returncode == 0:
+            members = json.loads(existing.stdout).get("members", [])
+            if any(isinstance(member, dict) and member.get("name") == "atm-bd" and member.get("agent_type") == "tool"
+                   for member in members):
+                return
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        raise InstallError(f"could not provision atm-bd@tool: {exc}; run {' '.join(command)}") from exc
+    raise InstallError(f"could not provision atm-bd@tool: {added.stderr.strip() or added.stdout.strip()}; run {' '.join(command)}")
+
+
 def apply_plan(plan: Plan, version: str) -> int:
     """Write the plan; return the number of files whose bytes changed."""
     root = plan.repo_root
+    provision_tool_identity(root)
     changed = 0
     if plan.backups:
         backup = root / BACKUP_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -816,7 +836,10 @@ def complete(source_path: str, destination_path: str, options: dict) -> dict:
         return failure
     assert plan is not None
     version = package_version(Path(source_path))
-    changed = apply_plan(plan, version)
+    try:
+        changed = apply_plan(plan, version)
+    except InstallError as exc:
+        return _fail(str(exc))
     print(f"{PACKAGE} {version}: {changed} file(s) written, {len(plan.writes) - changed} unchanged, "
           f"{len(plan.removals)} removed, {len(plan.backups)} backed up to {BACKUP_DIR}/; roles {'updated' if plan.registry_text is not None else 'unchanged'} "
           f"in {CONSUMER_REGISTRY}; config {CONFIG_OUT}; record {LOCK_OUT}")

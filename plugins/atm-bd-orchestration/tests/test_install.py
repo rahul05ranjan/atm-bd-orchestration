@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -47,6 +48,51 @@ def current_installer_tools(tmp_path, monkeypatch):
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def test_provision_tool_identity_adds_member_and_accepts_verified_existing(tmp_path, monkeypatch):
+    calls = []
+    outcomes = iter([
+        subprocess.CompletedProcess([], 0, "created", ""),
+        subprocess.CompletedProcess([], 3, "", "already exists"),
+        subprocess.CompletedProcess([], 0, json.dumps({"members": [{"name": "atm-bd", "agent_type": "tool"}]}), ""),
+    ])
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs["cwd"]))
+        return next(outcomes)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    install.provision_tool_identity(tmp_path)
+    install.provision_tool_identity(tmp_path)
+    assert calls == [
+        (["atm", "teams", "add-member", "tool", "atm-bd", "--agent-type", "tool", "--model", "none"], tmp_path),
+        (["atm", "teams", "add-member", "tool", "atm-bd", "--agent-type", "tool", "--model", "none"], tmp_path),
+        (["atm", "members", "--team", "tool", "--json"], tmp_path),
+    ]
+
+
+def test_provision_tool_identity_does_not_mask_failures(tmp_path, monkeypatch):
+    outcomes = iter([
+        subprocess.CompletedProcess([], 3, "", "permission denied"),
+        subprocess.CompletedProcess([], 0, '{"members": []}', ""),
+    ])
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: next(outcomes))
+    with pytest.raises(install.InstallError, match="permission denied"):
+        install.provision_tool_identity(tmp_path)
+
+
+def test_provision_failure_stops_install_before_writes_and_is_reported(tmp_path, monkeypatch):
+    repo = tmp_path / "consumer"
+    repo.mkdir()
+    plan = SimpleNamespace(repo_root=repo)
+    monkeypatch.setattr(install, "provision_tool_identity", lambda _root: (_ for _ in ()).throw(install.InstallError("provision failed")))
+    with pytest.raises(install.InstallError, match="provision failed"):
+        install.apply_plan(plan, "1.0")
+    assert list(repo.iterdir()) == []
+    monkeypatch.setattr(install, "_plan_or_fail", lambda *_args: (plan, {}, None))
+    monkeypatch.setattr(install, "package_version", lambda *_args: "1.0")
+    assert install.complete("source", "destination", {}) == {"result": "fail", "message": "provision failed"}
 
 
 # ---------------------------------------------------------------- consistency

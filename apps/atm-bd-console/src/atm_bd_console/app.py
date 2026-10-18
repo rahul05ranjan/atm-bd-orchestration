@@ -5,13 +5,14 @@ import os
 import sys
 import threading
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from rich.cells import cell_len
 from rich.text import Text
+from sc_observability import Level
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -26,12 +27,19 @@ from . import prs, render, status, status_table
 from .build import display_identity, identity
 from .enums import SprintState
 from .icons import SPRINT_ICONS
+from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
+
+
+class _DiagnosticEvent(Protocol):
+    timestamp: str
+    level: Level
+    message: str | None
 
 
 def status_header(snapshot: Snapshot) -> Text:
@@ -47,6 +55,11 @@ def status_header(snapshot: Snapshot) -> Text:
         result.append(glyph, style=style)
         result.append(f" {count}")
     return result
+
+
+def _diagnostic_line(event: _DiagnosticEvent) -> str:
+    """Add local display time and level to a stored message without interpreting it."""
+    return f"{render._clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
 
 
 def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text:
@@ -150,8 +163,6 @@ class ConsoleApp(App[int]):
         self._pending_forced_refresh = False
         self._status_view_initialized = False
         self.show_pr_history = False
-        self.diagnostics: list[str] = []
-        self.diagnostics_path = Path(config.state_dir) / "diagnostics.log"
         # Every mouse press, click, key and tab change with the widget it landed on (#241 evidence).
         self.input_log_path = Path(config.state_dir) / "input.log"
 
@@ -255,8 +266,8 @@ class ConsoleApp(App[int]):
         if isinstance(event, events.InputEvent) and not event.is_forwarded:
             try:
                 self._trace_event(event)
-            except Exception as trace_error:  # noqa: BLE001
-                self.diagnostics = [*self.diagnostics[-19:], f"input trace: {trace_error!r}"]
+            except Exception:  # noqa: BLE001, S110
+                pass
         await super().on_event(event)
 
     def _trace_event(self, event: events.InputEvent) -> None:
@@ -278,6 +289,8 @@ class ConsoleApp(App[int]):
             self.tick(True)
         elif event.pane.id == "status":
             self.call_after_refresh(self._refresh_status_viewport)
+        elif event.pane.id == "diagnostics":
+            self.refresh_views()
 
     def tick(self, force_github: bool) -> None:
         # Interval ticks are intentionally dropped while work is in flight. Forced
@@ -323,7 +336,10 @@ class ConsoleApp(App[int]):
         if not self.is_running:
             return
         self.tick_error = error
-        self._record_error("tick", error)
+        logger = create_console_logger(self.config.repo_root)
+        if isinstance(logger, Ok):
+            logger.value.event("error", level="error", message=error_message(asdict(error)), error=asdict(error))
+            logger.value.flush()
         self.refresh_views()
 
     def _show(self, snapshot: Snapshot, text: str, error: Error | None) -> None:
@@ -333,8 +349,6 @@ class ConsoleApp(App[int]):
         if self.startup_error is not None:
             snapshot = replace(snapshot, errors=(self.startup_error, *snapshot.errors))
         self.snapshot, self.status_text, self.status_error, self.tick_error = snapshot, text, error, None
-        for source_error in (*snapshot.errors, *((error,) if error is not None else ())):
-            self._record_error("source", source_error)
         sprints = self.query_one("#sprints", OptionList)
         highlighted = sprints.highlighted
         sprints.clear_options()
@@ -420,14 +434,20 @@ class ConsoleApp(App[int]):
             dashboard, header = render.tick_error(self.tick_error, dashboard_width)
             self.query_one("#dashboard", Static).update(dashboard)
             self.query_one("#status-header", Static).update(header)
-        log_path = str(self.diagnostics_path)
-        details = "\n".join(self.diagnostics[-20:]) or "No errors recorded."
+        details = "No errors recorded."
+        if self.query_one(TabbedContent).active == "diagnostics":
+            logger = create_console_logger(self.config.repo_root)
+            if isinstance(logger, Ok):
+                queried = logger.value.query(levels=("warn", "error"), limit=20, order="newest_first")
+                if isinstance(queried, Ok):
+                    lines = [_diagnostic_line(event) for event in queried.value]
+                    details = "\n".join(lines) or details
         agent_details = []
         if self.snapshot is not None:
             agent_details = [render.render_agent(agent.name, agent).plain for agent in self.snapshot.agents]
         agents = "Agents: " + ", ".join(agent_details) if agent_details else "Agents: none"
         self.query_one("#diagnostics-text", Static).update(
-            f"Build: {identity()}\nLog: {log_path}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
+            f"Build: {identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]

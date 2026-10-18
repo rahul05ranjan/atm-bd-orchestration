@@ -28,7 +28,7 @@ from contract_samples import (
 
 from atm_bd_console import log, runner
 from atm_bd_console.enums import QaState, SprintState
-from atm_bd_console.log import TickLog
+from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
@@ -129,8 +129,6 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def tick(value, state, _now, _spec):
         inputs.append(value)
         errors = [value.prs.error] if isinstance(value.prs, Err) else []
-        if value.gh.error is not None and value.gh.error not in errors:
-            errors.append(value.gh.error)
         return replace(SNAPSHOT, gh=value.gh, errors=tuple(errors)), (), state
 
     monkeypatch.setattr(runner.model, "tick", tick)
@@ -185,7 +183,8 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     assert snapshot.agents == SNAPSHOT.agents
     assert [row.pr.number for row in snapshot.prs] == [PRS_FILE.prs[0].number]
     assert [(action.text, action.outcome) for action in snapshot.sent] == [("QA completed", "recorded")]
-    assert snapshot.errors == (PRS_FILE.gh.error,)
+    assert snapshot.errors == ()
+    assert snapshot.gh.error == PRS_FILE.gh.error
 
 
 def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch) -> None:
@@ -304,7 +303,35 @@ def test_closed_phase_forced_github_refresh_uses_sprint_groups(monkeypatch, tmp_
     with locked.value as store:
         snapshot, _ = runner.step(config, INITIAL_STATE, True, store)
     assert snapshot.stopped == "closed" and snapshot.gh.ok is True
-    assert calls == [("rest", str(tmp_path), runner._branch_groups(PHASE, REPO_CONFIG))]
+    assert calls[0][:3] == ("rest", str(tmp_path), runner._branch_groups(PHASE, REPO_CONFIG))
+    assert isinstance(calls[0][3], runner.github_source.Budget)
+
+
+def test_closed_phase_forced_refresh_respects_pause_and_keeps_cached_prs(monkeypatch, tmp_path):
+    closed = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
+    config = replace(CONFIG, repo_root=str(tmp_path), github="rest", dry_run=True)
+    status = replace(GhStatus("rest", False, None, NOW, False), paused=True,
+                     quota_remaining=2450, quota_limit=5000, quota_reset=NOW + timedelta(hours=1))
+    cached = replace(PRS_FILE, gh=status)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None): return NOW
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
+    monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=True, step_errors=())))
+    monkeypatch.setattr(runner.github_source.command, "run", lambda *_args, **_kwargs: pytest.fail("paused GitHub request"))
+    locked = acquire_lock(tmp_path, PHASE_FILE.root_id)
+    assert isinstance(locked, Ok)
+    with locked.value as store:
+        assert isinstance(store.write_prs(cached), Ok)
+        snapshot, _ = runner.step(config, INITIAL_STATE, True, store)
+        saved = store.load_prs()
+    assert snapshot.gh.paused
+    assert isinstance(saved, Ok) and saved.value.prs == cached.prs and saved.value.read_at == cached.read_at
 
 
 def test_runner_passes_the_configured_interval_to_inputs(github_runtime) -> None:
@@ -437,7 +464,7 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
     snapshot, next_state = runner.step(CONFIG, STATE, False, Store())
     assert [name for name, _ in writes] == ["state", "snapshot"]
     assert writes[0][1] == next_state and writes[1][1] == snapshot
-    assert ("tick_end", {"actions": 0}) in events
+    assert ("tick_end", {"level": "info", "message": None, "actions": 0}) in events
 
 
 @pytest.mark.parametrize("stopped", ("closed", "idle"))
@@ -556,12 +583,17 @@ def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> Non
     assert inputs[0].prs == Err(TIMEOUT)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
     assert [event for event in events if event[0] == "github_read"] == [
-        ("github_read", {"forced": True, "outcome": "failed", "error": asdict(TIMEOUT)})
+        ("github_read", {"level": "info", "message": None, "forced": True,
+                          "outcome": "failed", "error": asdict(TIMEOUT)})
     ]
+    error_events = [fields for action, fields in events if action == "error"]
+    assert len(error_events) == 1
+    assert error_events[0]["level"] == "error"
+    assert error_events[0]["message"] == "`retry the bd read` bd ready --json timeout after 20s"
 
 
 def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkeypatch) -> None:
-    store, _, _, inputs = github_runtime
+    store, _, events, inputs = github_runtime
     writes = []
     cached = replace(PRS_FILE, read_at=EARLIER)
     monkeypatch.setattr(store, "load_prs", lambda: Ok(cached))
@@ -579,7 +611,64 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
     assert tuple(row.pr for row in snapshot.prs) == cached.prs
     assert snapshot.gh == GhStatus(CONFIG.github, False, TIMEOUT, SNAPSHOT.generated_at, False)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
-    assert writes == [replace(cached, gh=snapshot.gh)]
+    assert writes == [replace(cached, gh=snapshot.gh, attempted_at=snapshot.generated_at)]
+    error_events = [fields for action, fields in events if action == "error"]
+    assert len(error_events) == 1 and error_events[0]["error"] == asdict(TIMEOUT)
+
+
+@pytest.mark.parametrize("interval_s", (120, 600))
+def test_github_interval_is_independent_and_paused_refresh_keeps_cache(github_runtime, monkeypatch, interval_s):
+    store, _, _, inputs = github_runtime
+    clock = [NOW]
+    cache = [replace(PRS_FILE, read_at=EARLIER, attempted_at=NOW,
+                     gh=replace(GhStatus("rest", True, None, EARLIER, False),
+                                core_remaining=4900, core_limit=5000, core_reset=NOW + timedelta(hours=1),
+                                graphql_remaining=4800, graphql_limit=5000, graphql_reset=NOW + timedelta(hours=2),
+                                quota_at=NOW))]
+    calls = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None): return clock[0]
+
+    def refresh(_config, now, gh, _groups):
+        calls.append(now)
+        if len(calls) == 1:
+            return Err(TIMEOUT), replace(gh, paused=True, quota_remaining=2450, quota_limit=5000,
+                                         quota_reset=NOW + timedelta(hours=1))
+        return Ok(cache[0].prs), replace(gh, paused=False, error=None, ok=True)
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner, "_refresh_github", refresh)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=())))
+    monkeypatch.setattr(store, "load_prs", lambda: Ok(cache[0]))
+    monkeypatch.setattr(store, "write_prs", lambda value: cache.__setitem__(0, value) or Ok(None))
+    config = replace(CONFIG, github_poll_interval_s=interval_s, dry_run=True)
+    snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert calls == []
+    assert (snapshot.gh.core_remaining, snapshot.gh.graphql_remaining, snapshot.gh.quota_at) == (4900, 4800, NOW)
+    clock[0] += timedelta(seconds=interval_s)
+    snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert calls == [clock[0]] and snapshot.gh.paused
+    assert inputs[-1].prs == Ok(PRS_FILE.prs) and cache[0].prs == PRS_FILE.prs
+    assert cache[0].read_at == EARLIER and cache[0].attempted_at == clock[0]
+    clock[0] += timedelta(seconds=interval_s - 1)
+    snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert len(calls) == 1
+    assert (snapshot.gh.core_remaining, snapshot.gh.graphql_remaining, snapshot.gh.quota_at) == (4900, 4800, NOW)
+    clock[0] += timedelta(seconds=1)
+    snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert len(calls) == 2 and not snapshot.gh.paused
+
+
+def test_paused_refresh_preserves_cached_availability_and_read_time(monkeypatch):
+    cached = GhStatus("graphql", True, None, EARLIER, False)
+    paused = replace(cached, ok=False, at=NOW, error=TIMEOUT, paused=True,
+                     quota_remaining=2450, quota_limit=5000, quota_reset=NOW + timedelta(hours=1))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (Err(TIMEOUT), paused))
+    result, status = runner._refresh_github(replace(CONFIG, github="graphql"), NOW, cached)
+    assert isinstance(result, Err)
+    assert status.paused and status.ok is True and status.error is None and status.at == EARLIER
 
 
 def test_github_off_skips_forced_read_and_event(github_runtime) -> None:
@@ -657,6 +746,44 @@ def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
     reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), (ACTION,), Store(), ACTION.at, logger)
     assert errors == (COMMAND_FAILED,)
     assert reported == (replace(ACTION, outcome="failed command_failed"),)
+
+
+@pytest.mark.parametrize(("sender", "sender_team"), (("atm-bd", "tool"), ("robot", "tooling")))
+@pytest.mark.parametrize("delivery_fails", (False, True))
+def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_runtime, fake_bin, monkeypatch,
+                                                                     sender, sender_team, delivery_fails):
+    store, _, _, _ = github_runtime
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, assignee=None, branch=None,
+                        worktree=None, anchor=False, quick_fix=False)
+    phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
+    monkeypatch.setattr(runner.model, "tick", model_tick)
+    monkeypatch.setenv("ATM_IDENTITY", "unrelated")
+    monkeypatch.setenv("ATM_TEAM", "unrelated")
+    fake_bin.make("atm", f'if [ "$1" = send ]; then test "$ATM_IDENTITY" = "{sender}" && test "$ATM_TEAM" = "{sender_team}" || exit 23; '
+                  + ('printf "delivery rejected" >&2; exit 3; ' if delivery_fails else 'cat >/dev/null; ')
+                  + 'else test "$ATM_IDENTITY" = fenix && test "$ATM_TEAM" = atm-dev || exit 23; fi\n')
+    config = replace(CONFIG, dry_run=False, notification_sender=f"{sender}@{sender_team}")
+
+    snapshot, _ = runner.step(config, INITIAL_STATE, False, store)
+
+    assert any(problem.to == "fenix" and problem.text == "missing branch configuration" for problem in snapshot.problems)
+    calls = fake_bin.argv()
+    sends = [argv for argv in calls if argv[1] == "send"]
+    assert sends == [("atm", "send", "fenix@atm-dev", "--as", sender, "--team", sender_team, "--stdin")]
+    assert all(f"{argv[argv.index('--as') + 1]}@{argv[argv.index('--team') + 1]}" != argv[2] for argv in sends)
+    assert snapshot.sent[-1].outcome == ("failed command_failed" if delivery_fails else "sent")
+    if delivery_fails:
+        assert any(getattr(error, "stderr", "") == "delivery rejected" for error in snapshot.errors)
+
+    assignment = replace(ACTION, outcome=None)
+    reported, errors = runner._run_actions(config, (assignment,), store, ACTION.at,
+                                           TickLog(runner.create_console_logger(config.repo_root)))
+    assert errors == () and reported[0].outcome == "sent"
+    argv = fake_bin.argv()[-1]
+    assert argv[1:5] == ("task", "assign", "quality-mgr", "--as")
+    assert argv[5:8] == ("fenix", "--team", "atm-dev")
+    assert argv[3] != argv[5]
 
 
 @pytest.mark.parametrize("failure", ("construction", "tick_start", "read", "github_read", "action", "tick_end", "flush"))
@@ -752,6 +879,8 @@ def test_every_effect_outcome_has_recipient_task_and_error_context(github_runtim
         assert fields == {
             "effect": kind, "recipient": action.to, "task_ids": list(action.bead_ids),
             "outcome": outcome, "error": asdict(COMMAND_FAILED) if outcome.startswith("failed") else None,
+            "level": "error" if outcome.startswith("failed") else "info",
+            "message": error_message(asdict(COMMAND_FAILED)) if outcome.startswith("failed") else None,
         }
     assert all(action.outcome == outcome for action in snapshot.sent)
     assert result.reported == tuple(replace(action, outcome=outcome) for action in actions)
@@ -791,7 +920,8 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
 
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
-    assert ("read", {"source": "git.fetch", "outcome": "failed", "error": asdict(TIMEOUT)}) in events
+    assert ("read", {"source": "git.fetch", "outcome": "failed", "error": asdict(TIMEOUT),
+                     "level": "error", "message": error_message(asdict(TIMEOUT))}) in events
     assert not any(fields.get("source") == "git.merge" for _, fields in events)
 
     monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
@@ -799,6 +929,7 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
     assert ("read", {"source": "git.merge", "outcome": "failed", "error": asdict(COMMAND_FAILED),
+                     "level": "error", "message": error_message(asdict(COMMAND_FAILED)),
                      "branch": "topic", "target": "base"}) in events
 
 
@@ -813,8 +944,10 @@ def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch
     runner.step(CONFIG, RUNNING_STATE, False, store)
 
     assert ("read", {"source": "atm.members", "outcome": "failed", "error": asdict(TIMEOUT),
+                     "level": "error", "message": error_message(asdict(TIMEOUT)),
                      "team": CONFIG.team}) in events
     assert ("hold", {"task_ids": [held.bead_id], "recipient": held_step.assignee or CONFIG.lead,
+                     "level": "info", "message": None,
                      "outcome": "held", "reason": held.reason}) in events
 
 
@@ -914,7 +1047,11 @@ def test_snapshot_write_failure_is_logged_and_flushed_once(github_runtime, monke
 
     assert len(writes) == 1
     assert [action for action, _ in events].count("tick_end") == 1
-    assert events[-1] == ("error", {"source": "snapshot.write", "error": asdict(snapshot_error)})
+    assert events[-1] == ("error", {
+        "source": "snapshot.write", "level": "error",
+        "message": "`repair permissions` io_failed snapshot write failed",
+        "error": asdict(snapshot_error),
+    })
     assert flushes[-1] == len(events) and len(flushes) == 2
     assert snapshot.errors == (*writes[0].errors, snapshot_error, *((admission_error, flush_error) if logging_fails else ()))
 
