@@ -8,31 +8,14 @@ from pathlib import Path
 from shutil import copytree, ignore_patterns, which
 
 import pytest
+from process_helpers import PROCESS_TIMEOUT, build_command
+from process_helpers import run_process as run
 
 from atm_bd_console import __version__, build
 from atm_bd_console.build import display_identity, identity
 
 CONSOLE = Path(__file__).resolve().parents[1]
-PROCESS_TIMEOUT = 60
 UV = which("uv")
-
-
-def run(stage: str, argv, *, cwd=None, env=None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    try:
-        result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=PROCESS_TIMEOUT,
-                                check=False)
-    except subprocess.TimeoutExpired as error:
-        pytest.fail(f"{stage}: timed out after {PROCESS_TIMEOUT}s; stdout={error.stdout!r}; stderr={error.stderr!r}",
-                    pytrace=False)
-    if check and result.returncode:
-        pytest.fail(f"{stage}: exited {result.returncode}; stdout={result.stdout!r}; stderr={result.stderr!r}",
-                    pytrace=False)
-    return result
-
-
-def build_command(*args: str) -> list[str]:
-    return [UV, "build", "--offline", "--no-python-downloads", "--no-build-isolation",
-            "--python", sys.executable, *args]
 
 
 @pytest.mark.parametrize("failure", ["timeout", "exit"])

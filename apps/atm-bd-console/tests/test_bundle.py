@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import re
 import shutil
+import site
 import subprocess
 import sys
 import tarfile
@@ -10,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from process_helpers import PROCESS_TIMEOUT, build_command, run_process
 
 APP = Path(__file__).resolve().parents[1]
 REPO = APP.parents[1]
@@ -17,8 +19,32 @@ UV = shutil.which("uv")
 pytestmark = pytest.mark.skipif(UV is None, reason="uv is required to build and install the bundle")
 
 
-def run(*args: str, cwd: Path = APP) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=True)
+def run(*args: str, cwd: Path = APP, check: bool = True, text: bool = True):
+    return run_process("bundle test", args, cwd=cwd, check=check, text=text)
+
+
+def git_install_command(python: Path, commit: str) -> list[str]:
+    return [UV, "pip", "install", "--offline", "--no-python-downloads", "--no-build-isolation",
+            "--no-deps", "--python", str(python),
+            f"git+{REPO.as_uri()}@{commit}#subdirectory=apps/atm-bd-console"]
+
+
+@pytest.mark.parametrize("text", [True, False])
+def test_bundle_command_timeout_names_command_and_stderr(monkeypatch, text: bool) -> None:
+    def timed_out(argv, **kwargs):
+        assert kwargs["timeout"] == PROCESS_TIMEOUT
+        assert kwargs["capture_output"] and kwargs["text"] is text
+        raise subprocess.TimeoutExpired(argv, PROCESS_TIMEOUT, output=b"partial", stderr=b"stalled index")
+
+    monkeypatch.setattr(subprocess, "run", timed_out)
+    with pytest.raises(pytest.fail.Exception, match="git.*archive.*stalled index"):
+        run("git", "archive", text=text)
+
+
+def test_git_install_command_is_offline(tmp_path: Path) -> None:
+    command = git_install_command(tmp_path / "python", "abc123")
+    assert {"--offline", "--no-python-downloads", "--no-build-isolation", "--no-deps"} <= set(command)
+    assert command[-1].startswith("git+file:")
 
 
 def tree(path: Path) -> dict[str, bytes]:
@@ -27,8 +53,7 @@ def tree(path: Path) -> dict[str, bytes]:
 
 def committed_plugin(commit: str) -> dict[str, bytes]:
     prefix = "plugins/atm-bd-orchestration/"
-    archive = subprocess.run(["git", "archive", "--format=tar", commit, prefix], cwd=REPO,
-                             capture_output=True, check=True).stdout
+    archive = run("git", "archive", "--format=tar", commit, prefix, cwd=REPO, text=False).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as source:
         return {member.name[len(prefix):]: source.extractfile(member).read()
                 for member in source.getmembers() if member.isfile() and member.name.startswith(prefix)}
@@ -63,10 +88,10 @@ def test_wheel_sdist_and_rebuilt_wheel_bundle_every_file(tmp_path: Path) -> None
     direct = tmp_path / "direct"
     source = tmp_path / "source"
     rebuilt = tmp_path / "rebuilt"
-    run(UV, "build", "--wheel", "--out-dir", str(direct))
-    run(UV, "build", "--sdist", "--out-dir", str(source))
+    run(*build_command("--wheel", "--out-dir", str(direct)))
+    run(*build_command("--sdist", "--out-dir", str(source)))
     sdist = next(source.glob("*.tar.gz"))
-    run(UV, "build", "--wheel", "--out-dir", str(rebuilt), str(sdist))
+    run(*build_command("--wheel", "--out-dir", str(rebuilt), str(sdist)))
     for archive in (next(direct.glob("*.whl")), sdist, next(rebuilt.glob("*.whl"))):
         check_archive(archive, expected, commit)
 
@@ -86,19 +111,19 @@ def test_wheel_sdist_and_rebuilt_wheel_bundle_every_file(tmp_path: Path) -> None
     moved = foreign / "apps" / "project"
     extracted.rename(moved)
     rebuilt_foreign = tmp_path / "rebuilt-foreign"
-    run(UV, "build", "--wheel", "--out-dir", str(rebuilt_foreign), str(moved))
+    run(*build_command("--wheel", "--out-dir", str(rebuilt_foreign), str(moved)))
     check_archive(next(rebuilt_foreign.glob("*.whl")), expected, commit)
 
 
 def test_git_file_install_bundles_the_plugin(tmp_path: Path) -> None:
     commit = run("git", "rev-parse", "HEAD", cwd=REPO).stdout.strip()
     venv = tmp_path / "venv"
-    run(UV, "venv", str(venv))
+    run(UV, "venv", "--offline", "--no-python-downloads", "--python", sys.executable, str(venv))
     python = venv / "bin" / "python"
-    run(UV, "pip", "install", "--python", str(python),
-        f"git+{REPO.as_uri()}@{commit}#subdirectory=apps/atm-bd-console")
-    site = Path(run(str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))").stdout.strip())
-    assert tree(site / "atm_bd_console" / "_skills") == committed_plugin(commit)
+    purelib = Path(run(str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))").stdout.strip())
+    (purelib / "test-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n")
+    run(*git_install_command(python, commit))
+    assert tree(purelib / "atm_bd_console" / "_skills") == committed_plugin(commit)
 
 
 def test_bundle_checks_ignore_stray_plugin_files(tmp_path: Path) -> None:
@@ -126,8 +151,7 @@ def test_missing_plugin_and_bundle_fails_with_paths(tmp_path: Path) -> None:
     run("git", "config", "user.name", "Test", cwd=repo)
     run("git", "add", ".", cwd=repo)
     run("git", "commit", "-m", "fixture", cwd=repo)
-    result = subprocess.run([UV, "build", "--wheel", "--out-dir", str(tmp_path / "dist")], cwd=app,
-                            text=True, capture_output=True, check=False)
+    result = run(*build_command("--wheel", "--out-dir", str(tmp_path / "dist")), cwd=app, check=False)
     assert result.returncode != 0
     assert str(repo / "plugins" / "atm-bd-orchestration") in result.stderr
     assert str(app / "src" / "atm_bd_console" / "_skills") in result.stderr
