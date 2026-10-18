@@ -108,7 +108,7 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
 def test_dashboard_renders_every_member_from_roster_fixture(fake_bin, monkeypatch) -> None:
     monkeypatch.setenv("ATM_BODY", (FIXTURES / "atm" / "members.json").read_text())
     fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
-    members = atm_source.members("atm-dev")
+    members = atm_source.members("atm-dev", "team-lead")
     assert isinstance(members, Ok)
     agents = _agent_views(members.value, (), None, Ok(()), NOW)
     rendered = dashboard(replace(snapshot(), agents=agents, errors=(), sections=(), sent=()), 120, 40)
