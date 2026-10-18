@@ -837,7 +837,7 @@ def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, m
 
     argv = fake_bin.argv()
     assert ("atm", "members", "--team", "atm-dev", "--json") in argv
-    assert ("atm", "task", "list", "--all", "--json", "--team", "atm-dev") in argv
+    assert ("atm", "task", "list", "--all", "--json", "--team", "atm-dev", "--as", "fenix") in argv
     assert all(command[command.index("--team") + 1] != "fenix" for command in argv if "--team" in command)
 
 
