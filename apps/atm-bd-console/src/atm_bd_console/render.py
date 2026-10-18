@@ -12,7 +12,7 @@ from .icons import (
     MARKER_QA,
     MARKER_RED,
     MARKER_YELLOW,
-    SPRINT_STATE_ICONS,
+    SPRINT_ICONS,
     STATUS_FAIL,
     STATUS_OK,
     icon_for,
@@ -105,7 +105,7 @@ def _task_marker(row: Row) -> str | None:
 
 
 def _icon(row: Row) -> Text:
-    status, style = SPRINT_STATE_ICONS[SprintState.IN_PROGRESS if row.state == "running" else SprintState.READY]
+    status, style = SPRINT_ICONS[SprintState.IN_PROGRESS if row.state == "running" else SprintState.READY]
     result = Text(status, style=style or "")
     marker = _task_marker(row)
     if marker:

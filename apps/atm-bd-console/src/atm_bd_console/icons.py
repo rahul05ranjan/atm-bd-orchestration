@@ -61,9 +61,6 @@ BEAD_STATUS_ICONS: dict[SprintState, Icon] = {key: SPRINT_ICONS[key] for key in 
     SprintState.PINNED, SprintState.HOOKED, SprintState.ACCEPTED, SprintState.PLANNED, SprintState.PROPOSED,
     SprintState.READY,
 )}
-SPRINT_STATE_ICONS: dict[SprintState, Icon] = {key: SPRINT_ICONS[key] for key in (
-    SprintState.CLOSED, SprintState.IN_PROGRESS, SprintState.READY, SprintState.NOT_READY,
-)}
 PR_STATE_ICONS = {key: PR_ICONS[key] for key in (PrState.OPEN, PrState.DRAFT, PrState.MERGED, PrState.CLOSED)}
 CI_STATE_ICONS = CI_ICONS
 MERGE_CLEAN: Icon = ("\U000f062d", "#2EA043")

@@ -25,7 +25,7 @@ from textual.widgets.option_list import Option
 from . import prs, render, status, status_table
 from .build import display_identity, identity
 from .enums import SprintState
-from .icons import SPRINT_STATE_ICONS
+from .icons import SPRINT_ICONS
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
@@ -43,7 +43,7 @@ def status_header(snapshot: Snapshot) -> Text:
     for index, (state, count) in enumerate(((SprintState.CLOSED, closed), (SprintState.IN_PROGRESS, running), (SprintState.NOT_READY, waiting))):
         if index:
             result.append(" · ")
-        glyph, style = SPRINT_STATE_ICONS[state]
+        glyph, style = SPRINT_ICONS[state]
         result.append(glyph, style=style)
         result.append(f" {count}")
     return result
@@ -337,7 +337,7 @@ class ConsoleApp(App[int]):
         sprints.clear_options()
         options = []
         for sprint in snapshot.sprints:
-            glyph, style = SPRINT_STATE_ICONS[sprint.state]
+            glyph, style = SPRINT_ICONS[sprint.state]
             label = Text()
             label.append(glyph, style=style)
             label.append(f" {sprint.id}  {sprint.title}")

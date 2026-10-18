@@ -4,7 +4,7 @@ import re
 import subprocess
 
 from .enums import SprintState
-from .icons import SPRINT_STATE_ICONS
+from .icons import SPRINT_ICONS
 from .ids import short_id
 from .render import render_agent
 from .result import CommandFailed, ConfigInvalid, Error, NotFound, Timeout
@@ -30,7 +30,7 @@ def _fallback(snapshot: Snapshot) -> str:
         current = next((step for step in sprint.steps if step.status == "in_progress"), None)
         if current is None and sprint.state == SprintState.READY:
             current = next((step for step in sprint.steps if step.status == "open"), None)
-        line = f"{SPRINT_STATE_ICONS[sprint.state][0]} {sprint_id}"
+        line = f"{SPRINT_ICONS[sprint.state][0]} {sprint_id}"
         if current is not None:
             member = next((agent for agent in snapshot.agents if agent.name == current.assignee), None)
             assignee = render_agent(current.assignee, member).plain

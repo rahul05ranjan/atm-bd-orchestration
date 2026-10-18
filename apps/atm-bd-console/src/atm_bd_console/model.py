@@ -9,7 +9,7 @@ from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
 from .enums import CiState, MergeState, PrState, SprintState
-from .icons import SPRINT_STATE_ICONS
+from .icons import SPRINT_ICONS
 from .ids import short_id
 from .prs import active_pr
 from .render import render_agent
@@ -355,7 +355,7 @@ def _sprint_views(
         current = next((step for step in steps if step.status == "in_progress"), None)
         if current is None:
             current = next((step for step in steps if step.ready), None)
-        glyph = SPRINT_STATE_ICONS[state][0]
+        glyph = SPRINT_ICONS[state][0]
         label = f"{glyph} {short_id(sprint.id, bead_prefix)}"
         if current:
             assignee = current.assignee or "unassigned"

@@ -14,7 +14,6 @@ from atm_bd_console.icons import (
     PR_ICONS,
     PR_STATE_ICONS,
     SPRINT_ICONS,
-    SPRINT_STATE_ICONS,
     ci_failure_key,
     icon,
     icon_for,
@@ -82,7 +81,7 @@ def test_qa_and_sanity_icons_override_harness_and_model(
 
 
 def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
-    tables = (BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, PR_STATE_ICONS, CI_STATE_ICONS)
+    tables = (BEAD_STATUS_ICONS, SPRINT_ICONS, PR_STATE_ICONS, CI_STATE_ICONS)
     glyphs = [glyph for table in tables for glyph, _ in table.values()]
     model_members = tuple(
         Member(f"claude-{model}", "active", None, "dev", model, "claude-code")
@@ -114,12 +113,6 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
         SprintState.PLANNED: ("\U000f00ef", "#FFB726"),
         SprintState.PROPOSED: ("\U000f06e8", "#FFB726"),
         SprintState.READY: ("\U000f040d", "#0077FF"),
-    }
-    assert SPRINT_STATE_ICONS == {
-        SprintState.CLOSED: ("\U000f05e0", "#2DE057"),
-        SprintState.IN_PROGRESS: ("\U000f051f", "#0077FF"),
-        SprintState.READY: ("\U000f040d", "#0077FF"),
-        SprintState.NOT_READY: ("\U000f137c", "#D97757"),
     }
     assert PR_STATE_ICONS == {
         PrState.OPEN: ("\U000f04c2", "#2D81E0"),

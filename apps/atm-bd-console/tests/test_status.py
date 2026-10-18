@@ -6,8 +6,9 @@ from pathlib import Path
 
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import SprintState
+from atm_bd_console.icons import SPRINT_ICONS
 from atm_bd_console.result import CommandFailed, ConfigInvalid, NotFound, Ok, Timeout
-from atm_bd_console.status import status_text
+from atm_bd_console.status import _fallback, status_text
 from atm_bd_console.types import Snapshot, SprintView, StepView
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -85,6 +86,19 @@ def test_fallback_is_one_row_per_sprint_in_dependency_depth_order(monkeypatch) -
     assert isinstance(error, NotFound)
     # Depth 0 first (bh-1 before bh-4 by declared order), then depth 1, then depth 2.
     assert rendered == "\U000f05e0 bh-1\n\U000f040d bh-4  dev: unassigned\n\U000f051f bh-2  dev: ·fenix\n\U000f137c bh-3  ← bh-2"
+
+
+def test_fallback_renders_every_sprint_state() -> None:
+    sprints = tuple(
+        SprintView(f"atm-bi-{index}", state.value, state, (), ())
+        for index, state in enumerate(SprintState)
+    )
+
+    rendered = _fallback(replace(snapshot(), sprints=sprints))
+
+    assert [line.split()[0] for line in rendered.splitlines()] == [
+        SPRINT_ICONS[state][0] for state in SprintState
+    ]
 
 
 def test_nonzero_and_timeout_return_error_and_fallback(monkeypatch) -> None:
