@@ -111,9 +111,16 @@ class TickLog:
             "error", source=source, level="error", message=error_message(asdict(error)), error=asdict(error),
         )
 
-    def event(self, action: EventAction, **fields: object) -> None:
+    def event(
+        self,
+        action: EventAction,
+        *,
+        level: Level = "info",
+        message: str | None = None,
+        **fields: object,
+    ) -> None:
         if isinstance(self.logger, Ok):
-            admitted = self.logger.value.event(action, **fields)
+            admitted = self.logger.value.event(action, level=level, message=message, **fields)
             if isinstance(admitted, Err):
                 self.errors.append(admitted.error)
 

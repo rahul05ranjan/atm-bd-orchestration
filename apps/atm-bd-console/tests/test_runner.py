@@ -464,7 +464,7 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
     snapshot, next_state = runner.step(CONFIG, STATE, False, Store())
     assert [name for name, _ in writes] == ["state", "snapshot"]
     assert writes[0][1] == next_state and writes[1][1] == snapshot
-    assert ("tick_end", {"actions": 0}) in events
+    assert ("tick_end", {"level": "info", "message": None, "actions": 0}) in events
 
 
 @pytest.mark.parametrize("stopped", ("closed", "idle"))
@@ -583,7 +583,8 @@ def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> Non
     assert inputs[0].prs == Err(TIMEOUT)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
     assert [event for event in events if event[0] == "github_read"] == [
-        ("github_read", {"forced": True, "outcome": "failed", "error": asdict(TIMEOUT)})
+        ("github_read", {"level": "info", "message": None, "forced": True,
+                          "outcome": "failed", "error": asdict(TIMEOUT)})
     ]
     error_events = [fields for action, fields in events if action == "error"]
     assert len(error_events) == 1
@@ -941,6 +942,7 @@ def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch
                      "level": "error", "message": error_message(asdict(TIMEOUT)),
                      "team": CONFIG.team}) in events
     assert ("hold", {"task_ids": [held.bead_id], "recipient": held_step.assignee or CONFIG.lead,
+                     "level": "info", "message": None,
                      "outcome": "held", "reason": held.reason}) in events
 
 

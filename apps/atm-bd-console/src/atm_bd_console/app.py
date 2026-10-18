@@ -8,10 +8,11 @@ from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from rich.cells import cell_len
 from rich.text import Text
+from sc_observability import Level
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
@@ -35,6 +36,12 @@ from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 
 
+class _DiagnosticEvent(Protocol):
+    timestamp: str
+    level: Level
+    message: str | None
+
+
 def status_header(snapshot: Snapshot) -> Text:
     """Show sprint counts using the same status icons as the DAG."""
     states = [sprint.state for sprint in snapshot.sprints]
@@ -50,7 +57,7 @@ def status_header(snapshot: Snapshot) -> Text:
     return result
 
 
-def _diagnostic_line(event: object) -> str:
+def _diagnostic_line(event: _DiagnosticEvent) -> str:
     """Add local display time and level to a stored message without interpreting it."""
     return f"{render._clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
 
