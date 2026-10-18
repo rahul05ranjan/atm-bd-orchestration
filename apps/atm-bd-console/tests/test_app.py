@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import FakeStep, run_scenario, settle
+from conftest import HANG_GUARD_S, FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
 from rich.cells import cell_len
@@ -70,7 +70,7 @@ class BlockingStep(FakeStep):
     def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
         self.calls.append(force_github)
         self.started.set()
-        assert self.release.wait(2), "test must release the blocked step"
+        assert self.release.wait(HANG_GUARD_S), "test must release the blocked step"
         self.completed.set()
         return self.snapshot, state
 
@@ -236,13 +236,13 @@ def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test() as pilot:
             try:
-                assert await asyncio.to_thread(step.started.wait, 1), "blocked step never started"
+                assert await asyncio.to_thread(step.started.wait, HANG_GUARD_S), "blocked step never started"
                 app._on_interval()
                 app._on_interval()
                 await pilot.pause()
                 assert step.calls == [False]
                 step.release.set()
-                assert await asyncio.to_thread(step.completed.wait, 1), "blocked step never completed"
+                assert await asyncio.to_thread(step.completed.wait, HANG_GUARD_S), "blocked step never completed"
                 await settle(pilot)
                 assert step.calls == [False]
             finally:
@@ -281,7 +281,7 @@ def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypat
         rendered.append(snapshot.phase)
         if len(rendered) == 1:
             render_started.set()
-            assert release_render.wait(2), "test must release the blocked renderer"
+            assert release_render.wait(HANG_GUARD_S), "test must release the blocked renderer"
         return snapshot.phase, None
 
     monkeypatch.setattr(console.status, "status_text", slow_render)
@@ -291,14 +291,14 @@ def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypat
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test() as pilot:
             try:
-                assert await asyncio.to_thread(render_started.wait, 1), "renderer never started"
+                assert await asyncio.to_thread(render_started.wait, HANG_GUARD_S), "renderer never started"
                 assert app._step_lock.acquire(blocking=False)
                 app._step_lock.release()
                 app.action_refresh()
                 app._on_interval()
                 release_render.set()
-                assert await asyncio.to_thread(second_step_done.wait, 1), "second step never ran"
-                assert await asyncio.to_thread(second_shown.wait, 1), "second snapshot never shown"
+                assert await asyncio.to_thread(second_step_done.wait, HANG_GUARD_S), "second step never ran"
+                assert await asyncio.to_thread(second_shown.wait, HANG_GUARD_S), "second snapshot never shown"
                 await settle(pilot)
                 assert calls == [False, True]
                 assert rendered == [first.phase, "second"]

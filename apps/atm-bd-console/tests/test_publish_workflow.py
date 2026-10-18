@@ -5,7 +5,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import sys
 import tomllib
 import urllib.error
@@ -14,6 +13,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from process_helpers import run_process
 
 WORKFLOW = Path(__file__).resolve().parents[3] / ".github/workflows/publish.yml"
 
@@ -68,9 +68,9 @@ def test_rehearsal_checks_that_legacy_command_is_absent(tmp_path):
     start = lines.index("legacy_command=atm-bd")
     check = "\n".join(lines[start : start + 2])
     env = {**os.environ, "UV_TOOL_BIN_DIR": str(tmp_path)}
-    assert subprocess.run(["bash", "-c", check], env=env, check=False).returncode == 0
+    assert run_process("legacy command absent", ["bash", "-c", check], env=env, check=False).returncode == 0
     (tmp_path / "atm-bd-console").touch()
-    assert subprocess.run(["bash", "-c", check], env=env, check=False).returncode != 0
+    assert run_process("legacy command present", ["bash", "-c", check], env=env, check=False).returncode != 0
 
 
 def test_workflow_jobs_have_explicit_timeouts():
@@ -95,7 +95,7 @@ def test_rehearsal_checks_both_registry_versions(tmp_path, pypi_status, testpypi
     log = tmp_path / "urls"
     env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "URL_LOG": str(log),
            "PYPI_STATUS": str(pypi_status), "TESTPYPI_STATUS": str(testpypi_status)}
-    result = subprocess.run(["bash", "-c", script], cwd=WORKFLOW.parents[2], env=env, check=False)
+    result = run_process("release version availability check", ["bash", "-c", script], cwd=WORKFLOW.parents[2], env=env, check=False)
     assert (result.returncode == 0) is success
     with (WORKFLOW.parents[2] / "apps/atm-bd-console/pyproject.toml").open("rb") as source:
         version = tomllib.load(source)["project"]["version"]

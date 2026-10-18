@@ -6,13 +6,13 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from process_helpers import run_process
 
 from atm_bd_console import cli, skill, skill_source
 
@@ -77,10 +77,8 @@ def make_consumer(path: Path, installer, pkg_dir: Path = PLUGIN) -> Path:
     (path / ".claude/agents").mkdir(parents=True)
     (path / ".beads").mkdir()
     (path / ".beads/metadata.json").write_text(json.dumps({"backend": "dolt", "dolt_mode": "server"}), encoding="utf-8")
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
-    subprocess.run(
-        ["git", "-C", str(path), "remote", "add", "origin", "https://github.com/example/repo.git"], check=True,
-    )
+    run_process("initialize consumer", ["git", "init", "-q", str(path)])
+    run_process("configure consumer remote", ["git", "-C", str(path), "remote", "add", "origin", "https://github.com/example/repo.git"])
     values = {}
     for name in installer.config_variables(pkg_dir):
         if name == "requirements_globs":
@@ -142,7 +140,7 @@ def skill_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, 
         monkeypatch.setenv(name, value)
 
     def git(*args: str) -> str:
-        return subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+        return run_process("skill remote git", ["git", *args], cwd=tmp_path).stdout.strip()
 
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"

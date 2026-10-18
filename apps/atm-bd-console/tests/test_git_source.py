@@ -1,10 +1,10 @@
 """git_source against a real temporary repository with a bare origin (real git, no fake)."""
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
+from process_helpers import run_process
 
 from atm_bd_console import git_source
 from atm_bd_console.enums import MergeState
@@ -12,7 +12,7 @@ from atm_bd_console.result import Err, NotFound, Ok
 
 
 def git(cwd: Path, *args: str) -> str:
-    return subprocess.run(("git", *args), cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    return run_process("git source fixture", ("git", *args), cwd=cwd).stdout.strip()
 
 
 def commit(repo: Path, message: str, **files: str) -> str:
