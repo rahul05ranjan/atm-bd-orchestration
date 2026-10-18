@@ -24,14 +24,17 @@ flowchart LR
 Tracked `.atm-bd/<phase>.toml` names the plan file, the phase root and the
 integration branch; `validate-plan` checks that the integration branch equals
 the root's `metadata.integration_branch`.
-Work is assigned with `atm task assign <member> --task-id <bead id>`; the lead
-picks the agent at dispatch.
+Work is assigned with `atm task assign <member> --task-id <bead id>`. The
+lead picks the dev for a dev or fix bead; sanity and qa beads are assigned as
+the lead by the close hook (`atm-task-close.py`, [requirements/task-close-hook.md](../requirements/task-close-hook.md))
+the moment the bead below them closes, so the ATM task id is always the bead
+id and a re-assignment after a sanity FAIL reopens the same task in place.
 
 | Bead | ATM task held by | Template |
 | --- | --- | --- |
-| dev | a dev, by `difficulty` | `dev-template.xml.j2` (`dev-fix.xml.j2` after a sanity FAIL) |
+| dev | a dev, by `difficulty`; the task stays open until sanity PASS | `dev-template.xml.j2` (`sanity-rejected.md.j2` after a sanity FAIL, same task) |
 | fix | a dev, by `difficulty` | `fix-assignment.xml.j2` |
-| sanity | dev-sanity | `dev-sanity-template.xml.j2` |
-| qa | quality-mgr | `qa-template.xml.j2` |
+| sanity | dev-sanity, assigned by the dev's close hook as the lead | `dev-sanity-template.xml.j2` |
+| qa | quality-mgr, assigned by the sanity close hook as the lead | `qa-template.xml.j2` |
 | important or minor finding | an idle dev, by priority | `fix-assignment.xml.j2` |
 | sprint container | none; the team lead closes it | none |

@@ -16,7 +16,7 @@ user's request.
 | --- | --- | --- |
 | [phase.md](phase.md) | phase | root, sprint containers, poured groups, cross-sprint edges, phase-wide beads, non-blocking findings |
 | [sprint.md](sprint.md) | sprint | the sprint group, fix groups per blocking finding, a second fix round, sanity FAIL, closers |
-| [lifecycle.md](lifecycle.md) | sprint | ready, claim and close order; where results and logs are written |
+| [lifecycle.md](lifecycle.md) | sprint | ready, claim and close order through the close hook; the dev task open until sanity PASS; where results and logs are written |
 | [correlation.md](correlation.md) | phase | bead id equals ATM task id, `.atm-bd/<phase>.toml`, who holds each task |
 | [formula.md](formula.md) | detail | pour stages, formula location and override, the beads and edges each formula pours, idempotent attach |
 

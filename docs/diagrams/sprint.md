@@ -9,9 +9,9 @@ is open.
 
 | Bead | Closed by | When |
 | --- | --- | --- |
-| dev, fix | the dev | the work is committed |
-| sanity | dev-sanity | PASS only. On FAIL it reopens the dev or fix bead and leaves sanity open; the `blocks` edge re-blocks sanity |
-| qa | quality-mgr | after it has poured a fix group for each blocking finding and created the important and minor finding beads |
+| dev, fix | the close hook (`atm-task-close.py --role dev|fix`) run by the dev | the PR is open on `pr_target` and the pushed head is its head; the hook writes `commit`, `pr_number`, `pr_url` to the bead, closes it, reports to the lead and assigns sanity as the lead. The dev's ATM task stays open until sanity passes |
+| sanity | the close hook (`--role sanity`) run by dev-sanity | PASS only: the hook closes the dev's task and sanity's, and assigns qa as the lead. On FAIL it bumps `sanity_round`, reopens the dev or fix bead to its assignee, sends the dev `sanity-rejected` and leaves sanity open; the `blocks` edge re-blocks sanity. At `max_sanity_rounds` (default 5) it escalates to the lead instead |
+| qa | the close hook (`--role qa`) run by quality-mgr | after it has poured a fix group for each blocking finding and created the important and minor finding beads |
 | sprint | the team lead | every blocking fix group is closed |
 
 ## The sprint group
@@ -135,24 +135,27 @@ flowchart TB
   classDef script fill:#e6f4ea,stroke:#188038,color:#000
 
   SPR["p-x-2 sprint container<br/>cannot close: dev is open"]:::tmpl
-  DEV["p-x-2.group-dev<br/>reopened by dev-sanity"]:::poured
-  SAN["p-x-2.group-sanity: gate<br/>left open, re-blocked by dev"]:::poured
-  SF1["deliverable-2 NOT complete<br/>sanity-create-findings"]:::script
-  SF2["deliverable-5 NOT complete"]:::script
+  DEV["p-x-2.group-dev<br/>reopened to its assignee by the close hook"]:::poured
+  SAN["p-x-2.group-sanity: gate<br/>left open, sanity_round + 1, re-blocked by dev"]:::poured
+  MSG["atm send dev --template sanity-rejected<br/>deliverable-2 NOT complete, deliverable-5 NOT complete"]:::script
 
   DEV ==>|parent-child| SPR
   SAN ==>|parent-child| SPR
   SAN ==>|blocks| DEV
-  SF1 -->|parent-child| DEV
-  SF2 -->|parent-child| DEV
+  SAN -.->|hook sends| MSG
 ```
 
-The sanity bead is a minimal gate with no `discovered-from` edge. On FAIL
-dev-sanity files one child finding per undone deliverable under the checked
-bead, reopens it, and leaves sanity open. The open children hold the dev bead
-open, and the dev bead holds the sprint open. The dev fixes them for
-the reopened bead on a new layer cut from the stack's top (`dev-fix.xml.j2`). The same applies to a fix bead and its
-sanity.
+The sanity bead is a minimal gate with no `discovered-from` edge. On FAIL the
+sanity close hook reopens the checked bead to its assignee, increments
+`metadata.sanity_round` on the sanity bead, and sends the dev the
+`sanity-rejected` message naming each undone deliverable and its reason; no
+finding children are created, the message and the sanity ledger are the
+record. The dev bead holds the sprint open. The dev's ATM task was never
+closed, so the dev fixes the undone deliverables on the same branch and
+runs the dev close hook again; the hook re-assigns the same sanity task
+(reopened in place). At `max_sanity_rounds` (repo config, default 5) the hook
+reopens nothing and sends the lead `SANITY.ROUND_CAP`. The same applies to a
+fix bead and its sanity.
 
 dev-sanity is one teammate (`agents/dev-sanity.md`) that spawns
 `sc-sanity-llm` and `sc-sanity-jev`, owns the verdict, reruns a failed
