@@ -8,6 +8,7 @@ import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
+from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
 from atm_bd_console.types import AgentView, GhStatus, Merge, PrRow, PullRequest, Snapshot
@@ -92,3 +93,34 @@ def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
     glyph_styles = {rendered.plain[span.start:span.end]: str(span.style) for span in rendered.spans}
     assert glyph_styles["\U000f04c2 "] == "#2D81E0" and glyph_styles["\U000f062d "] == "#8957E5"
     assert glyph_styles["\U000f073a "] == "#F85149" and glyph_styles["\U000f0cb6 "] == "#FFA60D"
+
+
+def test_pr_list_pins_passing_failing_running_merged_and_closed_rows() -> None:
+    base = snapshot()
+    cases = (
+        ("open", "success"),
+        ("open", "failure"),
+        ("open", "pending"),
+        ("merged", "success"),
+        ("closed", "success"),
+    )
+    rows = tuple(
+        replace(
+            base.prs[0],
+            pr=replace(base.prs[0].pr, number=20 + index, state=state, ci=ci),
+            top=False,
+            merge=None,
+        )
+        for index, (state, ci) in enumerate(cases)
+    )
+    lines = render_prs(replace(base, prs=rows), 120, include_history=True).split("\n")
+
+    assert len(lines) == len(cases)
+    for line, (state, ci) in zip(lines, cases, strict=True):
+        pr_glyph, pr_color = PR_STATE_ICONS[state]
+        ci_glyph, ci_color = CI_STATE_ICONS[ci]
+        assert f"{pr_glyph} " in line.plain
+        assert f"CI {ci_glyph}" in line.plain
+        segments = tuple((line.plain[span.start:span.end], str(span.style)) for span in line.spans)
+        assert (f"{pr_glyph} ", pr_color) in segments
+        assert any(f"CI {ci_glyph}" in segment and style == ci_color for segment, style in segments)

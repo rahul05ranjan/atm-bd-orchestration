@@ -82,7 +82,26 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
         "proposed": ("\U000f06e8", "#FFB726"),
         "ready": ("\U000f040d", "#0077FF"),
     }
-    assert SPRINT_STATE_ICONS["not_ready"] == ("\U000f137c", "#D97757")
-    assert PR_STATE_ICONS["draft"] == ("\U000f0cb6", "#FFA60D")
-    assert CI_STATE_ICONS["none"] == ("\U000f01d8", "#2D81E0")
-    assert MERGE_STATE_ICONS["conflict"] == ("\U000f062d", "#F85149")
+    assert SPRINT_STATE_ICONS == {
+        "closed": ("\U000f05e0", "#2DE057"),
+        "in_progress": ("\U000f051f", "#0077FF"),
+        "ready": ("\U000f040d", "#0077FF"),
+        "not_ready": ("\U000f137c", "#D97757"),
+    }
+    assert PR_STATE_ICONS == {
+        "open": ("\U000f04c2", "#2D81E0"),
+        "draft": ("\U000f0cb6", "#FFA60D"),
+        "merged": ("\U000f062d", "#8957E5"),
+        "closed": ("\U000f073a", "#F85149"),
+    }
+    assert CI_STATE_ICONS == {
+        "success": ("\U000f062c", "#2EA043"),
+        "failure": ("\U000f062c", "#F85149"),
+        "pending": ("\U000f0898", "#58A6FF"),
+        "none": ("\U000f01d8", "#2D81E0"),
+    }
+    assert MERGE_STATE_ICONS == {
+        "clean": ("\U000f062d", "#2EA043"),
+        "conflict": ("\U000f062d", "#F85149"),
+        "error": ("\U000f062d", "#F85149"),
+    }
