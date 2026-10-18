@@ -1,6 +1,7 @@
 """Guard the release workflow's same-run artifact and approval contract."""
 
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -16,6 +17,14 @@ import yaml
 from process_helpers import run_process
 
 WORKFLOW = Path(__file__).resolve().parents[3] / ".github/workflows/publish.yml"
+VERIFY_SCRIPT = WORKFLOW.parents[1] / "scripts/verify_testpypi.py"
+
+
+def _verifier():
+    spec = importlib.util.spec_from_file_location("verify_testpypi", VERIFY_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _workflow():
@@ -46,7 +55,7 @@ def test_release_jobs_share_one_build_artifact_and_run():
     assert "--check-url https://test.pypi.org/simple/" in rehearsal_script
     assert '"$RUNNER_TEMP"/rehearsed-dist/*' in rehearsal_script
     assert '"$RUNNER_TEMP"/dist/*' in production_script
-    assert "hashlib.sha256" in rehearsal_script and "== uploaded" in rehearsal_script
+    assert 'python3 .github/scripts/verify_testpypi.py "$RUNNER_TEMP/rehearsed-dist" "$version"' in rehearsal_script
     assert "hashlib.sha256" in production_script and "== rehearsed" in production_script
     assert "bundled @ $GITHUB_SHA (atm-bd $version)" in rehearsal_script
 
@@ -134,3 +143,70 @@ def test_production_checks_exact_version_after_verifying_rehearsed_files(tmp_pat
         with pytest.raises((AssertionError, SystemExit)):
             exec(code, {})  # noqa: S102
     assert seen == ["https://test.pypi.org/pypi/atm-bd/1.2.3/json", "https://pypi.org/pypi/atm-bd/1.2.3/json"]
+
+
+class _RegistryResponse(io.BytesIO):
+    status = 200
+
+
+def test_rehearsal_waits_for_json_and_install_index_without_real_sleep(tmp_path):
+    verifier = _verifier()
+    files = [tmp_path / "atm_bd-0.17.2-py3-none-any.whl", tmp_path / "atm_bd-0.17.2.tar.gz"]
+    for file in files:
+        file.write_bytes(file.name.encode())
+    published = {"urls": [{"filename": file.name, "digests": {"sha256": hashlib.sha256(file.read_bytes()).hexdigest()}} for file in files]}
+    index = "".join(f'<a href="https://files.example/{file.name}#sha256=abc">file</a>' for file in files).encode()
+    outcomes = iter([404, json.dumps(published).encode(), b"<html></html>", index])
+    requests = []
+    delays = []
+
+    def open_url(url, *, timeout):
+        requests.append((url, timeout))
+        result = next(outcomes)
+        if result == 404:
+            raise urllib.error.HTTPError(url, 404, "not yet visible", {}, None)
+        return _RegistryResponse(result)
+
+    verifier.verify(tmp_path, "0.17.2", open_url=open_url, sleep=delays.append)
+    assert requests == [
+        ("https://test.pypi.org/pypi/atm-bd/0.17.2/json", 10),
+        ("https://test.pypi.org/pypi/atm-bd/0.17.2/json", 10),
+        ("https://test.pypi.org/simple/atm-bd/", 10),
+        ("https://test.pypi.org/simple/atm-bd/", 10),
+    ]
+    assert delays == [5, 5]
+
+
+def test_rehearsal_wait_exhausts_and_reports_last_http_status():
+    verifier = _verifier()
+    attempts = []
+    delays = []
+
+    def open_url(url, *, timeout):
+        attempts.append((url, timeout))
+        raise urllib.error.HTTPError(url, 404, "not visible", {}, None)
+
+    with pytest.raises(RuntimeError, match="last HTTP status 404"):
+        verifier.wait_for("https://test.pypi.org/example", lambda _: True, open_url=open_url, sleep=delays.append)
+    assert len(attempts) == verifier.ATTEMPTS == 12
+    assert delays == [5] * 11
+
+
+def test_rehearsal_wait_exhausts_when_simple_index_is_stale():
+    verifier = _verifier()
+    delays = []
+    with pytest.raises(RuntimeError, match="last HTTP status 200"):
+        verifier.wait_for("https://test.pypi.org/simple/atm-bd/", lambda _: False,
+                          open_url=lambda url, timeout: _RegistryResponse(b"<html></html>"), sleep=delays.append)
+    assert delays == [5] * 11
+
+
+def test_rehearsal_rejects_mismatched_hash_without_retrying(tmp_path):
+    verifier = _verifier()
+    for name in ("atm_bd-0.17.2-py3-none-any.whl", "atm_bd-0.17.2.tar.gz"):
+        (tmp_path / name).write_bytes(b"actual")
+    response = json.dumps({"urls": [{"filename": f.name, "digests": {"sha256": "incorrect"}} for f in tmp_path.iterdir()]}).encode()
+    delays = []
+    with pytest.raises(AssertionError, match="SHA-256"):
+        verifier.verify(tmp_path, "0.17.2", open_url=lambda url, timeout: _RegistryResponse(response), sleep=delays.append)
+    assert delays == []
