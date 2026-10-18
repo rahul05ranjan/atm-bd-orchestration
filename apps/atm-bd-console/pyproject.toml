@@ -16,7 +16,7 @@ Issues = "https://github.com/randlee/atm-bd-orchestration/issues"
 atm-bd = "atm_bd_console.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "ruff", "pyright"]
+dev = ["pytest", "ruff", "pyright", "hatchling"]
 
 [build-system]
 requires = ["hatchling"]
