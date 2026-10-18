@@ -354,7 +354,8 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
         assert output[0]["kind"] == "error" and "inspect the console log directory" in output[0]["text"]
 
 
-def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("outcome", [None, "", "sent", "dry_run", "failed command_failed"])
+def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys, outcome) -> None:
     class Lock:
         def __enter__(self): return self
         def __exit__(self, *_): return None
@@ -365,11 +366,11 @@ def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
-    failed_action = replace(ACTION, outcome="failed command_failed")
-    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped=None, errors=(), sent=(failed_action,)), INITIAL_STATE, (failed_action,)))
+    reported_action = replace(ACTION, outcome=outcome)
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped=None, errors=(), sent=(reported_action,)), INITIAL_STATE, (reported_action,)))
 
     assert cli.main(["cron", "--phase", "bh"]) == 0
-    assert json.loads(capsys.readouterr().out)["outcome"] == "failed command_failed"
+    assert json.loads(capsys.readouterr().out)["outcome"] == outcome
 
 
 @pytest.mark.parametrize("count", (0, 3, 6))

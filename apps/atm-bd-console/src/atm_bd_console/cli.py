@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "cron" and snapshot.stopped is None:
             for action in result.reported:
-                print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))
+                print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome}))
         if args.command == "cron":
             for error in snapshot.errors:
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(error)}"}))
