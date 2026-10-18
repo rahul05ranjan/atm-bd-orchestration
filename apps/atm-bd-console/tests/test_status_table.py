@@ -10,7 +10,7 @@ from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
 from atm_bd_console.result import Ok
 from atm_bd_console.runner import _durable_state
-from atm_bd_console.status_table import markdown, rich_table, rows
+from atm_bd_console.status_table import CI, PR, STATE, markdown, rich_table, rows
 from atm_bd_console.types import INITIAL_STATE
 
 NOW = datetime(2026, 10, 17, tzinfo=UTC)
@@ -33,6 +33,22 @@ def test_rows_use_active_tasks_order_and_ignore_queued():
     snapshot = replace(snapshot, task_data=(*snapshot.task_data, earlier, queued),
                        member_data=(*snapshot.member_data, other))
     assert rows(snapshot)[0].state == (AgentIcon.OPUS, AgentIcon.TERRA)
+
+
+def test_producer_lists_cover_every_enum_member_and_absent_data():
+    facts = replace(sprint_facts(_snapshot())[0], active=(), last_qa=None)
+    for state in SprintState:
+        current = replace(facts, status=state)
+        assert next(value for producer in STATE if (value := producer(current))) == (state,)
+    for state in CiState:
+        current = replace(facts, ci=CiFacts(state))
+        assert next(value for producer in CI if (value := producer(current)) is not None) is state
+    for state in PrState:
+        current = replace(facts, pr=PrFacts(state, None))
+        assert next(value for producer in PR if (value := producer(current)) is not None) is state
+    missing = replace(facts, ci=None, pr=None)
+    assert next(value for producer in CI if (value := producer(missing)) is not None) is CiState.NONE
+    assert next(value for producer in PR if (value := producer(missing)) is not None) is PrState.NONE
 
 
 def test_child_task_inherits_qa_step_role_through_parent_chain():

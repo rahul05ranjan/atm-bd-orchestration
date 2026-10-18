@@ -30,22 +30,91 @@ def _agents(facts: SprintFacts) -> StateCell:
 
 
 def _qa(facts: SprintFacts) -> StateCell:
-    return (facts.last_qa,) if facts.status == SprintState.IN_PROGRESS and facts.last_qa else ()
+    match facts.status:
+        case SprintState.IN_PROGRESS:
+            return (facts.last_qa,) if facts.last_qa else ()
+        case (
+            SprintState.OPEN
+            | SprintState.BLOCKED
+            | SprintState.DEFERRED
+            | SprintState.CLOSED
+            | SprintState.PINNED
+            | SprintState.HOOKED
+            | SprintState.ACCEPTED
+            | SprintState.PLANNED
+            | SprintState.PROPOSED
+            | SprintState.READY
+            | SprintState.NOT_READY
+            | SprintState.UNKNOWN
+        ):
+            return ()
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _sprint(facts: SprintFacts) -> StateCell:
-    return (facts.status,)
+    match facts.status:
+        case (
+            SprintState.OPEN
+            | SprintState.IN_PROGRESS
+            | SprintState.BLOCKED
+            | SprintState.DEFERRED
+            | SprintState.CLOSED
+            | SprintState.PINNED
+            | SprintState.HOOKED
+            | SprintState.ACCEPTED
+            | SprintState.PLANNED
+            | SprintState.PROPOSED
+            | SprintState.READY
+            | SprintState.NOT_READY
+            | SprintState.UNKNOWN
+        ):
+            return (facts.status,)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 STATE: tuple[Callable[[SprintFacts], StateCell], ...] = (_agents, _qa, _sprint)
 
 
 def _ci_unknown(facts: SprintFacts) -> CiState | None:
-    return CiState.UNKNOWN if facts.ci and facts.ci.status == CiState.UNKNOWN else None
+    if facts.ci is None:
+        return None
+    match facts.ci.status:
+        case CiState.UNKNOWN:
+            return CiState.UNKNOWN
+        case (
+            CiState.NONE
+            | CiState.RUNNING
+            | CiState.PASS
+            | CiState.FAIL_MACOS
+            | CiState.FAIL_WINDOWS
+            | CiState.FAIL_LINUX
+            | CiState.FAIL_BUG
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _ci_none(facts: SprintFacts) -> CiState | None:
-    return CiState.NONE if facts.ci is None or facts.ci.status == CiState.NONE else None
+    if facts.ci is None:
+        return CiState.NONE
+    match facts.ci.status:
+        case CiState.NONE:
+            return CiState.NONE
+        case (
+            CiState.RUNNING
+            | CiState.PASS
+            | CiState.FAIL_MACOS
+            | CiState.FAIL_WINDOWS
+            | CiState.FAIL_LINUX
+            | CiState.FAIL_BUG
+            | CiState.UNKNOWN
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _ci_platform(facts: SprintFacts) -> CiState | None:
@@ -65,15 +134,63 @@ def _ci_platform(facts: SprintFacts) -> CiState | None:
 
 
 def _ci_bug(facts: SprintFacts) -> CiState | None:
-    return CiState.FAIL_BUG if facts.ci and facts.ci.status == CiState.FAIL_BUG else None
+    if facts.ci is None:
+        return None
+    match facts.ci.status:
+        case CiState.FAIL_BUG:
+            return CiState.FAIL_BUG
+        case (
+            CiState.NONE
+            | CiState.RUNNING
+            | CiState.PASS
+            | CiState.FAIL_MACOS
+            | CiState.FAIL_WINDOWS
+            | CiState.FAIL_LINUX
+            | CiState.UNKNOWN
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _ci_running(facts: SprintFacts) -> CiState | None:
-    return CiState.RUNNING if facts.ci and facts.ci.status == CiState.RUNNING else None
+    if facts.ci is None:
+        return None
+    match facts.ci.status:
+        case CiState.RUNNING:
+            return CiState.RUNNING
+        case (
+            CiState.NONE
+            | CiState.PASS
+            | CiState.FAIL_MACOS
+            | CiState.FAIL_WINDOWS
+            | CiState.FAIL_LINUX
+            | CiState.FAIL_BUG
+            | CiState.UNKNOWN
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _ci_pass(facts: SprintFacts) -> CiState | None:
-    return CiState.PASS if facts.ci and facts.ci.status == CiState.PASS else None
+    if facts.ci is None:
+        return None
+    match facts.ci.status:
+        case CiState.PASS:
+            return CiState.PASS
+        case (
+            CiState.NONE
+            | CiState.RUNNING
+            | CiState.FAIL_MACOS
+            | CiState.FAIL_WINDOWS
+            | CiState.FAIL_LINUX
+            | CiState.FAIL_BUG
+            | CiState.UNKNOWN
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 CI: tuple[Callable[[SprintFacts], CiState | None], ...] = (
@@ -82,7 +199,22 @@ CI: tuple[Callable[[SprintFacts], CiState | None], ...] = (
 
 
 def _pr_unknown(facts: SprintFacts) -> PrState | None:
-    return PrState.UNKNOWN if facts.pr and facts.pr.state == PrState.UNKNOWN else None
+    if facts.pr is None:
+        return None
+    match facts.pr.state:
+        case PrState.UNKNOWN:
+            return PrState.UNKNOWN
+        case (
+            PrState.NONE
+            | PrState.OPEN
+            | PrState.DRAFT
+            | PrState.MERGED
+            | PrState.CLOSED
+            | PrState.CONFLICT
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _pr_none(facts: SprintFacts) -> PrState | None:
@@ -90,11 +222,40 @@ def _pr_none(facts: SprintFacts) -> PrState | None:
 
 
 def _pr_conflict(facts: SprintFacts) -> PrState | None:
-    return PrState.CONFLICT if facts.pr and facts.pr.state == PrState.CONFLICT else None
+    if facts.pr is None:
+        return None
+    match facts.pr.state:
+        case PrState.CONFLICT:
+            return PrState.CONFLICT
+        case (
+            PrState.NONE
+            | PrState.OPEN
+            | PrState.DRAFT
+            | PrState.MERGED
+            | PrState.CLOSED
+            | PrState.UNKNOWN
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _pr_state(facts: SprintFacts) -> PrState | None:
-    return facts.pr.state if facts.pr else None
+    if facts.pr is None:
+        return None
+    match facts.pr.state:
+        case (
+            PrState.NONE
+            | PrState.OPEN
+            | PrState.DRAFT
+            | PrState.MERGED
+            | PrState.CLOSED
+            | PrState.CONFLICT
+            | PrState.UNKNOWN
+        ):
+            return facts.pr.state
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 PR: tuple[Callable[[SprintFacts], PrState | None], ...] = (_pr_unknown, _pr_none, _pr_conflict, _pr_state)

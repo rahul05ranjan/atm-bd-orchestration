@@ -76,15 +76,17 @@ MARKER_FIX_QA = "🛠️"
 
 
 def icon(member: AgentIcon | SprintState | CiState | PrState) -> Icon:
-    if type(member) is AgentIcon:
-        return AGENT_ICONS[member]
-    if type(member) is SprintState:
-        return SPRINT_ICONS[member]
-    if type(member) is CiState:
-        return CI_ICONS[member]
-    if type(member) is PrState:
-        return PR_ICONS[member]
-    raise TypeError(f"unsupported icon: {member!r}")
+    match member:
+        case AgentIcon():
+            return AGENT_ICONS[member]
+        case SprintState():
+            return SPRINT_ICONS[member]
+        case CiState():
+            return CI_ICONS[member]
+        case PrState():
+            return PR_ICONS[member]
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def merge_icon(state: MergeState) -> Icon:
