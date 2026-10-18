@@ -122,6 +122,10 @@ def main(argv: list[str] | None = None) -> int:
             for action in result.reported:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome}))
         if args.command == "cron":
+            if snapshot.gh.mode != "off":
+                print(json.dumps({"at": snapshot.generated_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                  "kind": "status", "text": render.github_quotas(snapshot.gh, snapshot.generated_at)},
+                                 ensure_ascii=False))
             for error in snapshot.errors:
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(error)}"}))
         return 0
