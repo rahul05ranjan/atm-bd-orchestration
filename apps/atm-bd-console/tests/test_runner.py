@@ -659,6 +659,42 @@ def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
     assert reported == (replace(ACTION, outcome="failed command_failed"),)
 
 
+@pytest.mark.parametrize(("sender", "sender_team"), (("atm-bd", "tool"), ("robot", "tooling")))
+@pytest.mark.parametrize("delivery_fails", (False, True))
+def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_runtime, fake_bin, monkeypatch,
+                                                                     sender, sender_team, delivery_fails):
+    store, _, _, _ = github_runtime
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, assignee=None, branch=None,
+                        worktree=None, anchor=False, quick_fix=False)
+    phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
+    monkeypatch.setattr(runner.model, "tick", model_tick)
+    fake_bin.make("atm", f'if [ "$1" = send ]; then test "$ATM_IDENTITY" = "{sender}" || exit 23; '
+                  + ('printf "delivery rejected" >&2; exit 3; ' if delivery_fails else 'cat >/dev/null; ')
+                  + 'else test "$ATM_IDENTITY" = fenix || exit 23; fi\n')
+    config = replace(CONFIG, dry_run=False, notification_sender=f"{sender}@{sender_team}")
+
+    snapshot, _ = runner.step(config, INITIAL_STATE, False, store)
+
+    assert any(problem.to == "fenix" and problem.text == "missing branch configuration" for problem in snapshot.problems)
+    calls = fake_bin.argv()
+    sends = [argv for argv in calls if argv[1] == "send"]
+    assert sends == [("atm", "send", "fenix@atm-dev", "--as", sender, "--team", sender_team, "--stdin")]
+    assert all(f"{argv[argv.index('--as') + 1]}@{argv[argv.index('--team') + 1]}" != argv[2] for argv in sends)
+    assert snapshot.sent[-1].outcome == ("failed command_failed" if delivery_fails else "sent")
+    if delivery_fails:
+        assert any(getattr(error, "stderr", "") == "delivery rejected" for error in snapshot.errors)
+
+    assignment = replace(ACTION, outcome=None)
+    reported, errors = runner._run_actions(config, (assignment,), store, ACTION.at,
+                                           TickLog(runner.create_console_logger(config.repo_root)))
+    assert errors == () and reported[0].outcome == "sent"
+    argv = fake_bin.argv()[-1]
+    assert argv[1:5] == ("task", "assign", "quality-mgr", "--as")
+    assert argv[5:8] == ("fenix", "--team", "atm-dev")
+    assert argv[3] != argv[5]
+
+
 @pytest.mark.parametrize("failure", ("construction", "tick_start", "read", "github_read", "action", "tick_end", "flush"))
 @pytest.mark.parametrize("delivery_fails", (False, True))
 def test_logging_failure_is_persisted_without_changing_delivery(github_runtime, monkeypatch, failure, delivery_fails):

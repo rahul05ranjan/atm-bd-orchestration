@@ -255,7 +255,7 @@ def test_collision_sends_once_across_three_ticks_and_once_on_join(monkeypatch):
         assert errors == ()
         state = _durable_state(state, proposed, notices, reported)
     assert len(sent) == 2
-    assert all(call[0] == inputs.lead for call in sent)
+    assert all(call[0] == f"{inputs.lead}@{CONFIG.team}" and call[2:] == ("atm-bd", "tool") for call in sent)
     assert all(SPRINT.id in call[1] and STEP.worktree in call[1] and "arch-ctm" in call[1] and "other" in call[1]
                for call in sent)
     assert "third" in sent[1][1]

@@ -12,6 +12,10 @@ The positional field order in `types.py` is part of the current contract:
 `Inputs.interval_s` is always `Config.interval_s`; the bh-9 runner builds
 `Inputs` from `Config`. Do not add other `Config` mirrors to `Inputs`.
 
+`Config.notification_sender` is the validated `member@team` sender for plain
+notifications, defaulting to `atm-bd@tool`. It is appended with a default so
+existing callers remain compatible; assignment identity remains `Config.lead`.
+
 `RepoConfig.reviewers_round1` is part of the `RepoConfig` declaration in that
 design and remains in its listed position before `plans_dir`.
 

@@ -44,7 +44,7 @@ FIELDS: dict[str, str] = {
     "GhStatus": "mode ok error at truncated",
     "RepoConfig": "bead_prefix sanity_member qa_member primary_checkout worktree_base lint_command policy_path "
                   "reviewers_round1 plans_dir",
-    "Config": "phase lead team github interval_s dry_run no_fetch repo_root state_dir",
+    "Config": "phase lead team github interval_s dry_run no_fetch repo_root state_dir notification_sender",
     "DispatchContext": "step sprint phase_id phase_title lead commit base worktree_path pr layer_prs repo",
     "Inputs": "now lead repo interval_s phase members tasks worktrees remotes merges prs gh task_beads",
     "Row": "task_id state kind difficulty tag marker age_s description",

@@ -185,6 +185,7 @@ class Config:
     no_fetch: bool
     repo_root: str
     state_dir: str
+    notification_sender: str = "atm-bd@tool"
 
 
 @dataclass(frozen=True)

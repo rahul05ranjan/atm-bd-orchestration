@@ -11,10 +11,9 @@ from .enums import SprintState
 from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Unreachable
 from .types import DispatchSpec, Member, Task
 
-# Team and identity resolution: every command passes `--team` from Config.team and runs as
-# Config.lead (`ATM_IDENTITY` in the subprocess environment, `--as` where the subcommand takes
-# it), so no command reads either from the launching shell. `atm members` has no `--as`, and
-# a shell without `ATM_IDENTITY` made every roster read fail with "identity is not configured".
+# The caller supplies the identity and team for each command. The subprocess environment
+# and --as agree; the runner uses the lead for reads/assignments and the notification sender
+# for plain sends. `atm members` has no --as and still needs ATM_IDENTITY in its environment.
 TIMEOUT_S = 20
 TASK_KEYS = frozenset({"task_id", "assignee", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})

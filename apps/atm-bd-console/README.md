@@ -78,6 +78,13 @@ The console automatically assigns ready sanity and QA work using
 purposes support orchestration workflows and do not enable additional console
 dispatch kinds.
 
+Plain notifications use `atm-bd@tool` by default, independently of the lead
+used for assignments. Set `notification_sender = "member@team"` in the
+`[console]` table of `.atm-bd/console.toml` to use a different sender. ATM
+must already have the sender's team and member provisioned; automatic creation
+of the default tool identity depends on atm-core issue #1870. Failed sends
+remain visible in snapshot errors and cron error lines.
+
 ## Dispatch verification
 
 Ready sanity and QA assignments require a successful merge check for their
