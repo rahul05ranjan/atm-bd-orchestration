@@ -28,7 +28,7 @@ from contract_samples import (
 
 from atm_bd_console import log, runner
 from atm_bd_console.enums import QaState, SprintState
-from atm_bd_console.log import TickLog
+from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
@@ -129,8 +129,6 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def tick(value, state, _now, _spec):
         inputs.append(value)
         errors = [value.prs.error] if isinstance(value.prs, Err) else []
-        if value.gh.error is not None and value.gh.error not in errors:
-            errors.append(value.gh.error)
         return replace(SNAPSHOT, gh=value.gh, errors=tuple(errors)), (), state
 
     monkeypatch.setattr(runner.model, "tick", tick)
@@ -185,7 +183,8 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     assert snapshot.agents == SNAPSHOT.agents
     assert [row.pr.number for row in snapshot.prs] == [PRS_FILE.prs[0].number]
     assert [(action.text, action.outcome) for action in snapshot.sent] == [("QA completed", "recorded")]
-    assert snapshot.errors == (PRS_FILE.gh.error,)
+    assert snapshot.errors == ()
+    assert snapshot.gh.error == PRS_FILE.gh.error
 
 
 def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch) -> None:
@@ -586,10 +585,14 @@ def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> Non
     assert [event for event in events if event[0] == "github_read"] == [
         ("github_read", {"forced": True, "outcome": "failed", "error": asdict(TIMEOUT)})
     ]
+    error_events = [fields for action, fields in events if action == "error"]
+    assert len(error_events) == 1
+    assert error_events[0]["level"] == "error"
+    assert error_events[0]["message"] == "`retry the bd read` bd ready --json timeout after 20s"
 
 
 def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkeypatch) -> None:
-    store, _, _, inputs = github_runtime
+    store, _, events, inputs = github_runtime
     writes = []
     cached = replace(PRS_FILE, read_at=EARLIER)
     monkeypatch.setattr(store, "load_prs", lambda: Ok(cached))
@@ -658,6 +661,8 @@ def test_paused_refresh_preserves_cached_availability_and_read_time(monkeypatch)
     result, status = runner._refresh_github(replace(CONFIG, github="graphql"), NOW, cached)
     assert isinstance(result, Err)
     assert status.paused and status.ok is True and status.error is None and status.at == EARLIER
+    error_events = [fields for action, fields in events if action == "error"]
+    assert len(error_events) == 1 and error_events[0]["error"] == asdict(TIMEOUT)
 
 
 def test_github_off_skips_forced_read_and_event(github_runtime) -> None:
@@ -868,6 +873,8 @@ def test_every_effect_outcome_has_recipient_task_and_error_context(github_runtim
         assert fields == {
             "effect": kind, "recipient": action.to, "task_ids": list(action.bead_ids),
             "outcome": outcome, "error": asdict(COMMAND_FAILED) if outcome.startswith("failed") else None,
+            "level": "error" if outcome.startswith("failed") else "info",
+            "message": error_message(asdict(COMMAND_FAILED)) if outcome.startswith("failed") else None,
         }
     assert all(action.outcome == outcome for action in snapshot.sent)
     assert result.reported == tuple(replace(action, outcome=outcome) for action in actions)
@@ -907,7 +914,8 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
 
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
-    assert ("read", {"source": "git.fetch", "outcome": "failed", "error": asdict(TIMEOUT)}) in events
+    assert ("read", {"source": "git.fetch", "outcome": "failed", "error": asdict(TIMEOUT),
+                     "level": "error", "message": error_message(asdict(TIMEOUT))}) in events
     assert not any(fields.get("source") == "git.merge" for _, fields in events)
 
     monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
@@ -915,6 +923,7 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
     assert ("read", {"source": "git.merge", "outcome": "failed", "error": asdict(COMMAND_FAILED),
+                     "level": "error", "message": error_message(asdict(COMMAND_FAILED)),
                      "branch": "topic", "target": "base"}) in events
 
 
@@ -929,6 +938,7 @@ def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch
     runner.step(CONFIG, RUNNING_STATE, False, store)
 
     assert ("read", {"source": "atm.members", "outcome": "failed", "error": asdict(TIMEOUT),
+                     "level": "error", "message": error_message(asdict(TIMEOUT)),
                      "team": CONFIG.team}) in events
     assert ("hold", {"task_ids": [held.bead_id], "recipient": held_step.assignee or CONFIG.lead,
                      "outcome": "held", "reason": held.reason}) in events
@@ -1030,7 +1040,11 @@ def test_snapshot_write_failure_is_logged_and_flushed_once(github_runtime, monke
 
     assert len(writes) == 1
     assert [action for action, _ in events].count("tick_end") == 1
-    assert events[-1] == ("error", {"source": "snapshot.write", "error": asdict(snapshot_error)})
+    assert events[-1] == ("error", {
+        "source": "snapshot.write", "level": "error",
+        "message": "`repair permissions` io_failed snapshot write failed",
+        "error": asdict(snapshot_error),
+    })
     assert flushes[-1] == len(events) and len(flushes) == 2
     assert snapshot.errors == (*writes[0].errors, snapshot_error, *((admission_error, flush_error) if logging_fails else ()))
 

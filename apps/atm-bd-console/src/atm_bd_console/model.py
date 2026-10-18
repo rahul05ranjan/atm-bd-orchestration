@@ -213,8 +213,6 @@ def _read_errors(inputs: Inputs) -> list[Error]:
                inputs.task_beads)
     errors = [result.error for result in results if isinstance(result, Err)]
     errors.extend(result.error for result in inputs.merges or () if isinstance(result, Err))
-    if inputs.gh.error is not None and inputs.gh.error not in errors:
-        errors.append(inputs.gh.error)
     return errors
 
 
