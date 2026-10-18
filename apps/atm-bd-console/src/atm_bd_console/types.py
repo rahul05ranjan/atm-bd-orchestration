@@ -174,6 +174,9 @@ class RepoConfig:
     plans_dir: str
 
 
+DEFAULT_NOTIFICATION_SENDER = "atm-bd@tool"
+
+
 @dataclass(frozen=True)
 class Config:
     phase: str
@@ -185,6 +188,7 @@ class Config:
     no_fetch: bool
     repo_root: str
     state_dir: str
+    notification_sender: str = DEFAULT_NOTIFICATION_SENDER
 
 
 @dataclass(frozen=True)

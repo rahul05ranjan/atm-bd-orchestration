@@ -78,6 +78,15 @@ The console automatically assigns ready sanity and QA work using
 purposes support orchestration workflows and do not enable additional console
 dispatch kinds.
 
+Plain notifications use `atm-bd@tool` by default, independently of the lead
+used for assignments. The skill installer provisions the default tool identity.
+To use another sender, set `tool_identity: "member@team"` in
+`.claude/project/atm-bd-orchestration.yaml` and provision that identity in ATM.
+Environment variables and command-line flags do not select the sender; ATM
+subprocess identity and team are set from the selected sender. Failed sends
+remain visible in snapshot errors and cron error lines. Task assignments remain
+local to the lead's team (cross-team assignments are tracked by atm-core #1870).
+
 ## Dispatch verification
 
 Ready sanity and QA assignments require a successful merge check for their

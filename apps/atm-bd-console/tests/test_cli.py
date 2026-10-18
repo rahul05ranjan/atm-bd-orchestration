@@ -9,6 +9,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import HANG_GUARD_S, run_scenario
@@ -33,7 +34,7 @@ from rich.text import Text
 from atm_bd_console import app, cli, runner
 from atm_bd_console.build import identity
 from atm_bd_console.enums import MergeState, SprintState
-from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
+from atm_bd_console.result import CommandFailed, Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.status_table import markdown, rows
 from atm_bd_console.types import INITIAL_STATE, Due
@@ -99,6 +100,9 @@ def test_as_is_not_a_console_option(capsys) -> None:
         cli.main(["console", "--phase", "bh", "--as=fenix"])
     assert rejected.value.code == 2
     assert "unrecognized arguments: --as=fenix" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["cron", "--phase", "bh", "--team=other"])
+    assert "unrecognized arguments: --team=other" in capsys.readouterr().err
 
 
 def test_missing_phase_is_a_launch_check(capsys) -> None:
@@ -274,8 +278,63 @@ def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli, "_notification_startup_error", lambda _: None)
     monkeypatch.setattr("atm_bd_console.app.run", lambda config, step, state, startup_error, **_kwargs: 17)
     assert cli.main(["console", "--phase", "bh"]) == 17
+
+
+@pytest.mark.parametrize(
+    ("sender", "team", "response", "error_type"),
+    [
+        ("atm-bd", "tool", "printf \"team 'tool' was not found\" >&2; exit 3", NotFound),
+        ("atm-bd", "tool", "printf '{\"members\": []}'", NotFound),
+        ("atm-bd", "tool", "printf '{\"members\": [{\"name\": \"atm-bd\"}]}'", None),
+        ("robot", "ops", "printf '{\"members\": []}'", NotFound),
+        ("robot", "ops", "printf '{\"members\": [{\"name\": \"robot\"}]}'", None),
+        ("atm-bd", "tool", "printf 'daemon unavailable' >&2; exit 7", CommandFailed),
+    ],
+    ids=["team-absent", "member-absent", "default-present", "custom-absent", "custom-present", "lookup-failed"],
+)
+def test_console_checks_sender_at_startup(cli_runtime, fake_bin, monkeypatch, sender, team, response, error_type):
+    config = replace(cli_runtime, notification_sender=f"{sender}@{team}")
+    monkeypatch.setenv("ATM_IDENTITY", "unrelated")
+    monkeypatch.setenv("ATM_TEAM", "unrelated")
+    fake_bin.make("atm", f'test "$ATM_IDENTITY" = "{sender}" && test "$ATM_TEAM" = "{team}" || exit 90\n{response}\n')
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(config))
+    seen = []
+    monkeypatch.setattr(app, "run", lambda _config, _step, _state, startup_error, **_kwargs: seen.append(startup_error) or 0)
+
+    assert cli.main(["console", "--phase", "bh"]) == 0
+    assert fake_bin.argv() == [("atm", "members", "--team", team, "--json")]
+    error = seen[0]
+    if error_type is None:
+        assert error is None
+    else:
+        assert isinstance(error, error_type)
+        assert f"{sender}@{team}" in error.fix
+        assert f"atm teams add-member {team} {sender} --agent-type tool --model none" in error.fix
+        if isinstance(error, CommandFailed):
+            assert error.stderr == "daemon unavailable"
+            assert "could not verify" in error.fix
+
+
+def test_startup_error_is_in_the_dashboard_without_waiting_for_delivery(monkeypatch):
+    monkeypatch.setattr(cli.atm_source, "members", lambda *_: Ok(()))
+    error = cli._notification_startup_error(CONFIG)
+    assert isinstance(error, NotFound)
+    recorded = []
+    sprints = SimpleNamespace(highlighted=None, clear_options=lambda: None, add_options=lambda _options: None)
+    dummy = SimpleNamespace(
+        is_running=True, startup_error=error, query_one=lambda *_: sprints,
+        _record_error=lambda source, item: recorded.append((source, item)),
+        refresh_views=lambda: None, call_after_refresh=lambda _callback: None,
+    )
+
+    app.ConsoleApp._show(dummy, replace(SNAPSHOT, errors=(), sprints=()), "", None)
+
+    assert dummy.snapshot.errors == (error,)
+    assert recorded == [("source", error)]
+    assert "atm teams add-member tool atm-bd" in cli.render.dashboard(dummy.snapshot, 80, 80).plain
 
 
 @pytest.mark.parametrize("failure", ("config", "repo", "bd", "atm", "git"))
@@ -602,6 +661,7 @@ def test_interactive_launch_defers_state_loading_to_the_locked_app(monkeypatch) 
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
+    monkeypatch.setattr(cli, "_notification_startup_error", lambda _: None)
     monkeypatch.setattr(app, "run", lambda *args, **values: seen.append(args) or kwargs.append(values) or 0)
 
     assert cli.main(["console", "--phase", "bh"]) == 0
@@ -724,6 +784,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok((sanity,)))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok((sanity,)))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Err(TIMEOUT) if member_read_fails else Ok(()))
+    monkeypatch.setattr(cli, "_notification_startup_error", lambda _: None)
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: actions.append("assign") or Ok(None))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok((WORKTREE,)))

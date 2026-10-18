@@ -25,11 +25,42 @@ def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:
     _team_config(tmp_path)
     default = load_config(tmp_path, "bh")
     assert default == Ok(default.value.__class__("bh", "fenix", "atm-dev", "graphql", 60, False, False, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh")))
+    assert default.value.notification_sender == "atm-bd@tool"
     path = tmp_path / ".atm-bd"
     path.mkdir(exist_ok=True)
     (path / "console.toml").write_text("[console]\ngithub = 'rest'\ninterval = 90\n")
     loaded = load_config(tmp_path, "bh", github="off", interval_s=120, dry_run=True, no_fetch=True)
     assert loaded == Ok(loaded.value.__class__("bh", "fenix", "atm-dev", "off", 120, True, True, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh")))
+
+
+def test_notification_sender_only_uses_repo_yaml_not_environment_or_console_toml(tmp_path, monkeypatch) -> None:
+    _team_config(tmp_path)
+    path = tmp_path / ".atm-bd" / "console.toml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("[console]\nnotification_sender = 'wrong@source'\n")
+    monkeypatch.setenv("ATM_IDENTITY", "wrong")
+    monkeypatch.setenv("ATM_TEAM", "source")
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Ok) and result.value.notification_sender == "atm-bd@tool"
+    path = tmp_path / ".claude/project/atm-bd-orchestration.yaml"
+    path.write_text('tool_identity: "notify@automation" # repo override\n')
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Ok) and result.value.notification_sender == "notify@automation"
+
+    for invalid in ("notify", "@tool", "notify@", "notify@tool@other", "bad name@tool", "42"):
+        path.write_text(f"tool_identity: '{invalid}'\n")
+        result = load_config(tmp_path, "bh")
+        assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+        assert result.error.key == "tool_identity"
+
+
+def test_invalid_repository_yaml_is_a_typed_configuration_error(tmp_path) -> None:
+    _team_config(tmp_path)
+    path = tmp_path / ".claude/project/atm-bd-orchestration.yaml"
+    path.write_text("tool_identity: [\n")
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert result.error.key == str(path)
 
 
 def test_invalid_github_and_short_interval_name_key_value_and_fix(tmp_path) -> None:
