@@ -5,16 +5,17 @@ import argparse
 import json
 import shutil
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from . import atm_bd, render, runner, status_table
+from . import atm_bd, atm_source, render, runner, status_table
 from . import config as config_source
 from .build import identity
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
-from .result import Err, Error, IoFailed, Ok
+from .result import CommandFailed, Err, Error, IoFailed, NotFound, Ok
 from .state import acquire_lock, load_snapshot
-from .types import INITIAL_STATE
+from .types import INITIAL_STATE, Config
 
 
 def now() -> datetime:
@@ -25,6 +26,19 @@ def _error_text(error: Error) -> str:
     if isinstance(error, IoFailed):
         return f"{error.kind}: {error.path}: {error.message}: {error.fix}"
     return f"{error.kind}: {error.fix}"
+
+
+def _notification_startup_error(config: Config) -> Error | None:
+    sender, team = config.notification_sender.split("@", 1)
+    fix = f"run atm teams add-member {team} {sender} --agent-type tool --model none to provision {config.notification_sender}"
+    members = atm_source.members(team, sender)
+    if isinstance(members, Err):
+        if isinstance(members.error, CommandFailed) and f"team '{team}' was not found" in members.error.stderr:
+            return NotFound("not_found", config.notification_sender, fix)
+        return replace(members.error, fix=f"could not verify {config.notification_sender}; {fix}; {members.error.fix}")
+    if not any(member.name == sender for member in members.value):
+        return NotFound("not_found", config.notification_sender, fix)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -111,4 +125,4 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     from .app import run
 
-    return run(loaded.value, None, INITIAL_STATE, None, runner_step=runner.step)
+    return run(loaded.value, None, INITIAL_STATE, _notification_startup_error(loaded.value), runner_step=runner.step)
