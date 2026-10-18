@@ -11,10 +11,10 @@ _CLAUDE_MODELS: dict[str, Icon] = {
     "fable": ("\U000f0717", "#FF9F80"),
 }
 _CODEX_MODELS: dict[str, Icon] = {
-    "sol": ("\U000f05a8", "#FFA60D"),
-    "luna": ("\U000f0f65", "#FFE066"),
-    "terra": ("\U000f01e7", "#2DE057"),
     "astra": ("\U000f0674", "#FFE066"),
+    "terra": ("\U000f01e7", "#2DE057"),
+    "luna": ("\U000f0f65", "#FFE066"),
+    "sol": ("\U000f05a8", "#FFA60D"),
 }
 _QA_STYLES = {"running": "#4A5AF8", "pass": "#2EA043", "fail": "#F85149"}
 

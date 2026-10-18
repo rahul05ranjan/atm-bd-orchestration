@@ -21,6 +21,8 @@ def test_model_icons_are_case_insensitive_and_use_harness_fallbacks() -> None:
         (Member("a1", "active", None, "dev", "GPT-Luna", "codex-cli"), ("\U000f0f65", "#FFE066")),
         (Member("a", "active", None, "dev", "GPT-5.6-Terra", "codex-cli"), ("\U000f01e7", "#2DE057")),
         (Member("a2", "active", None, "dev", "Astra", "codex-cli"), ("\U000f0674", "#FFE066")),
+        (Member("a3", "active", None, "dev", "GPT-5.6-Terra-Resolve", "codex-cli"),
+         ("\U000f01e7", "#2DE057")),
         (Member("b0", "active", None, "dev", "Claude-Haiku", "claude-code"), ("\U000f0156", "#FF6533")),
         (Member("b1", "active", None, "dev", "Claude-Sonnet", "claude-code"), ("\U000f0382", "#FF784D")),
         (Member("b", "active", None, "dev", "Claude-Opus-5-5", "claude-code"), ("\U000f06c4", "#FF8C66")),
