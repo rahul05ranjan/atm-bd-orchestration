@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from rich.text import Text
 
-from .icons import CI_STATE_ICONS, MERGE_STATE_ICONS, PR_STATE_ICONS
+from .icons import CI_STATE_ICONS, MERGE_STATE_ICONS, PR_STATE_ICONS, ci_failure_key
 from .ids import short_id
 from .render import _fit, render_agent
 from .types import PrRow, PullRequest, Snapshot
@@ -35,7 +35,8 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
         glyph, style = CI_STATE_ICONS["none"]
         line.append(f"  CI {glyph}", style=style)
     else:
-        glyph, style = CI_STATE_ICONS[value.pr.ci]
+        key = ci_failure_key(value.pr.failed_checks) if value.pr.ci == "failure" else value.pr.ci
+        glyph, style = CI_STATE_ICONS[key]
         checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci == "failure" else ""
         line.append(f"  CI {glyph}{checks}", style=style)
     return line

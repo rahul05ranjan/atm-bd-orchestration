@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.icons import (
@@ -10,6 +11,7 @@ from atm_bd_console.icons import (
     MERGE_STATE_ICONS,
     PR_STATE_ICONS,
     SPRINT_STATE_ICONS,
+    ci_failure_key,
     icon_for,
 )
 from atm_bd_console.types import AgentView, Member
@@ -96,12 +98,34 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     }
     assert CI_STATE_ICONS == {
         "success": ("\U000f062c", "#2EA043"),
-        "failure": ("\U000f062c", "#F85149"),
+        "fail_macos": ("\U000f0035", "#F85149"),
+        "fail_windows": ("\U000f05b3", "#F85149"),
+        "fail_linux": ("\U000f033d", "#F85149"),
+        "fail_bug": ("\U000f00e4", "#F85149"),
         "pending": ("\U000f0898", "#58A6FF"),
         "none": ("\U000f01d8", "#2D81E0"),
     }
     assert MERGE_STATE_ICONS == {
         "clean": ("\U000f062d", "#2EA043"),
-        "conflict": ("\U000f062d", "#F85149"),
+        "conflict": ("\U000f062c", "#F85149"),
         "error": ("\U000f062d", "#F85149"),
     }
+
+
+@pytest.mark.parametrize(
+    ("failed_checks", "key"),
+    [
+        (("build (macos-14)",), "fail_macos"),
+        (("test (windows-latest)",), "fail_windows"),
+        (("win-x64 smoke",), "fail_windows"),
+        (("ubuntu-22.04 pytest",), "fail_linux"),
+        (("linux-arm64",), "fail_linux"),
+        (("build (macos-14)", "test (ubuntu-22.04)"), "fail_bug"),
+        (("build (macos-14)", "lint"), "fail_bug"),
+        (("lint",), "fail_bug"),
+        ((), "fail_bug"),
+    ],
+    ids=["macos", "windows", "win-prefix", "ubuntu", "linux", "two-platforms", "platform-plus-general", "general-only", "no-checks"],
+)
+def test_failed_ci_checks_classify_to_one_platform_or_the_bug_icon(failed_checks: tuple[str, ...], key: str) -> None:
+    assert ci_failure_key(failed_checks) == key

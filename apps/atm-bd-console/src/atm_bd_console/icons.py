@@ -69,12 +69,32 @@ PR_STATE_ICONS: dict[str, Icon] = {
 }
 CI_STATE_ICONS: dict[str, Icon] = {
     "success": ("\U000f062c", "#2EA043"),
-    "failure": ("\U000f062c", "#F85149"),
+    "fail_macos": ("\U000f0035", "#F85149"),
+    "fail_windows": ("\U000f05b3", "#F85149"),
+    "fail_linux": ("\U000f033d", "#F85149"),
+    "fail_bug": ("\U000f00e4", "#F85149"),
     "pending": ("\U000f0898", "#58A6FF"),
     "none": ("\U000f01d8", "#2D81E0"),
 }
 MERGE_STATE_ICONS: dict[str, Icon] = {
     "clean": ("\U000f062d", "#2EA043"),
-    "conflict": ("\U000f062d", "#F85149"),
+    "conflict": ("\U000f062c", "#F85149"),
     "error": ("\U000f062d", "#F85149"),
 }
+_FAILED_PLATFORMS = (
+    ("fail_macos", ("macos", "darwin")),
+    ("fail_windows", ("windows", "win-", "win_")),
+    ("fail_linux", ("ubuntu", "linux")),
+)
+
+
+def ci_failure_key(failed_checks: tuple[str, ...]) -> str:
+    """Return the CI_STATE_ICONS key for a red PR: one failing platform, else the general bug icon."""
+    platforms: set[str] = set()
+    for name in failed_checks:
+        lowered = name.lower()
+        platform = next((key for key, words in _FAILED_PLATFORMS if any(word in lowered for word in words)), None)
+        if platform is None:
+            return "fail_bug"
+        platforms.add(platform)
+    return platforms.pop() if len(platforms) == 1 else "fail_bug"

@@ -8,7 +8,7 @@ import pytest
 from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json
-from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS
+from atm_bd_console.icons import CI_STATE_ICONS, PR_STATE_ICONS, ci_failure_key
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
 from atm_bd_console.types import AgentView, GhStatus, Merge, PrRow, PullRequest, Snapshot
@@ -35,8 +35,8 @@ def test_lower_red_and_green_top_are_display_only() -> None:
     rendered = render_prs(snapshot(), 120)
     lines = rendered.plain.splitlines()
     assert len(lines) == 2
-    assert lines[0].startswith("  \U000f04c2 #11") and "CI \U000f062c lint, test" in lines[0]
-    assert "merge \U000f062d model.py" in lines[0]
+    assert lines[0].startswith("  \U000f04c2 #11") and "CI \U000f00e4 lint, test" in lines[0]
+    assert "merge \U000f062c model.py" in lines[0]
     assert lines[1].startswith("▲ \U000f04c2 #12") and "CI \U000f062c" in lines[1] and "merge \U000f062d" in lines[1]
     assert "L1" in lines[0] and "bh-1.group-dev" in lines[0]
     assert "L2" in lines[1] and "bh-2.group-dev" in lines[1]
@@ -50,6 +50,26 @@ def test_merge_error_uses_the_failure_glyph_without_a_file_list() -> None:
                    Merge("branch-1", "base", "error", (), ("merge-tree failed",), NOW))
     line = render_prs(replace(snapshot(), prs=(failed,)), 120).plain
     assert "merge \U000f062d  CI \U000f062c" in line
+
+
+@pytest.mark.parametrize(
+    ("failed_checks", "glyph"),
+    [
+        (("build (macos-14)",), "\U000f0035"),
+        (("test (windows-latest)",), "\U000f05b3"),
+        (("ubuntu-22.04 pytest",), "\U000f033d"),
+        (("build (macos-14)", "lint"), "\U000f00e4"),
+    ],
+    ids=["macos", "windows", "linux", "platform-plus-general"],
+)
+def test_failing_pr_renders_the_platform_or_bug_glyph_in_red(failed_checks: tuple[str, ...], glyph: str) -> None:
+    base = snapshot()
+    red = PullRequest(11, "https://example/pr/11", "branch-1", "base", "sha1", "failure", failed_checks)
+    row = replace(base.prs[0], pr=red, merge=None)
+    rendered = render_prs(replace(base, prs=(row,)), 120)
+    assert f"CI {glyph} " in rendered.plain
+    segments = tuple((rendered.plain[span.start:span.end], str(span.style)) for span in rendered.spans)
+    assert any(f"CI {glyph}" in segment and style == "#F85149" for segment, style in segments)
 
 
 def test_rest_mode_and_width() -> None:
@@ -118,7 +138,8 @@ def test_pr_list_pins_passing_failing_running_merged_and_closed_rows() -> None:
     assert len(lines) == len(cases)
     for line, (state, ci) in zip(lines, cases, strict=True):
         pr_glyph, pr_color = PR_STATE_ICONS[state]
-        ci_glyph, ci_color = CI_STATE_ICONS[ci]
+        ci_key = ci_failure_key(base.prs[0].pr.failed_checks) if ci == "failure" else ci
+        ci_glyph, ci_color = CI_STATE_ICONS[ci_key]
         assert f"{pr_glyph} " in line.plain
         assert f"CI {ci_glyph}" in line.plain
         segments = tuple((line.plain[span.start:span.end], str(span.style)) for span in line.spans)
