@@ -139,6 +139,31 @@ def test_wheel_sdist_and_rebuilt_wheel_bundle_every_file(tmp_path: Path, bundle_
     check_archive(next(rebuilt_foreign.glob("*.whl")), expected, commit)
 
 
+@pytest.mark.parametrize("commit_value", [None, "short", "g" * 40, "a" * 41, "a" * 40 + "\n"])
+def test_sdist_rejects_identity_without_valid_commit(tmp_path: Path, bundle_checkout: Path, commit_value) -> None:
+    app = bundle_checkout / "apps" / "atm-bd-console"
+    shutil.copy2(APP / "hatch_build.py", app / "hatch_build.py")
+    source = tmp_path / "source"
+    run(*build_command("--sdist", "--out-dir", str(source)), cwd=app)
+    unpacked = tmp_path / "unpacked"
+    for name, data in contents(next(source.glob("*.tar.gz"))).items():
+        destination = unpacked / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    package = next(unpacked.iterdir())
+    identity = package / "src" / "atm_bd_console" / "_build_identity.py"
+    identity_text = "IDENTITY = 'x'\n" + (f"COMMIT = {commit_value!r}\n" if commit_value is not None else "")
+    identity.write_text(identity_text)
+    dist = tmp_path / "dist"
+
+    result = run(*build_command("--wheel", "--out-dir", str(dist)), cwd=package, check=False)
+
+    assert result.returncode != 0
+    assert str(identity.resolve()) in result.stderr and "40-hex COMMIT" in result.stderr
+    assert not list(dist.glob("*.whl"))
+    assert identity.read_text() == identity_text
+
+
 def test_git_file_install_bundles_the_plugin(tmp_path: Path, bundle_checkout: Path) -> None:
     commit = run("git", "rev-parse", "HEAD", cwd=bundle_checkout).stdout.strip()
     venv = tmp_path / "venv"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -15,6 +16,8 @@ class CustomBuildHook(BuildHookInterface):
         self._generated_identity = False
         package_version = tomllib.loads((package / "pyproject.toml").read_text())["project"]["version"]
         if (package / "PKG-INFO").is_file() and output.is_file():
+            if not re.search(r"^COMMIT = (['\"])[0-9a-f]{40}\1$", output.read_text(), re.MULTILINE):
+                raise RuntimeError(f"cannot reuse console identity: {output} has no valid 40-hex COMMIT")
             self._include_identity(output, build_data)
             self._include_skills(package, root, build_data)
             return
