@@ -22,8 +22,6 @@ dependencies can be installed with `python3 -m pip install pydantic pyyaml
 From the repository root, run `atm-bd skill` to install the bundled skills
 without fetching a release. It reports the bundled source ref, commit SHA,
 and app version. Use `atm-bd skill --help` for release and destination options.
-Existing users of the old package should run `uv tool uninstall
-atm-bd-console` before installing `atm-bd`.
 
 ## Console operational logs
 
