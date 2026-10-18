@@ -37,7 +37,7 @@ PATH_BEFORE_FIXTURES = os.environ["PATH"]
 
 # Installer-checked CLIs the installed suites never invoke, so a host without them (CI runners) may
 # fake them for the install step alone. jq and git are not here: the suites run them for real.
-ABSENT_TOOL_FAKES = ("atm", "atm-bd-console", "bd")
+ABSENT_TOOL_FAKES = ("atm", "atm-bd", "bd")
 
 
 @contextlib.contextmanager

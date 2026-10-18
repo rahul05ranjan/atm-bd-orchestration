@@ -37,7 +37,7 @@ def current_installer_tools(tmp_path, monkeypatch):
     bin_dir = tmp_path / "required-tools"
     bin_dir.mkdir()
     for name, version in dict(install.declared_tool_requirements()).items():
-        if name in {"atm", "atm-bd-console", "bd", "jq"}:
+        if name in {"atm", "atm-bd", "bd", "jq"}:
             path = bin_dir / name
             path.write_text(f"#!/bin/sh\necho '{name} {version}'\n")
             path.chmod(0o755)
@@ -119,7 +119,7 @@ def shim_sc_compose(bin_dir: Path, cli: str, wheel: str, python_version: str = "
     """`sc-compose --version` prints `sc-compose <cli>`; `python3 -c ...` prints the wheel version <wheel>."""
     bin_dir.mkdir(exist_ok=True)
     for name, out in (("sc-compose", f"sc-compose {cli}"),
-                      ("atm-bd-console", f"atm-bd-console {install.manifest_requirement_floor('atm-bd-console')}"),
+                      ("atm-bd", f"atm-bd {install.manifest_requirement_floor('atm-bd')}"),
                       ("atm", "atm 1.6.1"), ("bd", "bd 1.3.0"),
                       ("jq", "jq-1.6"), ("git", "git version 2.27.0")):
         (bin_dir / name).write_text(f"#!/bin/sh\necho '{out}'\n")
@@ -140,6 +140,8 @@ def shim_sc_compose(bin_dir: Path, cli: str, wheel: str, python_version: str = "
     ("1.7.1", "1.7.0", "the sc-compose CLI is 1.7.1 and the python3 wheel is 1.7.0; they must be the same version"),
 ])
 def test_check_tools_accepts_one_sc_compose_version_in_the_range(tmp_path, monkeypatch, cli, wheel, refusal):
+    import importlib.metadata
+    monkeypatch.setattr(importlib.metadata, "version", lambda _: wheel)
     shim_sc_compose(tmp_path / "bin", cli, wheel)
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
     if refusal is None:
@@ -151,9 +153,22 @@ def test_check_tools_accepts_one_sc_compose_version_in_the_range(tmp_path, monke
     assert "python3 -m pip install 'sc-compose>=1.7.0,<2'" in str(caught.value)
 
 
+def test_install_refuses_installer_interpreter_mismatch_before_writes(tmp_path, monkeypatch):
+    import importlib.metadata
+    bin_dir = tmp_path / "bin"
+    shim_sc_compose(bin_dir, "1.7.0", "1.7.0")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(importlib.metadata, "version", lambda _: "1.7.1")
+    destination = tmp_path / "repo" / ".claude"
+    result = install.prepare(str(PKG), str(destination), {})
+    assert not destination.exists()
+    assert "installer interpreter wheel is 1.7.1" in str(result)
+    assert "upgrade the app or host" in str(result)
+
+
 @pytest.mark.parametrize(("tool", "reported", "expected"), [
-    ("atm-bd-console", None, "uv tool install"),
-    ("atm-bd-console", "atm-bd-console 0.0.9", "older than required 0.1.0"),
+    ("atm-bd", None, "uv tool install"),
+    ("atm-bd", "atm-bd 0.0.9", "older than required 0.1.0"),
 ])
 def test_check_tools_requires_current_console(tmp_path, monkeypatch, tool, reported, expected):
     bin_dir = tmp_path / "bin"
@@ -217,7 +232,7 @@ def test_manifest_declares_every_installer_verified_cli():
         ("bd", "1.3.0"),
         ("jq", "1.6"),
         ("git", "2.27"),
-        ("atm-bd-console", "0.1.0"),
+        ("atm-bd", "0.1.0"),
     ]
 
 

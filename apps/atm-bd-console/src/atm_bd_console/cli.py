@@ -28,15 +28,21 @@ def _error_text(error: Error) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
-    parser.add_argument("command", choices=("show", "snapshot"), nargs="?")
     parser.add_argument("--version", action="version", version=identity())
-    parser.add_argument("--phase")
-    parser.add_argument("--github", choices=("graphql", "rest", "off")); parser.add_argument("--interval", type=int)
-    parser.add_argument("--dry-run", action="store_true"); parser.add_argument("--no-fetch", action="store_true")
-    parser.add_argument("--headless", action="store_true", help="run one tick and exit without starting the app (cron mode)")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("console", "cron", "show", "snapshot"):
+        sub = commands.add_parser(name, help="run one tick and exit" if name == "cron" else None)
+        sub.add_argument("--phase")
+        if name != "show":
+            sub.add_argument("--github", choices=("graphql", "rest", "off"))
+            sub.add_argument("--interval", type=int)
+            if name != "snapshot":
+                sub.add_argument("--dry-run", action="store_true")
+            sub.add_argument("--no-fetch", action="store_true")
     args = parser.parse_args(argv)
+    invocation = f"{CONSOLE_NAME} {args.command}"
     if not args.phase:
-        print(f"{CONSOLE_NAME}: --phase <phase> is required; name the phase to run")
+        print(f"{invocation}: --phase <phase> is required; name the phase to run")
         return 3
     repo_root = config_source.repo_root()
     root_id = f"atm-phase-{args.phase}"
@@ -47,33 +53,33 @@ def main(argv: list[str] | None = None) -> int:
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 0
         last = f" (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})" if isinstance(snapshot, Ok) else ""
-        print(f"{CONSOLE_NAME} is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} --phase {args.phase}")
+        print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
-    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=args.dry_run or args.command == "snapshot", no_fetch=args.no_fetch)
-    if isinstance(loaded, Err): print(f"{CONSOLE_NAME}: {loaded.error.kind}: {loaded.error.fix}"); return 3
+    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot", no_fetch=args.no_fetch)
+    if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
-    if isinstance(check, Err): print(f"{CONSOLE_NAME}: {check.error.kind}: {check.error.fix}"); return 3
+    if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3
     for command in ("bd", "atm", "git"):
         if shutil.which(command) is None:
-            print(f"{CONSOLE_NAME}: not_found: install {command} and retry")
+            print(f"{invocation}: not_found: install {command} and retry")
             return 3
-    if args.headless or args.command == "snapshot":
+    if args.command in ("cron", "snapshot"):
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
             print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": _error_text(lock.error)}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
-                text = f"{CONSOLE_NAME} stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
+                text = f"{invocation}: console stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:
             saved = lock.value.load_state()
             state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
             snapshot, _ = runner.step(loaded.value, state, False, lock.value)
-        if args.headless and snapshot.stopped is None:
+        if args.command == "cron" and snapshot.stopped is None:
             for action in (item for item in snapshot.sent if item.at == snapshot.generated_at):
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))
-        if args.headless:
+        if args.command == "cron":
             for error in snapshot.errors:
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": _error_text(error)}))
         return 0

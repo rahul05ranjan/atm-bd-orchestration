@@ -24,12 +24,12 @@ def test_repo_root_resolves_the_current_directory(monkeypatch, tmp_path) -> None
 def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:
     _team_config(tmp_path)
     default = load_config(tmp_path, "bh")
-    assert default == Ok(default.value.__class__("bh", "fenix", "atm-dev", "graphql", 60, False, False, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd-console/atm-phase-bh")))
+    assert default == Ok(default.value.__class__("bh", "fenix", "atm-dev", "graphql", 60, False, False, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh")))
     path = tmp_path / ".atm-bd"
     path.mkdir(exist_ok=True)
     (path / "console.toml").write_text("[console]\ngithub = 'rest'\ninterval = 90\n")
     loaded = load_config(tmp_path, "bh", github="off", interval_s=120, dry_run=True, no_fetch=True)
-    assert loaded == Ok(loaded.value.__class__("bh", "fenix", "atm-dev", "off", 120, True, True, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd-console/atm-phase-bh")))
+    assert loaded == Ok(loaded.value.__class__("bh", "fenix", "atm-dev", "off", 120, True, True, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh")))
 
 
 def test_invalid_github_and_short_interval_name_key_value_and_fix(tmp_path) -> None:

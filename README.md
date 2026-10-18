@@ -52,6 +52,9 @@ nothing is copied.
 
 ## Develop
 
+Use `atm-bd console --phase <x>` for the dashboard and `atm-bd cron --phase <x>`
+for a single orchestration tick.
+
 Console logging, delivery outcomes, and retention/rotation procedures are
 documented in [apps/atm-bd-console/README.md](apps/atm-bd-console/README.md).
 

@@ -11,7 +11,7 @@ before an install writes anything:
 | `sc-compose` | 1.7.0 (below 2), CLI and `python3` wheel the same version | `brew install randlee/tap/sc-compose` and `python3 -m pip install 'sc-compose==<the CLI version>'` | strict renders of bead and reviewer templates (CLI), the scripts' renders (wheel) |
 | `jq` | 1.6 | `brew install jq` | every bead query |
 | `git` | 2.27 | `brew install git` | repository and stack commands |
-| `atm-bd-console` | 0.1.0 | `uv tool install git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console` | phase dashboard and cron |
+| `atm-bd` | 0.1.0 | `uv tool install git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console` | phase dashboard and cron |
 
 `gh` plus gh-stack remain required for lead-only stacked-PR work, but are not
 part of the installer's manifest preflight.
@@ -19,8 +19,8 @@ part of the installer's manifest preflight.
 ## Verify
 
 ```bash
-for c in python3 bd atm sc-compose jq git atm-bd-console; do command -v "$c" >/dev/null && echo "ok $c" || echo "MISSING $c"; done
-python3 --version; bd --version; atm --version; sc-compose --version; jq --version; git --version; atm-bd-console --version
+for c in python3 bd atm sc-compose jq git atm-bd; do command -v "$c" >/dev/null && echo "ok $c" || echo "MISSING $c"; done
+python3 --version; bd --version; atm --version; sc-compose --version; jq --version; git --version; atm-bd --version
 gh stack --version    # lead only, not checked by the installer
 ```
 
@@ -29,7 +29,7 @@ shell may not share the interactive shell's `PATH`:
 
 ```bash
 for p in /opt/homebrew/bin "$HOME/.cargo/bin" "$HOME/.local/bin"; do
-  ls "$p"/{bd,atm,sc-compose,jq,git,atm-bd-console,gh} 2>/dev/null
+  ls "$p"/{bd,atm,sc-compose,jq,git,atm-bd,gh} 2>/dev/null
 done
 ```
 

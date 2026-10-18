@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- The command is now `atm-bd`: use `atm-bd console` for the dashboard and `atm-bd cron` for one tick. Existing users should run `uv tool uninstall atm-bd-console` before installing the new tool; the old executable is not an alias.
+
 ## [0.16.0] - 2026-10-16
 
 ### Changed

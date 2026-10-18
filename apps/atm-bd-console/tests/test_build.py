@@ -93,11 +93,11 @@ def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path, dir
     subprocess.run(["uv", "venv", str(venv)], check=True)
     python = venv / "bin" / "python"
     subprocess.run(["uv", "pip", "install", "--python", str(python), str(next(dist.glob("*.whl")))], check=True)
-    assert subprocess.check_output([venv / "bin" / "atm-bd-console", "--version"], text=True).strip() == expected
+    assert subprocess.check_output([venv / "bin" / "atm-bd", "--version"], text=True).strip() == expected
     subprocess.run(["uv", "build", "--sdist", "--out-dir", str(dist)], cwd=copied, check=True)
     subprocess.run(["uv", "pip", "install", "--reinstall", "--no-cache", "--python", str(python),
                     str(next(dist.glob("*.tar.gz")))], check=True)
-    assert subprocess.check_output([venv / "bin" / "atm-bd-console", "--version"], text=True).strip() == expected
+    assert subprocess.check_output([venv / "bin" / "atm-bd", "--version"], text=True).strip() == expected
 
 
 def test_checkout_identity_takes_precedence_over_embedded_identity(tmp_path: Path) -> None:

@@ -42,9 +42,9 @@ def test_invalid_phase_setting_fails_launch_before_effects(phase_repo, monkeypat
     for source, name in ((cli, "acquire_lock"), (cli.runner, "step"), (runner.atm_source, "assign"),
                          (runner.atm_source, "send"), (cli.shutil, "which")):
         monkeypatch.setattr(source, name, forbidden)
-    assert cli.main(["--headless", "--phase", "bh"]) == 3
+    assert cli.main(["cron", "--phase", "bh"]) == 3
     assert expected in capsys.readouterr().out
-    assert not (phase_repo / ".atm-bd/atm-bd-console").exists()
+    assert not (phase_repo / ".atm-bd/atm-bd").exists()
 
 
 @pytest.mark.parametrize("purpose", tuple(PHASE_TEMPLATES))
@@ -77,9 +77,9 @@ def test_template_paths_must_name_existing_installed_files(phase_repo, tmp_path,
     monkeypatch.setattr(cli.config_source, "repo_root", lambda: phase_repo)
     for source, name in ((cli, "acquire_lock"), (runner.atm_source, "assign"), (runner.atm_source, "send")):
         monkeypatch.setattr(source, name, forbidden)
-    assert cli.main(["--headless", "--phase", "bh"]) == 3
+    assert cli.main(["cron", "--phase", "bh"]) == 3
     assert f"templates.{purpose}" in capsys.readouterr().out
-    assert not (phase_repo / ".atm-bd/atm-bd-console").exists()
+    assert not (phase_repo / ".atm-bd/atm-bd").exists()
 
 
 @pytest.mark.parametrize("purpose", ("dev_assign", "sanity_assign", "qa_assign", "fix_review", "unknown"))
@@ -138,7 +138,7 @@ task:assign) exit 0;;
 *) exit 97;;
 esac
 ''')
-    assert cli.main(["--phase", "bh", "--github", "off", "--headless"]) == 0
+    assert cli.main(["cron", "--phase", "bh", "--github", "off"]) == 0
     snapshot = load_snapshot(phase_repo, root.id)
     assert isinstance(snapshot, Ok) and snapshot.value.errors == ()
     assigned = [argv for argv in fake_bin.argv() if argv[1:3] == ("task", "assign")]

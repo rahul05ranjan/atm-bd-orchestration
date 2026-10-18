@@ -2,8 +2,8 @@
 
 ## Launch settings
 
-Run `atm-bd-console --phase bh` from the repository root. For one cron tick,
-use `atm-bd-console --phase bh --headless`; add `--dry-run` to preview actions.
+Run `atm-bd console --phase bh` from the repository root. For one cron tick,
+use `atm-bd cron --phase bh`; add `--dry-run` to preview actions.
 The phase file `.atm-bd/phase-bh.toml` supplies the assignment identity and
 template paths:
 
@@ -56,7 +56,7 @@ still requiring a successful current merge check.
 
 The console owns one `sc-observability` logger for its repository for the life
 of the process. All ticks reuse it, including stopped and failed ticks. Logs
-live under `.atm-bd/atm-bd-console/logs/`; the console sink is disabled. Each
+live under `.atm-bd/atm-bd/logs/`; the console sink is disabled. Each
 tick flushes admitted events before saving its snapshot. Logger construction,
 event admission and flush failures appear in the snapshot's Errors section
 and in headless error output. They do not change whether a dispatch succeeded.
@@ -74,7 +74,7 @@ their operation, outcome and typed error, with team, task IDs or branch context
 where available. `hold` events record the task, recipient and hold reason;
 they do not introduce additional dispatch rules.
 
-The phase's `.atm-bd/atm-bd-console/<root>/actions.jsonl` is an append-only
+The phase's `.atm-bd/atm-bd/<root>/actions.jsonl` is an append-only
 journal. Assignment/send entries record attempts, followed by a `hold` entry
 on failure; `dry_run` entries record previews. An attempt entry alone is not
 proof of delivery. Operational `action` events carry the explicit outcome.

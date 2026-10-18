@@ -26,7 +26,7 @@ class CustomBuildHook(BuildHookInterface):
             raise RuntimeError("cannot build console identity: git executable is missing") from error
         except (OSError, subprocess.CalledProcessError) as error:
             raise RuntimeError("cannot build console identity: source is not a console checkout") from error
-        if Path(toplevel).resolve() != root or not (root / "apps" / "atm-bd-console" / "pyproject.toml").is_file():
+        if Path(toplevel).resolve() != root or not (root / "apps/atm-bd-console" / "pyproject.toml").is_file():
             raise RuntimeError("cannot build console identity: source is not a console checkout")
         try:
             shallow = subprocess.check_output(["git", "-C", root, "rev-parse", "--is-shallow-repository"], text=True).strip()

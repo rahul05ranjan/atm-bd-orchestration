@@ -49,9 +49,9 @@ def test_detail_files_are_atomic_round_trips_and_actions_are_lines(tmp_path: Pat
     assert load_state(tmp_path, "atm-bh") == Ok(state)
     assert load_merges(tmp_path, "atm-bh") == Ok(merges)
     assert load_prs(tmp_path, "atm-bh") == Ok(prs)
-    lines = (tmp_path / ".atm-bd/atm-bd-console/atm-bh/actions.jsonl").read_text().splitlines()
+    lines = (tmp_path / ".atm-bd/atm-bd/atm-bh/actions.jsonl").read_text().splitlines()
     assert len(lines) == 2 and all(isinstance(from_json(ActionLine, line), Ok) for line in lines)
-    assert (tmp_path / ".atm-bd/atm-bd-console/.gitignore").read_text() == "*\n"
+    assert (tmp_path / ".atm-bd/atm-bd/.gitignore").read_text() == "*\n"
 
 
 def test_written_files_store_datetimes_only_in_utc_z_form(tmp_path: Path) -> None:
@@ -60,7 +60,7 @@ def test_written_files_store_datetimes_only_in_utc_z_form(tmp_path: Path) -> Non
     with acquired.value as store:
         assert store.write_snapshot(fixture("snapshot-running.json", Snapshot)) == Ok(None)
         assert store.append_action(ActionLine(datetime.now(UTC), "hold", "fenix", "atm-bh", "wait")) == Ok(None)
-    directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
+    directory = tmp_path / ".atm-bd/atm-bd/atm-bh"
     text = (directory / "snapshot.json").read_text() + (directory / "actions.jsonl").read_text()
     stamps = re.findall(r'"(\d{4}-\d{2}-\d{2}T[^"]*)"', text)
     assert stamps and all(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp) for stamp in stamps)
@@ -70,7 +70,7 @@ def test_written_files_store_datetimes_only_in_utc_z_form(tmp_path: Path) -> Non
 def test_read_only_state_directory_returns_io_failed_naming_the_path(tmp_path: Path) -> None:
     acquired = acquire_lock(tmp_path, "atm-bh")
     assert isinstance(acquired, Ok)
-    directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
+    directory = tmp_path / ".atm-bd/atm-bd/atm-bh"
     snapshot = fixture("snapshot-running.json", Snapshot)
     action = ActionLine(datetime.now(UTC), "hold", "fenix", "atm-bh", "wait")
     with acquired.value as store:
@@ -157,7 +157,7 @@ def test_failed_write_removes_its_temporary_file(tmp_path: Path, monkeypatch) ->
 
 
 def test_undecodable_snapshot_is_a_typed_error_not_an_exception(tmp_path: Path) -> None:
-    directory = tmp_path / ".atm-bd/atm-bd-console/atm-bh"
+    directory = tmp_path / ".atm-bd/atm-bd/atm-bh"
     directory.mkdir(parents=True)
     (directory / "snapshot.json").write_bytes(b"\xff\xfe not utf-8")
     result = load_snapshot(tmp_path, "atm-bh")
