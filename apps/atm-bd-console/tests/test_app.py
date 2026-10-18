@@ -5,24 +5,26 @@ import os
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from conftest import HANG_GUARD_S, FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
-from contract_samples import CONFIG, STATE, TIMEOUT
+from contract_samples import CONFIG, SNAPSHOT, STATE, TIMEOUT
 from rich.cells import cell_len
 from textual import events
 
 from atm_bd_console import app as console
+from atm_bd_console import prs, render
 from atm_bd_console.app import ConsoleApp, run
 from atm_bd_console.build import display_identity, identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
-from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
+from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepView
 
 
 def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
@@ -58,6 +60,16 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     assert seen == [RUNNING]
     rendered = nodes["#status-table"].value
     assert list(rendered.columns[0]._cells) == [row.sprint for row in values]
+    assert nodes["#status-table"].display is True
+    dummy.snapshot = replace(RUNNING, phase_data=None, errors=(TIMEOUT,))
+    ConsoleApp.refresh_views(dummy)
+    assert nodes["#status-table"].display is False
+    assert f"beads unavailable: {TIMEOUT.kind}; {TIMEOUT.fix}" in nodes["#dashboard"].value.plain
+    assert seen == [RUNNING]
+    dummy.snapshot = RUNNING
+    ConsoleApp.refresh_views(dummy)
+    assert nodes["#status-table"].display is True
+    assert seen == [RUNNING, RUNNING]
 
 
 class RaisingStep:
@@ -145,6 +157,66 @@ def test_diagnostics_view_reads_structured_log_entries(tmp_path: Path) -> None:
             assert not (tmp_path / "state" / "diagnostics.log").exists()
 
     run_scenario(scenario())
+
+
+def test_display_clocks_are_local_and_structured_log_stays_zulu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Etc/GMT+8")
+    time.tzset()
+    try:
+        fixed_now = SNAPSHOT.generated_at
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, _tz=None):
+                return fixed_now
+
+        monkeypatch.setattr(console, "datetime", FixedDateTime)
+        snapshot = replace(SNAPSHOT, generated_at=fixed_now)
+        no_pr_snapshot = replace(snapshot, prs=(), gh=GhStatus("graphql", True, None, fixed_now, False))
+        dashboard_header = render.dashboard(snapshot, 120, 40).plain.splitlines()[0]
+        dispatch_row = render._sent_line(snapshot.sent[0], snapshot).plain
+        pr_sheet = prs.render_prs(no_pr_snapshot, 120).plain
+        assert dashboard_header.startswith("phase-bh · 04:00 ·")
+        assert dispatch_row.startswith(" 04:00 ")
+        assert "checked 04:00" in pr_sheet
+
+        repo_root = tmp_path / "repo"
+        logger = create_console_logger(repo_root)
+        assert isinstance(logger, Ok)
+        assert logger.value.event("error", level="error", message="fixed diagnostic event") == Ok(None)
+        assert logger.value.flush() == Ok(None)
+        events = logger.value.query(levels=("error",), limit=1, order="newest_first")
+        assert isinstance(events, Ok) and len(events.value) == 1
+        event = events.value[0]
+        assert event.timestamp.endswith("Z")
+        expected_clock = datetime.fromisoformat(event.timestamp).astimezone().strftime("%H:%M:%S")
+
+        app = ConsoleApp(
+            replace(CONFIG, repo_root=str(repo_root), state_dir=str(tmp_path / "state"), interval_s=3600),
+            FakeStep(snapshot), STATE,
+        )
+
+        async def scenario() -> None:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await settle(pilot)
+                app.query_one("TabbedContent").active = "diagnostics"
+                app.refresh_views()
+                await settle(pilot)
+                shown = app.query_one("#diagnostics-text").render().plain
+                assert f"{expected_clock} error: fixed diagnostic event" in shown
+                assert not (tmp_path / "state" / "diagnostics.log").exists()
+
+        run_scenario(scenario())
+        assert not hasattr(app, "_record_error")
+        assert not hasattr(app, "diagnostics_path")
+        assert app.input_log_path.read_text().startswith("2026-10-14T12:00:00.000Z start")
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        time.tzset()
 
 
 def test_diagnostic_line_uses_local_clock_and_preserves_message(monkeypatch) -> None:

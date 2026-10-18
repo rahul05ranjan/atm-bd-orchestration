@@ -440,6 +440,17 @@ def _bead(bead_id: str, parent: str | None, labels: tuple[str, ...] = (), metada
     return Bead(bead_id, bead_id, SprintState.OPEN, labels, parent, (), None, metadata or {}, datetime(2026, 10, 15, tzinfo=UTC), None, None)
 
 
+def test_step_carries_severity_from_metadata_then_label() -> None:
+    from atm_bd_console.atm_bd import step
+
+    fix = _bead("atm-bh-4.finding-r1-fix", "atm-bh-4", ("stage:fix",), {"severity": "blocking", "sprint_bead": "atm-bh-4"})
+    labelled = _bead("atm-bh-4.finding-2", "atm-bh-4", ("stage:finding", "severity:minor"), {"sprint_bead": "atm-bh-4"})
+    plain = _bead("atm-bh-4.finding-3", "atm-bh-4", ("stage:finding",), {"sprint_bead": "atm-bh-4"})
+    assert step(fix, {}).value.severity == "blocking"
+    assert step(labelled, {}).value.severity == "minor"
+    assert step(plain, {}).value.severity is None
+
+
 def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
     from atm_bd_console.atm_bd import step
 
@@ -498,7 +509,47 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})
     assert isinstance(no_round, Err) and "metadata.round" in no_round.error.what
     no_sprint = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "round": 1}), {})
-    assert isinstance(no_sprint, Err) and "metadata.sprint_bead" in no_sprint.error.what
+    assert isinstance(no_sprint, Err) and no_sprint.error.what == (
+        "atm-bh-4.group-qa: neither metadata.sprint_bead nor metadata.sprint")
+
+
+def test_legacy_qa_resolves_sprint_from_its_container_when_checked_bead_is_not_loaded() -> None:
+    from atm_bd_console.atm_bd import step
+
+    root = _bead("atm-phase-bi", None, ("phase-bi",))
+    sprint = _bead("atm-bi-1", root.id, ("stage:sprint",), {"sprint": "bi-1"})
+    qa = _bead(
+        "atm-bi-1.group-qa-f2-qa", sprint.id, ("stage:qa",),
+        {"checked_bead": "atm-bi-1.group-qa-f2", "round": 1, "sprint": "bi-1", "phase": "bi"},
+    )
+
+    result = step(qa, {root.id: root, sprint.id: sprint, qa.id: qa})
+
+    assert isinstance(result, Ok)
+    assert result.value.sprint_bead == sprint.id
+
+
+def test_phase_keeps_legacy_qa_step_when_checked_bead_is_not_loaded() -> None:
+    from atm_bd_console.atm_bd import phase
+    from atm_bd_console.types import PhaseFile
+
+    root = _bead("atm-phase-bi", None, ("phase-bi",))
+    sprint = _bead(
+        "atm-bi-1", root.id, ("stage:sprint",),
+        {"sprint": "bi-1", "layer": 1, "branch": "sprint/bi-1", "pr_target": "main", "stack": "phase-bi"},
+    )
+    qa = _bead(
+        "atm-bi-1.group-qa-f2-qa", sprint.id, ("stage:qa",),
+        {"checked_bead": "atm-bi-1.group-qa-f2", "round": 1, "sprint": "bi-1", "phase": "bi"},
+    )
+    file = PhaseFile("bi", root.id, "phase-bi", (sprint.id,), {}, "lead", {})
+
+    result = phase(file, root, (sprint, qa), (qa,), ())
+
+    assert isinstance(result, Ok)
+    assert result.value.step_errors == ()
+    mapped = next(item for item in result.value.steps if item.bead_id == qa.id)
+    assert (mapped.sprint_bead, mapped.ready) == (sprint.id, True)
 
 
 # D4/D5: step mapping and dispatch_spec.

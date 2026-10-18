@@ -238,7 +238,8 @@ class ConsoleApp(App[int]):
         try:
             self.input_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.input_log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write(f"{datetime.now(UTC).strftime('%H:%M:%S.%f')[:-3]} {entry}\n")
+                timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                log_file.write(f"{timestamp} {entry}\n")
         except OSError:
             pass
 
@@ -399,7 +400,10 @@ class ConsoleApp(App[int]):
         dashboard_width = min(panel.size.width or width, width)
         if snapshot is not None:
             height = panel.size.height or self.size.height
-            self.query_one("#status-table", Static).update(status_table.rich_table(status_table.rows(snapshot)))
+            table = self.query_one("#status-table", Static)
+            table.display = snapshot.phase_data is not None
+            if snapshot.phase_data is not None:
+                table.update(status_table.rich_table(status_table.rows(snapshot)))
             self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
             self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
             self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))

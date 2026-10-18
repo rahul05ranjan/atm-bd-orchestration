@@ -73,6 +73,24 @@ def row(task_id: str, state: str, kind: str, difficulty: str | None, age_s: int,
     return Row(task_id, state, kind, difficulty, "bh", marker, age_s, f"description for {task_id}")
 
 
+def test_missing_phase_shows_error_in_dashboard_and_status_bar() -> None:
+    error = Timeout("timeout", ("bd", "show"), 20, "retry the bd read")
+    value = replace(snapshot(), phase_data=None, errors=(error,), metrics=Metrics(0, 0, 0, 0),
+                    agents=(AgentView("busy", "busy", NOW, 0, ()),),
+                    sections=(Section("Held", (SectionRow("atm-bh-6", 180, "conflict", None),)),))
+    dashboard_text = dashboard(value, 120, 40).plain
+    status_text = status_bar(value, 120).plain
+    assert "beads unavailable: timeout; retry the bd read" in dashboard_text
+    assert "busy" in dashboard_text and "== Held (1)" in dashboard_text
+    assert "beads ⛔ timeout" in status_text and "0/0" not in status_text
+
+
+def test_missing_phase_without_error_has_fallback_diagnostics() -> None:
+    value = replace(snapshot(), phase_data=None, errors=(), metrics=Metrics(0, 0, 0, 0))
+    assert "beads unavailable: unavailable; retry the phase read" in dashboard(value, 120, 40).plain
+    assert "beads ⛔ unavailable" in status_bar(value, 120).plain
+
+
 def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
     agents = (
         AgentView("busy", "busy", NOW, 4, (
