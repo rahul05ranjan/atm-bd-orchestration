@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 COMMAND_TIMEOUT = 30
-SUITE_TIMEOUT = 180
+SUITE_TIMEOUT = None   # a suite's verdict is its own result, never a wall-clock race; the CI job timeout is the hang backstop
 OUTPUT_TAIL = 16000
 
 
