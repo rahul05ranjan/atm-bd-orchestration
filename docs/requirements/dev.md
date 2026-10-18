@@ -24,7 +24,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `fix-assignmen
 13. Read `policy_path` and every guideline it names for the languages touched.
 14. Read the complete plan and enumerate all tasks that must be completed in the primary and any child beads; create an itemized private checklist outside the tracked tree with every task identified; work through the checklist one item at a time; then go through it again one item at a time and confirm each is fully met; nothing outside the bead's scope.
 15. Close: the close hook (10); it closes the bead with `dev complete at <short sha>` and sends `dev-complete.md.j2` with the deliverable inventory and gate output; deletion work adds a before/after inventory.
-16. Cannot complete: class bead or report (6); `bd update --status blocked --assignee "" --append-notes "DEV_CANNOT_COMPLETE; ..."`; never `bd close` (it would release the sanity check); task `refused`. Unfinished is a failure.
+16. Cannot complete: refuse as in 6; `bd update --status blocked --assignee "" --append-notes "DEV_CANNOT_COMPLETE; ..."`; never `bd close` (it would release the sanity check); task `refused`. Unfinished is a failure.
 
 ### Sanity FAIL (`sanity-fail`) and rebase-required
 
@@ -39,7 +39,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `fix-assignmen
 22. Confirm the defect at the cited file:line; absent: no work, close `not_reproducible` with the file:line checked.
 23. Fix every in-scope occurrence of the pattern; touch only what the remedy needs.
 24. Close: the close hook (10) with outcome `fixed` (commit and PR; closes the bead `fixed at <short sha>`, sends `fix-complete.md.j2`, assigns sanity) or `not_reproducible` (`not reproducible: <file:line>`; the PR checks are skipped since nothing is pushed, everything else is the same chain: sanity checks the absence at the cited line, QA's filing reviewer confirms it).
-25. Cannot fix: class bead or report (6); return the bead open, unassigned, `FIX_CANNOT_COMPLETE` in notes; task `refused`. Never close a finding unfixed.
+25. Cannot fix: refuse as in 6; return the bead open, unassigned, `FIX_CANNOT_COMPLETE` in notes; task `refused`. Never close a finding unfixed.
 
 ### Parallel quick fix (finder)
 
