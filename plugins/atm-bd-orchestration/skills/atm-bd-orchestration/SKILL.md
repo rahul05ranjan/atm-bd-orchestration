@@ -57,8 +57,8 @@ can move mid-phase: update `lead` in `.atm-bd/phase-<x>.toml`; the outgoing lead
 ids, open PRs and the stack number, and announces the new lead. In-flight
 tasks keep their assigner.
 
-The lead (or its work-orchestrator) is the only stack writer, one at a time (`gh stack link`, `unstack`, `sync`,
-`rebase`, `merge`). quality-mgr files the finding beads from QA; the lead
+The lead (or its work-orchestrator) owns the stack (`unstack`, `sync`,
+`rebase`, `merge`); `gh stack link` is the sanity side's on PASS. Every stack write starts by claiming the stack bead (`docs/requirements/sanity-stack.md`), so there is one writer at a time. quality-mgr files the finding beads from QA; the lead
 files those from a phase-end review.
 
 The lead keeps BV, the read-only graph analysis it runs at plan review, wave
@@ -164,8 +164,7 @@ links the PR on top of the phase stack
 its PR waits unlinked on the trunk (sanity accepts it there, and `stack-top`
 returns its branch so the next root sprint lands on it), and the lead links
 layers 0 and 1 together, `gh stack link --base <trunk> <pr0> <pr1>`, when
-layer 1's PR opens; a sanity refusal for no PR, not
-stacked or not rebased is the lead's (the stack writer) to fix: it opens,
+layer 1's PR opens; a sanity refusal for no PR or not rebased (only possible after `--skip-checks`) is the lead's (the stack owner) to fix: it opens,
 links or rebases by a new layer as `/sc-gh-stack` prescribes and re-dispatches
 the sanity check, without interrupting or messaging the dev.
 Rebasing is done before sanity or QA is assigned and is the dev's, at
@@ -214,7 +213,7 @@ on every restack and show up as out-of-scope work in that sprint's PR.
    When every roster agent is mid-task, the lead runs a background
    developer subagent for this step instead of waiting; the branch,
    scope and test rule are the same.
-4. The lead links it on top of the stack and dispatches one QA round on the
+4. The lead links it on top of the stack (claiming the stack bead first) and dispatches one QA round on the
    fix PR (`templates.qa` from the phase file, `checked_bead` = the finder's bead, `layer` =
    its layer; its QA bead from `qa-bead.json.j2` with `quick_fix` true, so QA
    skips the sanity-PASS check a quick fix has no sanity for, and `pr_target`,
@@ -340,8 +339,8 @@ Then, on each task close:
 | plan-review PASS | nothing when the bead closed: the root sprints are now ready. With minor findings the bead is assigned to you still open: fix each listed bead with `bd update`, then `bd close <root>-plan-qa --reason "minor fixes applied"` |
 | plan-review FAIL | have the author fix the listed beads, run `validate-plan` again, then dispatch the next round |
 | dev-complete | a plain report from the dev's close hook (Task Close Hook): the bead is closed with `commit`, `pr_number`, `pr_url` in its metadata and the sanity check is already assigned as you. Nothing to dispatch and nothing to link yet: the dev's task stays open until sanity PASS (its `task_reminder` is expected, not a stall), and a sanity FAIL is fixed on the same unlinked branch |
-| sanity check PASS | the sanity close hook has closed the sanity bead, closed the dev's task as you and assigned the group's QA bead as you (`checked_bead`, `sprint_bead`, `base` = the PR base, for a fix bead `carry_forward` = the fix bead and `round` = its `metadata.round` + 1, for an important or minor finding `carry_forward` = the finding). Verify the PR base is its `pr_target` or a descendant of it, link the PR on top of the phase stack, fixing any stack problem yourself (Stack Discipline), and record it on the checked bead (`bd update <bead> --append-notes "layer PR #<n> <url>"`) |
-| sanity check FAIL | one coordinator runs LLM/JEV with shared lint, then `sanity-selected` chooses whole replies per deliverable. Sanity answers only whether a numbered deliverable is written; requirements and quality are QA. The sanity close hook increments `metadata.sanity_round` on the sanity bead, reopens the checked bead to its assignee (whose task is still open), sends the dev `sanity-rejected.md.j2` naming each selected undone deliverable with its reason, and leaves the sanity bead open; no finding children, no new layer, no dispatch: the dev fixes on the same branch and runs its close hook again, which re-assigns the same sanity task. The lead overrules a rejection that judges correctness or quality by telling the dev and dev-sanity, never by closing the bead for the dev. At `max_sanity_rounds` (`.claude/project/atm-bd-orchestration.yaml`, default 5) the hook reopens nothing and reports `SANITY.ROUND_CAP` with undone deliverable numbers: diff flagged files versus the last PASS, check the branch base for foreign commits, then rule (reopen for another round, reassign, or force-close with a reason); no further round without that ruling. This applies to a finding bead too: its task id is the finding |
+| sanity check PASS | dev-sanity linked the layer under the stack bead's claim (one spawn of sanity-stack at a time when several sanity tasks are open; a head that lost the top went back to the dev as `rebase-required`), then the sanity close hook closed the sanity bead, closed the dev's task as you and assigned the group's QA bead as you (`checked_bead`, `sprint_bead`, `base` = the PR base, for a fix bead `carry_forward` = the fix bead and `round` = its `metadata.round` + 1, for an important or minor finding `carry_forward` = the finding). Nothing to link. A `stack_failed` from sanity-stack is yours: claim the stack bead, repair in your own worktree (Stack Discipline), release, tell dev-sanity to re-run the link |
+| sanity check FAIL | one coordinator runs LLM/JEV with shared lint, then `sanity-selected` chooses whole replies per deliverable. Sanity answers only whether a numbered deliverable is written; requirements and quality are QA. The sanity close hook increments `metadata.sanity_round` on the sanity bead, reopens the checked bead to its assignee (whose task is still open), sends the dev `sanity-fail.xml.j2` naming each selected undone deliverable with its reason, and leaves the sanity bead open; no finding children, no new layer, no dispatch: the dev fixes on the same branch and runs its close hook again, which re-assigns the same sanity task. The lead overrules a rejection that judges correctness or quality by telling the dev and dev-sanity, never by closing the bead for the dev. At `max_sanity_rounds` (`.claude/project/atm-bd-orchestration.yaml`, default 5) the hook reopens nothing and reports `SANITY.ROUND_CAP` with undone deliverable numbers: diff flagged files versus the last PASS, check the branch base for foreign commits, then rule (reopen for another round, reassign, or force-close with a reason); no further round without that ruling. This applies to a finding bead too: its task id is the finding |
 | qa-complete | nothing: quality-mgr poured a fix group under the sprint per blocking finding (round n+1 for a failed fix verification) and filed the rest as finding beads before it closed the QA bead; the fix beads are now ready. A failed quick-fix QA (`metadata.quick_fix`) poured none: file and dispatch its blocking findings (Parallel Quick Fix step 4). When no step is open under the sprint, close it (below) |
 | fix-complete (`fixed`) | a plain report from the fix close hook: for a poured fix bead or an important or minor finding bead the group's sanity check is already assigned as you; nothing to dispatch, and the layer is linked on its sanity PASS. For a quick-fix finding, once every finding from that failed QA has closed, one more quick-fix QA bead (Parallel Quick Fix step 4) |
 | review-complete | file each finding with `finding-bead.json.j2` (`qa_bead` = the review bead) |
@@ -500,7 +499,7 @@ The assignee pairs every ATM step with its bead step:
   it would release the beads it blocks (see
   `.claude/agents/dev-sanity.md` and "Plan Gate"). A dev or fix task stays
   open until its sanity check passes; the dev waits for that close or for the
-  `sanity-rejected` message and starts nothing else.
+  `sanity-fail` message and starts nothing else.
 - Every task closes with a template. A push or progress report closes
   nothing.
 
@@ -517,9 +516,11 @@ never a stop), write `commit`, `pr_number`, `pr_url` to the bead, `bd close`
 it, send the complete report to the lead as a plain send and
 `atm task assign` the group's sanity bead with `ATM_IDENTITY=<lead>` (from
 `.atm-bd/<phase>.toml`) on that one subprocess; the dev's task stays open.
-The sanity role on PASS closes the sanity bead, closes the dev's task as the
-lead and assigns the QA bead as the lead; on FAIL it bumps `sanity_round`,
-reopens the checked bead and sends `sanity-rejected.md.j2` to the dev, or at
+The sanity role on PASS (only after the layer is linked under the stack
+bead's claim, by dev-sanity or its sanity-stack subagent, `docs/requirements/sanity-stack.md`) closes the sanity bead, closes the dev's task as the
+lead and assigns the QA bead as the lead; a head that lost the top goes back
+to the dev as `rebase-required`, no round counted; on FAIL it bumps `sanity_round`,
+reopens the checked bead and sends `sanity-fail.xml.j2` to the dev, or at
 `max_sanity_rounds` (default 5) reports `SANITY.ROUND_CAP` to the lead. The
 qa role closes the QA bead and task and assigns nothing. An `err` result
 names the exact fix. The console assigns, as the lead, any sanity or qa bead

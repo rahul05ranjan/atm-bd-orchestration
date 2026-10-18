@@ -4,24 +4,26 @@ One file per agent, with its subagents and scripts: what it does, when, in what 
 
 | File | Agent |
 | --- | --- |
-| [dev.md](dev.md) | dev, fix, sanity-rejected rounds; `assignment-gates.py` |
+| [dev.md](dev.md) | dev, fix, sanity-fail rounds; `assignment-gates.py` |
 | [dev-sanity.md](dev-sanity.md) | dev-sanity with sc-sanity-llm, sc-sanity-jev; sanity scripts |
 | [quality-mgr.md](quality-mgr.md) | QA, plan review, phase-end review; reviewers, ceremony screen |
 | [planner.md](planner.md) | design to beads; `validate-plan` |
 | [team-lead.md](team-lead.md) | sequencer; swarm-master (none in the package) |
 | [parallax.md](parallax.md) | work-orchestrator teammate (optional) |
 | [task-close-hook.md](task-close-hook.md) | `atm-task-close.py`: the one way a dev, fix, sanity or qa task completes; mechanical sanity and qa assignment as the lead |
+| [sanity-stack.md](sanity-stack.md) | sanity-stack subagent: links one next-top layer under the stack bead lock; the race, lean mode, lock timeout |
 | [console.md](console.md) | atm-bd-console: the poller that assigns a ready sanity or qa bead with no task, as the lead |
 
 ## Who does what
 
 | Agent | Responsible for |
 | --- | --- |
-| **team-lead** | Runs the phase. Imports the plan into beads, gets it through plan review, dispatches every ready dev and fix bead as an ATM task (sanity and qa assignment is mechanical, done by the close hook as the lead), and is the only writer of the gh stack; a layer is linked on the sanity PASS report. Lands the stack, runs the phase-end review, and merges the phase. Makes the rulings and escalates to the user. |
+| **team-lead** | Runs the phase. Imports the plan into beads, gets it through plan review, dispatches every ready dev and fix bead as an ATM task (sanity and qa assignment is mechanical, done by the close hook as the lead), and owns the stack (unstack, restack, land, repair); layers are linked by the sanity side on PASS under the stack bead lock. Lands the stack, runs the phase-end review, and merges the phase. Makes the rulings and escalates to the user. |
 | **parallax** (optional) | The lead's work-orchestrator. Runs the routine loop for the lead: dispatches ready beads, syncs, and lands the stack. Sends the lead only summaries and escalations. The lead keeps the graph analysis (`bv`), rulings, gates, phase closure and the merge. |
 | **planner** | Turns a design into a phase plan in beads: a phase root, sprint containers, `owned_paths`, and the dependencies between sprints. Cuts sprints for the shortest critical path, and `validate-plan` must pass before import. |
-| **dev** (dev, fix) | Implements one bead on its own branch with tests and opens a PR on the top of the stack. Works through a private checklist, one deliverable at a time, then runs the close hook, which verifies the PR, closes the bead and assigns sanity. Its task stays open, and it waits, until sanity passes; a sanity FAIL comes back as a `sanity-rejected` message to fix on the same branch. A fix bead does the same for one blocking finding. |
-| **dev-sanity** | Checks a closed dev or fix bead at its pinned commit: is each numbered deliverable written, and does lint pass? Spawns one checker per deliverable (`sc-sanity-llm`, plus `sc-sanity-jev` when Jev is available) and merges their results. Its close hook on PASS closes the sanity bead, closes the dev's task and assigns QA; on FAIL it reopens the dev bead and sends the dev the undone deliverables (`sanity-rejected`), up to `max_sanity_rounds`, then escalates to the lead. Not QA: it never judges quality. |
+| **dev** (dev, fix) | Implements one bead on its own branch with tests and opens a PR on the top of the stack. Works through a private checklist, one deliverable at a time, then runs the close hook, which verifies the PR, closes the bead and assigns sanity. Its task stays open, and it waits, until sanity passes; a sanity FAIL comes back as a `sanity-fail` message, and a lost race for the top as `rebase-required`, both fixed on the same branch. A fix bead does the same for one blocking finding. |
+| **dev-sanity** | Checks a closed dev or fix bead at its pinned commit: is each numbered deliverable written, and does lint pass? Spawns one checker per deliverable (`sc-sanity-llm`, plus `sc-sanity-jev` when Jev is available) and merges their results. On PASS it links the layer under the stack bead lock (itself, or through sanity-stack when more than one sanity task is open), then its close hook closes the sanity bead, closes the dev's task and assigns QA; on FAIL it reopens the dev bead and sends the dev exactly what was NOT complete (`sanity-fail`), up to `max_sanity_rounds`, then escalates to the lead. Not QA: it never judges quality. |
+| **sanity-stack** | dev-sanity's subagent for one next-top layer: claims the stack bead, verifies the head descends from the recorded top, links (or in lean mode verifies base alignment and defers the link), writes the layer to the ledger, releases. Returns `stacked`, `rebase_required`, `lock_timeout` or `stack_failed`; it owns the race, never the whole stack. |
 | **sc-sanity-llm / sc-sanity-jev** | dev-sanity's subagents. Each answers "is this deliverable written?" for one deliverable, as JSON. They are read-only and make no bead writes. |
 | **quality-mgr** | Runs QA on a bead whose sanity check passed. Fans out to the repository's round-1 reviewers in the background, re-verifies every cited line, and screens the findings for ceremony. Pours a fix, sanity and QA group for each blocking finding, and files important and minor findings as beads. In a fix round only the reviewer that filed a finding verifies its fix. Also runs plan review and the phase-end review. |
 | **reviewers** (`reviewers_round1`, for example req-qa, arch-qa, rust-qa-agent) | quality-mgr's subagents. Each reviews the change from one angle and returns findings with file and line evidence. |
@@ -37,15 +39,16 @@ flowchart TD
     D -->|"hook assigns sanity as the lead"| S["dev-sanity: is each deliverable written?"]
     S -->|"one per deliverable"| SC["sc-sanity-llm / sc-sanity-jev"]
     SC -->|"JSON verdicts"| S
-    S -->|"hook FAIL: reopen dev bead,<br/>sanity-rejected to the dev (cap 5)"| D
-    S -->|"hook PASS: close sanity bead and dev task,<br/>assign QA as the lead"| Q["quality-mgr: QA round 1"]
+    S -->|"hook FAIL: reopen dev bead,<br/>sanity-fail to the dev (cap 5)"| D
+    S -->|"PASS: link under the stack bead lock<br/>(sanity-stack); lost the top: rebase-required"| D
+    S -->|"stacked: hook closes sanity bead and dev task,<br/>assigns QA as the lead"| Q["quality-mgr: QA round 1"]
     Q -->|"fan-out, background"| R["reviewers_round1<br/>req-qa, arch-qa, rust-qa-agent, ..."]
     R -->|"findings with evidence"| CS["ceremony-finding-screen"]
     CS --> Q
     Q -->|"no blocking findings: PASS<br/>important/minor filed as beads"| Done["team-lead: land stack,<br/>close sprint container"]
     Q -->|"blocking: pour fix, sanity, qa group;<br/>lead dispatches the fix"| F["fix: one blocking finding,<br/>new layer on stack top, close hook --role fix"]
     F -->|"hook assigns sanity"| S2["dev-sanity on the fix"]
-    S2 -->|"hook FAIL: reopen fix bead,<br/>sanity-rejected"| F
+    S2 -->|"hook FAIL: reopen fix bead,<br/>sanity-fail"| F
     S2 -->|"PASS"| Q2["quality-mgr fix round:<br/>filing reviewer only"]
     Q2 -->|"not fixed"| F
     Q2 -->|"fixed"| Done

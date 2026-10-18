@@ -28,7 +28,7 @@ Sources: `skills/atm-bd-orchestration/`: `roles/quality-mgr.md`, `SKILL.md`, tem
 17. Never assign findings.
 18. Verdict: only-minor is PASS; blocking or important is FAIL with one fix round; a second FAIL is `ROUND_CAP`, stop dispatch, record root cause.
 19. With a PR: post `qa-complete.md.j2` as a PR comment and check stack and CI state (never `--watch`). No PR: say so in notes.
-20. Close through the close hook whatever the verdict: `atm-task-close.py --role qa --vars <file>` ([task-close-hook.md](task-close-hook.md)); it closes the bead first and the task only if that succeeded, and assigns nothing (fix dispatch is the lead's). The QA task itself is assigned by the sanity close hook as the lead.
+20. Close through the close hook whatever the verdict: `atm-task-close.py --role qa --vars <file>` ([task-close-hook.md](task-close-hook.md)); it closes the bead first and the task only if that succeeded, sends the lead a status message PASS or FAIL alike, and assigns nothing (the fix groups were poured in 16; fix dispatch is the lead's). The QA task itself is assigned by the sanity close hook as the lead. A QA task assigned with `outcome: not_reproducible` is the filing reviewer only: confirm the defect is absent at the cited line and close the QA bead, or pour a fix round.
 21. After the closes (never on refusal), append one row each to the phase QA log and stats log, computed fresh; never hand-edit; correct with a workflow-issue bead plus a correcting row; never commit the logs.
 
 ### Plan review (`plan-review-template`)

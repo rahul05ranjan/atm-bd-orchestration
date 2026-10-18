@@ -32,9 +32,10 @@ id and a re-assignment after a sanity FAIL reopens the same task in place.
 
 | Bead | ATM task held by | Template |
 | --- | --- | --- |
-| dev | a dev, by `difficulty`; the task stays open until sanity PASS | `dev-template.xml.j2` (`sanity-rejected.md.j2` after a sanity FAIL, same task) |
+| dev | a dev, by `difficulty`; the task stays open until sanity PASS | `dev-template.xml.j2` (`sanity-fail.xml.j2` after a sanity FAIL, `rebase-required.xml.j2` after a lost race for the top, same task) |
 | fix | a dev, by `difficulty` | `fix-assignment.xml.j2` |
 | sanity | dev-sanity, assigned by the dev's close hook as the lead | `dev-sanity-template.xml.j2` |
 | qa | quality-mgr, assigned by the sanity close hook as the lead | `qa-template.xml.j2` |
 | important or minor finding | an idle dev, by priority | `fix-assignment.xml.j2` |
 | sprint container | none; the team lead closes it | none |
+| stack bead (`<prefix>-phase-<x>.stack`) | none; its claim is the stack lock, held by sanity-stack or the lead for one stack write; closed when the stack lands | none |
