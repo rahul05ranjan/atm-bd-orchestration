@@ -1,6 +1,6 @@
 [project]
 name = "atm-bd"
-version = "0.17.2"
+version = "0.17.3"
 description = "ATM and Beads orchestration console, cron runner, and bundled skills"
 readme = "README.md"
 license = "MIT"
@@ -16,10 +16,10 @@ Issues = "https://github.com/randlee/atm-bd-orchestration/issues"
 atm-bd = "atm_bd_console.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "ruff", "pyright", "hatchling"]
+dev = ["pytest", "ruff", "pyright", "hatchling==1.31.0"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
