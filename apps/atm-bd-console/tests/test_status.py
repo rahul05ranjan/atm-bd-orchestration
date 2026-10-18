@@ -71,6 +71,21 @@ def test_missing_binary_uses_dependency_depth_fallback(monkeypatch) -> None:
     assert rendered == (FIXTURES / "render" / "status-fallback.txt").read_text().rstrip("\n")
 
 
+def test_render_failure_is_the_runners_command_failed(fake_bin) -> None:
+    fake_bin.make(
+        "mmdflux",
+        'if [ "$1" = "--version" ]; then printf "mmdflux 2.6.1\\n"; exit 0; fi\n'
+        'printf "bad diagram\\n" >&2\nexit 4\n',
+    )
+
+    rendered, error = status_text(snapshot())
+
+    assert rendered == (FIXTURES / "render" / "status-fallback.txt").read_text().rstrip("\n")
+    assert isinstance(error, CommandFailed)
+    assert (error.kind, error.code, error.stderr) == ("command_failed", 4, "bad diagram")
+    assert error.argv == ("mmdflux", "--format", "text")
+
+
 def test_fallback_is_one_row_per_sprint_in_dependency_depth_order(monkeypatch) -> None:
     sprints = (
         SprintView("atm-bh-3", "later", SprintState.NOT_READY, ("atm-bh-2",), ()),

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import re
-import subprocess
 
+from . import command
 from .enums import SprintState
 from .icons import SPRINT_ICONS
 from .ids import short_id
 from .render import render_agent
-from .result import CommandFailed, ConfigInvalid, Error, NotFound, Timeout
+from .result import CommandFailed, ConfigInvalid, Err, Error, NotFound
 from .types import Snapshot, SprintView
 
 _COMMAND = ("mmdflux", "--format", "text")
 _VERSION_COMMAND = ("mmdflux", "--version")
 _MINIMUM_VERSION = (2, 6, 1)
 _VERSION_PATTERN = re.compile(r"\b([0-9]+)\.([0-9]+)\.([0-9]+)\b")
+_VERSION_FIX = "install or upgrade mmdflux >=2.6.1"
+_RENDER_FIX = "correct the Mermaid source or mmdflux installation, or retry with a simpler status diagram"
+
+
 def _fallback(snapshot: Snapshot) -> str:
     by_id = {sprint.id: sprint for sprint in snapshot.sprints}
 
@@ -42,49 +46,24 @@ def _fallback(snapshot: Snapshot) -> str:
     return "\n".join(lines)
 
 
-def status_text(snapshot: Snapshot) -> tuple[str, Error | None]:
-    try:
-        version = subprocess.run(
-            _VERSION_COMMAND, capture_output=True, text=True, timeout=20, check=False,
-        )
-    except FileNotFoundError:
-        return _fallback(snapshot), NotFound("not_found", "mmdflux", "install mmdflux >=2.6.1")
-    except subprocess.TimeoutExpired:
-        return _fallback(snapshot), Timeout("timeout", _VERSION_COMMAND, 20, "retry or simplify the status diagram")
-    except OSError as error:
-        return _fallback(snapshot), CommandFailed(
-            "command_failed", _VERSION_COMMAND, -1, str(error), "check the mmdflux installation",
-        )
+def _runner_error(error: Error) -> Error:
+    # command.run reports a missing program as code 127; the status line names the install instead.
+    if isinstance(error, CommandFailed) and error.code == command.MISSING_PROGRAM_CODE:
+        return NotFound("not_found", "mmdflux", _VERSION_FIX)
+    return error
 
-    reported = (version.stdout or version.stderr).strip()
+
+def status_text(snapshot: Snapshot) -> tuple[str, Error | None]:
+    version = command.run(_VERSION_COMMAND, _VERSION_FIX)
+    if isinstance(version, Err):
+        return _fallback(snapshot), _runner_error(version.error)
+    reported = version.value.stdout.strip()
     match = _VERSION_PATTERN.search(reported)
-    if version.returncode != 0:
-        return _fallback(snapshot), CommandFailed(
-            "command_failed", _VERSION_COMMAND, version.returncode, version.stderr,
-            "install or upgrade mmdflux >=2.6.1",
-        )
     actual = tuple(int(part) for part in match.groups()) if match else None
     if actual is None or actual < _MINIMUM_VERSION:
-        return _fallback(snapshot), ConfigInvalid(
-            "config_invalid", "mmdflux_version", reported or "unknown",
-            "install or upgrade mmdflux >=2.6.1",
-        )
+        return _fallback(snapshot), ConfigInvalid("config_invalid", "mmdflux_version", reported or "unknown", _VERSION_FIX)
 
-    try:
-        completed = subprocess.run(
-            _COMMAND, input=snapshot.mermaid, capture_output=True, text=True, timeout=20, check=False,
-        )
-    except FileNotFoundError:
-        return _fallback(snapshot), NotFound("not_found", "mmdflux", "install mmdflux >=2.6.1")
-    except subprocess.TimeoutExpired:
-        return _fallback(snapshot), Timeout("timeout", _COMMAND, 20, "retry or simplify the status diagram")
-    except OSError as error:
-        return _fallback(snapshot), CommandFailed(
-            "command_failed", _COMMAND, -1, str(error), "check the mmdflux installation",
-        )
-    if completed.returncode != 0:
-        return _fallback(snapshot), CommandFailed(
-            "command_failed", _COMMAND, completed.returncode, completed.stderr,
-            "correct the Mermaid source or mmdflux installation",
-        )
-    return completed.stdout, None
+    rendered = command.run(_COMMAND, _RENDER_FIX, stdin=snapshot.mermaid)
+    if isinstance(rendered, Err):
+        return _fallback(snapshot), _runner_error(rendered.error)
+    return rendered.value.stdout, None

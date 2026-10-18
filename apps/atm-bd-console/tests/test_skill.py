@@ -183,6 +183,9 @@ def test_real_git_lists_and_clones_tag_and_main(skill_remote: tuple[str, str, st
 def test_real_source_failures_leave_target_unchanged(
     failure: str, skill_remote: tuple[str, str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ) -> None:
+    # The installer is loaded from the bundled tree, which only a wheel build copies into the package;
+    # this checkout reads the committed plugin that the packaged copy is generated from.
+    monkeypatch.setattr(skill_source, "bundled_directory", lambda: PLUGIN)
     url, _tag_commit, _main_commit = skill_remote
     target = tmp_path / "target"
     target.mkdir()
@@ -269,7 +272,7 @@ def test_orchestration_flag_and_installer_passthrough(installer, tmp_path: Path)
 
 
 def test_list_prints_remote_tags_and_set_without_loading_or_running_installer(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(skill.skill_source, "list_tags", lambda: ("v0.16.0", "v0.16.1"))
+    monkeypatch.setattr(skill.skill_source, "remote_tags", lambda: ("v0.16.0", "v0.16.1"))
     monkeypatch.setattr(skill, "_installer", lambda: (_ for _ in ()).throw(AssertionError("installer")))
 
     assert skill.run(["--list"]) == 0
@@ -382,7 +385,7 @@ def test_skill_is_wired_into_cli_and_help(capsys) -> None:
     with pytest.raises(SystemExit) as top:
         cli.main(["--help"])
     assert top.value.code == 0
-    assert "skill" not in capsys.readouterr().out
+    assert "{console,cron,show,snapshot,skill}" in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as sub:
         cli.main(["skill", "--help"])

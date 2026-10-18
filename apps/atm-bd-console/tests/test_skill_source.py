@@ -33,7 +33,7 @@ def test_remote_tags_are_sorted_like_git_tag_list(monkeypatch) -> None:
 
     monkeypatch.setattr(skill_source, "_run_git", run)
 
-    assert skill_source.list_tags() == ("v0.10.0", "v0.16.0", "v0.9.0")
+    assert skill_source.remote_tags() == ("v0.10.0", "v0.16.0", "v0.9.0")
     assert calls == [["ls-remote", "--tags", "--refs", skill_source.REPOSITORY]]
 
 
@@ -46,6 +46,20 @@ def test_bundled_source_needs_no_network_and_uses_packaged_data(monkeypatch, tmp
         assert source.name == "bundled"
         assert source.pkg_dir == plugin
         assert source.commit == "unknown"
+
+
+def test_bundled_directory_is_only_the_packaged_skills(monkeypatch, tmp_path: Path) -> None:
+    # The removed fallback read the plugin four directories above the module; that tree must not be consulted.
+    module = tmp_path / "a" / "b" / "c" / "d" / "skill_source.py"
+    make_plugin(tmp_path)
+    monkeypatch.setattr(skill_source, "__file__", str(module))
+
+    with pytest.raises(skill_source.SkillSourceError, match="bundled skills are missing"):
+        skill_source.bundled_directory()
+
+    packaged = module.parent / "_skills"
+    packaged.mkdir(parents=True)
+    assert skill_source.bundled_directory() == packaged.resolve()
 
 
 def test_release_resolves_to_shallow_clone_as_data_without_running_it(monkeypatch, tmp_path: Path) -> None:
@@ -161,7 +175,7 @@ def test_clone_gets_the_clone_timeout_and_a_timeout_names_the_clone(monkeypatch)
     monkeypatch.setattr(skill_source.command, "run", run)
 
     with (
-        pytest.raises(skill_source.SkillSourceError, match=rf"git clone .* failed: timed out after {skill_source.CLONE_TIMEOUT_S}s"),
+        pytest.raises(skill_source.RepositoryError, match=rf"git clone .* failed: timed out after {skill_source.CLONE_TIMEOUT_S}s"),
         skill_source.resolve_source(version="0.16.0"),
     ):
         raise AssertionError("a timed-out clone must not be yielded")
@@ -173,10 +187,41 @@ def test_clone_gets_the_clone_timeout_and_a_timeout_names_the_clone(monkeypatch)
 
 def test_network_failure_names_upstream_url_and_git_error(monkeypatch) -> None:
     def fail(_args, **_kwargs):
-        raise skill_source.SkillSourceError(f"{skill_source.REPOSITORY}: git ls-remote failed: offline")
+        raise skill_source.RepositoryError(f"{skill_source.REPOSITORY}: git ls-remote failed: offline")
 
     monkeypatch.setattr(skill_source, "_run_git", fail)
 
-    with pytest.raises(skill_source.SkillSourceError, match="offline") as error:
-        skill_source.list_tags()
+    with pytest.raises(skill_source.RepositoryError, match="offline") as error:
+        skill_source.remote_tags()
     assert skill_source.REPOSITORY in str(error.value)
+
+
+def test_git_failure_is_a_repository_error_and_keeps_the_upstream_name(monkeypatch) -> None:
+    monkeypatch.setattr(
+        skill_source.command, "run",
+        lambda argv, fix, **_kwargs: Err(skill_source.command.CommandFailed("command_failed", tuple(argv), 128, "denied", fix)),
+    )
+
+    with pytest.raises(skill_source.RepositoryError) as error:
+        skill_source.remote_tags()
+    assert str(error.value) == f"{skill_source.REPOSITORY}: git ls-remote --tags --refs {skill_source.REPOSITORY} failed: denied"
+
+
+def test_a_tree_problem_is_relabelled_with_the_ref_and_is_not_a_repository_error(monkeypatch) -> None:
+    def run(args, **_kwargs):
+        if args[0] == "ls-remote":
+            return f"{COMMIT}\trefs/tags/v0.16.0\n"
+        if args[0] == "clone":
+            make_plugin(Path(args[-1]), installer="")
+            Path(args[-1], "plugins", "atm-bd-orchestration", "manifest.yaml").unlink()
+            return ""
+        return f"{COMMIT}\n"
+
+    monkeypatch.setattr(skill_source, "_run_git", run)
+
+    with (
+        pytest.raises(skill_source.SkillSourceError, match=r"v0\.16\.0 is not installable by atm-bd .*manifest.yaml") as error,
+        skill_source.resolve_source(version="0.16.0"),
+    ):
+        raise AssertionError("an incomplete tree must not be yielded")
+    assert not isinstance(error.value, skill_source.RepositoryError)
