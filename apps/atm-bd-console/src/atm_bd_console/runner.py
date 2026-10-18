@@ -1,17 +1,30 @@
 """Impure tick boundary; scheduling and decisions remain in :mod:`model`."""
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Literal
+from typing import Literal, Self
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
-from .dispatch import verification_reason
+from .dispatch import sprint_of, verification_reason
+from .enums import MergeState, SprintState
 from .log import TickLog, create_console_logger
 from .result import Err, NotFound, Ok
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
+
+
+class StepResult(tuple[Snapshot, State]):
+    """A two-value compatible tick result with all actions reported this tick."""
+
+    reported: tuple[Action, ...]
+
+    def __new__(cls, snapshot: Snapshot, state: State, reported: tuple[Action, ...] = ()) -> Self:
+        result = super().__new__(cls, (snapshot, state))
+        result.reported = reported
+        return result
 
 
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
@@ -81,6 +94,10 @@ def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], r
         if not any(problem.to == recipient for problem in problems):
             batch_due.pop(recipient)
     notices_succeeded = any(action.kind in ("send", "batch") for action in successful)
+    failed_collision_ids = {action.bead_ids[0] for action in failed
+                            if action.kind == "send" and action.bead_ids and action.text.startswith("collision:")}
+    collision_notices = tuple(key for key in proposed.collision_notices
+                              if key in state.collision_notices or json.loads(key)[0] not in failed_collision_ids)
     return replace(
         proposed,
         problems=problems,
@@ -88,6 +105,7 @@ def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], r
         last_batch=proposed.last_batch if any(action.kind == "batch" for action in successful) else state.last_batch,
         sent=(*state.sent, *successful)[-5:],
         batch_due=batch_due,
+        collision_notices=collision_notices,
     )
 
 
@@ -101,18 +119,30 @@ def _write_snapshot(store: StateStore, snapshot: Snapshot, logger: TickLog) -> S
     return replace(snapshot, errors=(*snapshot.errors, written.error, *logger.errors[previous_errors:]))
 
 
-def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger):
+def _branch_groups(phase, repo) -> tuple[tuple[str, ...], ...]:
+    return tuple(tuple(dict.fromkeys((sprint.branch, *(
+        step.branch for step in phase.steps if step.branch and sprint_of(step, phase, repo.bead_prefix) == sprint
+    )))) for sprint in phase.sprints)
+
+
+def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger,
+                  force_github: bool = False):
     shown_ids = atm_bd.closed_show_ids(file, ())
     shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
     phase = shown if isinstance(shown, Err) else atm_bd.phase(file, root_bead, (), (), shown.value)
-    if root_bead is not None and root_bead.status == "closed" and isinstance(phase, Ok):
+    if root_bead is not None and root_bead.status == SprintState.CLOSED and isinstance(phase, Ok):
         phase = Ok(replace(phase.value, step_errors=()))
     cached_prs = load_prs(config.repo_root, file.root_id)
     cached_merges = load_merges(config.repo_root, file.root_id)
     cached_snapshot = load_snapshot(config.repo_root, file.root_id)
     history = store.load_actions()
     prs = Ok(cached_prs.value.prs) if isinstance(cached_prs, Ok) else Ok(())
-    gh = _gh(config.github)
+    gh = cached_prs.value.gh if config.github != "off" and isinstance(cached_prs, Ok) else _gh(config.github)
+    if force_github and config.github != "off":
+        if config.github == "rest" and isinstance(phase, Ok):
+            prs, gh = github_source.open_prs(config.github, config.repo_root, _branch_groups(phase.value, repo))
+        else:
+            prs, gh = github_source.open_prs(config.github, config.repo_root)
     merges = tuple(Ok(merge) for merge in cached_merges.value.merges.values()) if isinstance(cached_merges, Ok) else ()
     sent = tuple(
         Action(line.at, line.kind if line.kind in ("assign", "send", "batch") else "send", line.to or "—",
@@ -138,10 +168,10 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     logger.finish(actions=0)
     persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
-    return snapshot, next_state
+    return StepResult(snapshot, next_state)
 
 
-def step(config: Config, state: State, force_github: bool, store: StateStore):
+def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
     """Run one best-effort tick using the caller-owned lock-backed store."""
     now = datetime.now(UTC)
     logger = TickLog(create_console_logger(config.repo_root))
@@ -160,13 +190,13 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
         logger.finish(actions=0)
         persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
-        return persisted, state
+        return StepResult(persisted, state)
     config = replace(config, lead=file.value.lead)
     root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
-    if root_bead is not None and root_bead.status == "closed":
-        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
+    if root_bead is not None and root_bead.status == SprintState.CLOSED:
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github)
     if not force_github and model.idle_stop_due(state, now):
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
     opened = logger.result("beads.open", beads_source.open_beads(file.value.label), label=file.value.label)
@@ -188,6 +218,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     worktrees = logger.result("git.worktrees", git_source.worktrees(config.repo_root))
     task_ids = tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ()
     task_beads = logger.result("beads.show_tasks", beads_source.show(task_ids), task_ids=list(task_ids))
+    if isinstance(task_beads, Ok) and task_beads.value:
+        task_beads = logger.result("beads.task_ancestors", beads_source.ancestors(task_beads.value))
     due = model.due(
         state,
         phase.value,
@@ -222,7 +254,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
             if isinstance(checked, Ok):
                 merges[branch] = checked.value
             else:
-                unavailable = Merge(branch, target, "error", (), (verification_reason(checked.error),), now)
+                unavailable = Merge(branch, target, MergeState.ERROR, (), (verification_reason(checked.error),), now)
                 merges[branch] = unavailable
                 merge_results.append(Ok(unavailable))
     cached_prs = saved_prs.value if config.github != "off" and isinstance(saved_prs, Ok) else None
@@ -231,7 +263,11 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
     prs_read_at = cached_prs.read_at if cached_prs is not None else now
     prs_input = Ok(prs) if cached_prs is not None else None
     if config.github != "off" and (force_github or (due and due.github)):
-        refreshed_prs, gh = github_source.open_prs(config.github)
+        if config.github == "rest" and isinstance(phase, Ok):
+            branch_groups = _branch_groups(phase.value, repo.value)
+            refreshed_prs, gh = github_source.open_prs(config.github, config.repo_root, branch_groups)
+        else:
+            refreshed_prs, gh = github_source.open_prs(config.github)
         if isinstance(refreshed_prs, Ok):
             prs_input = refreshed_prs
             prs = refreshed_prs.value
@@ -266,6 +302,5 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return persisted, durable
-    snapshot, next_state = persist(store)
-    return snapshot, next_state
+            return StepResult(persisted, durable, reported)
+    return persist(store)

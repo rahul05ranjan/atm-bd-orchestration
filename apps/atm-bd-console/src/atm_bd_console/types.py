@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, TypeAlias
 
+from .enums import CiState, MergeState, PrState, QaState, SprintState
+from .migrations import migrate_pull_request_ci, migrate_snapshot_ci
 from .result import Error, Result
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
 StepKind: TypeAlias = Literal["dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"]
 AgentStatus: TypeAlias = Literal["busy", "stalling", "blocked", "offline", "idle"]
 
+_LEGACY_CI = {"success": CiState.PASS, "pending": CiState.RUNNING, "failure": CiState.FAIL_BUG}
 
 
 @dataclass(frozen=True)
@@ -38,7 +41,7 @@ class Task:
 class Bead:
     id: str
     title: str
-    status: Literal["open", "in_progress", "blocked", "closed"]
+    status: SprintState
     labels: tuple[str, ...]
     parent: str | None
     blocked_by: tuple[str, ...]
@@ -48,6 +51,7 @@ class Bead:
     claimed_at: datetime | None
     closed_at: datetime | None
     close_reason: str | None = None
+    raw_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,7 +61,7 @@ class Step:
     kind: StepKind
     quick_fix: bool
     anchor: bool
-    status: Literal["open", "in_progress", "blocked", "closed"]
+    status: SprintState
     ready: bool
     assignee: str | None
     branch: str | None
@@ -88,6 +92,8 @@ class Sprint:
     depends_on: tuple[str, ...]
     closed: bool
     findings: int
+    status: SprintState | None = None
+    raw_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,7 +123,7 @@ class RemoteRef:
 class Merge:
     branch: str
     target: str
-    state: Literal["clean", "conflict", "error"]
+    state: MergeState
     files: tuple[str, ...]
     messages: tuple[str, ...]
     checked_at: datetime
@@ -137,9 +143,12 @@ class PullRequest:
     head: str
     base: str
     head_sha: str
-    ci: Literal["success", "pending", "failure", "none"]
+    ci: CiState = field(metadata={"json_migration": migrate_pull_request_ci, "legacy_ci": _LEGACY_CI})
     failed_checks: tuple[str, ...]
-    state: Literal["open", "merged", "closed", "draft"] = "open"
+    state: PrState = PrState.OPEN
+    raw_ci: str = ""
+    raw_state: str = ""
+
 
 
 
@@ -232,7 +241,7 @@ class AgentView:
     agent_type: str | None = None
     model: str | None = None
     harness: str | None = None
-    qa_state: Literal["running", "pass", "fail"] | None = None
+    qa_state: QaState | None = None
 
 
 @dataclass(frozen=True)
@@ -253,7 +262,7 @@ class Section:
 class StepView:
     bead_id: str
     kind: StepKind
-    status: str
+    status: SprintState
     assignee: str | None
 
 
@@ -261,7 +270,7 @@ class StepView:
 class SprintView:
     id: str
     title: str
-    state: Literal["closed", "in_progress", "ready", "not_ready"]
+    state: SprintState
     depends_on: tuple[str, ...]
     steps: tuple[StepView, ...]
 
@@ -325,7 +334,7 @@ class Snapshot:
     metrics: Metrics
     gh: GhStatus
     top_pr: int | None
-    top_ci: str | None
+    top_ci: CiState | None = field(metadata={"json_migration": migrate_snapshot_ci, "legacy_ci": _LEGACY_CI})
     mermaid: str
     sprints: tuple[SprintView, ...]
     interval_s: int
@@ -334,6 +343,11 @@ class Snapshot:
     sent: tuple[Action, ...]
     prs: tuple[PrRow, ...]
     files: Mapping[str, str]
+    phase_data: Phase | None = None
+    task_data: tuple[Task, ...] = ()
+    member_data: tuple[Member, ...] = ()
+    task_bead_data: tuple[Bead, ...] = ()
+    worktree_data: tuple[Worktree, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -346,6 +360,7 @@ class State:
     sent: tuple[Action, ...]
     remotes: tuple[RemoteRef, ...]
     batch_due: Mapping[str, datetime]
+    collision_notices: tuple[str, ...] = ()
 
 
 INITIAL_STATE = State((), None, None, None, None, (), (), {})

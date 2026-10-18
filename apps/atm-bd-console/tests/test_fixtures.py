@@ -10,6 +10,7 @@ from conftest import SYSTEM_PATH, FakeBin
 from contract_fixtures import SNAPSHOTS, fixtures
 
 from atm_bd_console.codec import from_json, to_json
+from atm_bd_console.enums import CiState, MergeState
 from atm_bd_console.result import Ok, Rejected
 from atm_bd_console.types import ActionLine, Inputs, MergeFile, PrsFile, Snapshot
 
@@ -60,10 +61,10 @@ def test_cache_fixtures_are_populated() -> None:
     inputs = _load("inputs.json", Inputs)
     assert isinstance(inputs.task_beads, Ok) and inputs.task_beads.value
     merge = _load("merge.json", MergeFile)
-    assert {item.state for item in merge.merges.values()} == {"clean", "conflict"}
+    assert {item.state for item in merge.merges.values()} == {MergeState.CLEAN, MergeState.CONFLICT}
     assert all(key == item.branch for key, item in merge.merges.items())
     prs = _load("prs.json", PrsFile)
-    assert [pr.ci for pr in prs.prs] == ["failure", "success"]
+    assert [pr.ci for pr in prs.prs] == [CiState.FAIL_BUG, CiState.PASS]
     assert prs.prs[0].failed_checks == ("pytest", "ruff") and prs.gh.ok is True
 
 

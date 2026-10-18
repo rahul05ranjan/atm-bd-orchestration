@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from atm_bd_console import git_source
+from atm_bd_console.enums import MergeState
 from atm_bd_console.result import Err, NotFound, Ok
 
 
@@ -75,12 +76,12 @@ def test_worktrees_lists_main_and_a_detached_worktree(repo: Path, tmp_path: Path
 
 def test_clean_branch_merges_clean(repo: Path) -> None:
     merge = git_source.merge(repo, "clean", "main").value
-    assert (merge.branch, merge.target, merge.state, merge.files, merge.messages) == ("clean", "main", "clean", (), ())
+    assert (merge.branch, merge.target, merge.state, merge.files, merge.messages) == ("clean", "main", MergeState.CLEAN, (), ())
 
 
 def test_conflicting_branch_lists_the_conflicted_files_and_messages(repo: Path) -> None:
     merge = git_source.merge(repo, "conflict", "main").value
-    assert merge.state == "conflict"
+    assert merge.state == MergeState.CONFLICT
     assert merge.files == ("a.txt", "b.txt")
     assert merge.messages == (
         "Auto-merging a.txt",

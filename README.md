@@ -52,8 +52,15 @@ nothing is copied.
 
 ## Develop
 
+Use `atm-bd console --phase <x>` for the dashboard and `atm-bd cron --phase <x>`
+for a single orchestration tick.
+
 Console logging, delivery outcomes, and retention/rotation procedures are
 documented in [apps/atm-bd-console/README.md](apps/atm-bd-console/README.md).
+
+Validation scope: `just lint` runs Ruff over the console source and tests,
+but Pyright checks console production source only, not tests. Commands and the
+scope of the CI gate are in the console README's Development validation section.
 
 ```bash
 cd plugins/atm-bd-orchestration

@@ -49,10 +49,13 @@ jobs:
       - name: Console tests
         working-directory: apps/atm-bd-console
         run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q
+      - name: Console source type check
+        working-directory: apps/atm-bd-console
+        run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pyright src
       - name: Console CLI smoke tests
         working-directory: apps/atm-bd-console
         env:
-          ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd-console
+          ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd
         run: |
           "$ATM_BD_CONSOLE_BIN" --help
           uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick

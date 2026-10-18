@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from atm_bd_console import github_source
+from atm_bd_console.command import Output
+from atm_bd_console.enums import CiState, PrState
 from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 
 
@@ -17,6 +19,27 @@ def fake_gh(fake_bin, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_cod
     monkeypatch.setenv("FAKE_EXIT", str(exit_code))
     monkeypatch.setenv("FAKE_ERR", stderr)
     return fake_bin
+
+
+@pytest.mark.parametrize(("conclusion", "status", "checks", "expected"), [
+    ("FAILURE", "COMPLETED", ("macos-14",), CiState.FAIL_MACOS),
+    ("CANCELLED", "COMPLETED", ("darwin",), CiState.FAIL_MACOS),
+    ("FAILURE", "COMPLETED", ("windows",), CiState.FAIL_WINDOWS),
+    ("FAILURE", "COMPLETED", ("win-x64",), CiState.FAIL_WINDOWS),
+    ("TIMED_OUT", "COMPLETED", ("win_x64",), CiState.FAIL_WINDOWS),
+    ("FAILURE", "COMPLETED", ("ubuntu",), CiState.FAIL_LINUX),
+    ("FAILURE", "COMPLETED", ("linux",), CiState.FAIL_LINUX),
+    ("FAILURE", "COMPLETED", ("linux", "macos"), CiState.FAIL_BUG),
+    ("FAILURE", "COMPLETED", ("linux", "lint"), CiState.FAIL_BUG),
+    ("SKIPPED", "COMPLETED", (), CiState.NONE),
+    ("NEUTRAL", "COMPLETED", (), CiState.NONE),
+    ("PENDING", "IN_PROGRESS", ("windows",), CiState.FAIL_WINDOWS),
+    ("BOGUS", "IN_PROGRESS", (), CiState.UNKNOWN),
+    ("SUCCESS", "BOGUS", (), CiState.UNKNOWN),
+    ("BOGUS", "BOGUS", ("windows",), CiState.FAIL_WINDOWS),
+])
+def test_ci_classification(conclusion, status, checks, expected):
+    assert github_source.ci_state_of(conclusion, status, checks) is expected
 
 
 # Recorded from randlee/atm-bd-orchestration on 2026-10-15 with GRAPHQL and the REST pulls URL, trimmed to
@@ -46,9 +69,9 @@ def test_recorded_graphql_maps_every_pull_request(fake_bin, monkeypatch) -> None
     result, status = github_source.open_prs("graphql")
     assert isinstance(result, Ok) and status.ok is True and status.truncated is False
     assert [(pr.number, pr.head, pr.base, pr.ci, pr.failed_checks) for pr in result.value] == [
-        (2, "feat/four-job-beads-workflow", "main", "none", ()),
-        (147, "sprint/bh-10-textual-tabs", "fix/bh-4-sanity-r4", "success", ()),
-        (148, "fix/bh-5-qa-r1", "sprint/bh-10-textual-tabs", "pending", ()),
+        (2, "feat/four-job-beads-workflow", "main", CiState.NONE, ()),
+        (147, "sprint/bh-10-textual-tabs", "fix/bh-4-sanity-r4", CiState.PASS, ()),
+        (148, "fix/bh-5-qa-r1", "sprint/bh-10-textual-tabs", CiState.RUNNING, ()),
     ]
     assert result.value[2].head_sha == "481eba418048db6c206bd5c043e29ce216b731ef"
     assert result.value[2].url == "https://github.com/randlee/atm-bd-orchestration/pull/148"
@@ -59,18 +82,77 @@ def test_recorded_rest_maps_every_pull_request_without_ci(fake_bin, monkeypatch)
     result, status = github_source.open_prs("rest")
     assert isinstance(result, Ok) and status.ok is True and status.truncated is False
     assert [(pr.number, pr.head, pr.base, pr.head_sha, pr.ci) for pr in result.value] == [
-        (row["number"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], "none") for row in RECORDED_REST
+        (row["number"], row["head"]["ref"], row["base"]["ref"], row["head"]["sha"], CiState.NONE) for row in RECORDED_REST
     ]
     assert {pr.number for pr in result.value} == {2, 147, 148}
 
 
-@pytest.mark.parametrize(("state", "expected"), [("SUCCESS", "success"), ("PENDING", "pending"), ("EXPECTED", "pending"), ("FAILURE", "failure"), ("ERROR", "failure"), (None, "none")])
-def test_graphql_is_one_call_and_maps_rollups(fake_bin, monkeypatch, state, expected) -> None:
+def test_graphql_truncated_check_contexts_make_status_unknown(fake_bin, monkeypatch):
+    body = graphql()
+    contexts = body["data"]["repository"]["pullRequests"]["nodes"][0]["commits"]["nodes"][-1]["commit"]["statusCheckRollup"]["contexts"]
+    contexts["totalCount"] = len(contexts["nodes"]) + 1
+    fake_gh(fake_bin, monkeypatch, body)
+    result, status = github_source.open_prs("graphql")
+    assert isinstance(result, Ok)
+    assert status.truncated is True
+
+
+@pytest.mark.parametrize("state", ("SUCCESS", "PENDING", "EXPECTED", "FAILURE", "ERROR", None))
+def test_graphql_is_one_call_and_maps_rollups(fake_bin, monkeypatch, state) -> None:
     calls = fake_gh(fake_bin, monkeypatch, graphql(state))
     result, status = github_source.open_prs("graphql")
-    assert result.value[0].ci == expected
+    assert result.value[0].ci == (CiState.FAIL_BUG if state is not None else CiState.NONE)
     assert result.value[0].failed_checks == (() if state is None else ("bad",))
     assert status.ok is True and calls.argv() == [github_source.GRAPHQL_ARGV]
+
+
+def test_rest_fetches_only_selected_pr_checks_and_failure_outranks_running(monkeypatch):
+    calls = []
+    pull_rows = copy.deepcopy(RECORDED_REST)
+    selected = pull_rows[0]
+    second = pull_rows[1]
+    lower = copy.deepcopy(selected)
+    lower["number"] = selected["number"] - 1
+    lower["head"]["sha"] = "lower-sha"
+    pull_rows.append(lower)
+
+    def run(argv, *_args, **_kwargs):
+        calls.append(argv)
+        if argv == github_source.REST_ARGV:
+            return Ok(Output(0, json.dumps(pull_rows)))
+        return Ok(Output(0, json.dumps({"total_count": 2, "check_runs": [
+            {"name": "windows", "conclusion": "failure", "status": "completed"},
+            {"name": "pending", "conclusion": None, "status": "in_progress"},
+        ]})))
+
+    monkeypatch.setattr(github_source.command, "run", run)
+    result, status = github_source.open_prs("rest", "/repo", (
+        (selected["head"]["ref"],), (second["head"]["ref"],), ("no-pr-branch",),
+    ))
+    assert isinstance(result, Ok) and status.ok
+    assert len(calls) == 3
+    assert selected["head"]["sha"] in calls[1][-1]
+    assert second["head"]["sha"] in calls[2][-1]
+    selected_result = next(pr for pr in result.value if pr.number == selected["number"])
+    assert selected_result.ci == CiState.FAIL_WINDOWS
+    assert selected_result.failed_checks == ("windows",)
+
+
+def test_rest_unknown_check_status_is_preserved(monkeypatch):
+    pull_rows = copy.deepcopy(RECORDED_REST[:1])
+
+    def run(argv, *_args, **_kwargs):
+        if argv == github_source.REST_ARGV:
+            return Ok(Output(0, json.dumps(pull_rows)))
+        return Ok(Output(0, json.dumps({"total_count": 1, "check_runs": [
+            {"name": "test", "conclusion": None, "status": "pulsing"},
+        ]})))
+
+    monkeypatch.setattr(github_source.command, "run", run)
+    result, status = github_source.open_prs("rest", "/repo", ((pull_rows[0]["head"]["ref"],),))
+    assert isinstance(result, Ok) and status.ok
+    assert result.value[0].ci is CiState.UNKNOWN
+    assert result.value[0].raw_ci == "PULSING"
 
 
 def test_graphql_requests_newest_prs_before_the_100_row_limit() -> None:
@@ -81,11 +163,11 @@ def test_graphql_and_rest_map_drafts_to_draft_state(fake_bin, monkeypatch) -> No
     graph = graphql()
     graph["data"]["repository"]["pullRequests"]["nodes"][0]["isDraft"] = True
     fake_gh(fake_bin, monkeypatch, graph)
-    assert github_source.open_prs("graphql")[0].value[0].state == "draft"
+    assert github_source.open_prs("graphql")[0].value[0].state == PrState.DRAFT
     rest = copy.deepcopy(RECORDED_REST[:1])
     rest[0]["draft"] = True
     fake_gh(fake_bin, monkeypatch, rest)
-    assert github_source.open_prs("rest")[0].value[0].state == "draft"
+    assert github_source.open_prs("rest")[0].value[0].state == PrState.DRAFT
 
 
 def test_graphql_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
@@ -93,14 +175,14 @@ def test_graphql_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
     node = graph["data"]["repository"]["pullRequests"]["nodes"][0]
     node.update(state="CLOSED", isDraft=True)
     fake_gh(fake_bin, monkeypatch, graph)
-    assert github_source.open_prs("graphql")[0].value[0].state == "closed"
+    assert github_source.open_prs("graphql")[0].value[0].state == PrState.CLOSED
 
 
 def test_rest_closed_draft_remains_closed(fake_bin, monkeypatch) -> None:
     rest = copy.deepcopy(RECORDED_REST[:1])
     rest[0].update(state="closed", draft=True)
     fake_gh(fake_bin, monkeypatch, rest)
-    assert github_source.open_prs("rest")[0].value[0].state == "closed"
+    assert github_source.open_prs("rest")[0].value[0].state == PrState.CLOSED
 
 
 

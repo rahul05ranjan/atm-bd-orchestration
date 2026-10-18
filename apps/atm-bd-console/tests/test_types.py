@@ -10,6 +10,7 @@ from typing import Literal, get_args, get_origin, get_type_hints
 import pytest
 
 from atm_bd_console import result, types
+from atm_bd_console.enums import QaState, SprintState
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "atm_bd_console"
 
@@ -30,16 +31,16 @@ FIELDS: dict[str, str] = {
     "IoFailed": "kind path message fix",
     "Member": "name presence presence_since agent_type model harness",
     "Task": "id agent state position assigned_at state_since description",
-    "Bead": "id title status labels parent blocked_by assignee metadata created_at claimed_at closed_at close_reason",
+    "Bead": "id title status labels parent blocked_by assignee metadata created_at claimed_at closed_at close_reason raw_status",
     "Step": "bead_id sprint kind quick_fix anchor status ready assignee branch target worktree layer difficulty tag "
             "top_epic claimed_at closed_at title checked_bead sprint_bead qa_round carry_forward close_reason",
-    "Sprint": "id title layer branch target stack depends_on closed findings",
+    "Sprint": "id title layer branch target stack depends_on closed findings status raw_status",
     "Phase": "root_id label title closed sprints steps step_errors",
     "DispatchSpec": "template vars",
     "RemoteRef": "branch sha",
     "Merge": "branch target state files messages checked_at",
     "Worktree": "path branch head",
-    "PullRequest": "number url head base head_sha ci failed_checks state",
+    "PullRequest": "number url head base head_sha ci failed_checks state raw_ci raw_state",
     "GhStatus": "mode ok error at truncated",
     "RepoConfig": "bead_prefix sanity_member qa_member primary_checkout worktree_base lint_command policy_path "
                   "reviewers_round1 plans_dir",
@@ -58,8 +59,8 @@ FIELDS: dict[str, str] = {
     "Metrics": "done total pct active_s",
     "Due": "fetch merges github",
     "Snapshot": "schema generated_at phase root_closed stopped agents sections problems errors metrics gh top_pr "
-                "top_ci mermaid sprints interval_s lead bead_prefix sent prs files",
-    "State": "problems cycle_first_send last_batch last_cycle idle_since sent remotes batch_due",
+                "top_ci mermaid sprints interval_s lead bead_prefix sent prs files phase_data task_data member_data task_bead_data worktree_data",
+    "State": "problems cycle_first_send last_batch last_cycle idle_since sent remotes batch_due collision_notices",
     "PhaseFile": "phase root_id label sprints depends_on lead templates",
     "MergeFile": "checked_at merges",
     "PrsFile": "read_at gh prs",
@@ -67,18 +68,13 @@ FIELDS: dict[str, str] = {
 }
 
 DIFFICULTY = ("hard", "normal", "fast")
-BEAD_STATUS = ("open", "in_progress", "blocked", "closed")
 GITHUB_MODE = ("graphql", "rest", "off")
 # (class, field) -> the Literal values the design names; Optional literals compare without None.
 LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Member", "presence"): ("active", "idle", "offline", "blocked", "unknown"),
     ("Task", "state"): ("assigned", "active"),
-    ("Bead", "status"): BEAD_STATUS,
     ("Step", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
-    ("Step", "status"): BEAD_STATUS,
     ("Step", "difficulty"): DIFFICULTY,
-    ("Merge", "state"): ("clean", "conflict", "error"),
-    ("PullRequest", "ci"): ("success", "pending", "failure", "none"),
     ("GhStatus", "mode"): GITHUB_MODE,
     ("Config", "github"): GITHUB_MODE,
     ("Row", "state"): ("running", "queued"),
@@ -86,9 +82,7 @@ LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Row", "difficulty"): DIFFICULTY,
     ("Row", "marker"): ("red", "yellow"),
     ("AgentView", "status"): ("busy", "stalling", "blocked", "offline", "idle"),
-    ("AgentView", "qa_state"): ("running", "pass", "fail"),
     ("StepView", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
-    ("SprintView", "state"): ("closed", "in_progress", "ready", "not_ready"),
     ("Action", "kind"): ("assign", "send", "batch"),
     ("Snapshot", "stopped"): ("closed", "idle"),
     ("ActionLine", "kind"): ("assign", "send", "batch", "hold", "dry_run"),
@@ -137,6 +131,10 @@ def test_literal_arguments_match_design(name: str, field: str) -> None:
 
 
 def test_key_field_annotations() -> None:
+    assert get_type_hints(types.Bead)["status"] is SprintState
+    assert get_type_hints(types.Step)["status"] is SprintState
+    assert get_type_hints(types.StepView)["status"] is SprintState
+    assert get_type_hints(types.AgentView)["qa_state"] == QaState | None
     assert get_type_hints(types.Snapshot)["generated_at"] is datetime
     assert get_type_hints(types.Phase)["step_errors"] == tuple[tuple[str, result.Error], ...]
     assert get_type_hints(types.GhStatus)["error"] == result.Error | None
@@ -147,7 +145,7 @@ def test_key_field_annotations() -> None:
 
 def test_tick_context_contract_field_names_are_pinned() -> None:
     assert tuple(field.name for field in fields(types.Sprint)) == (
-        "id", "title", "layer", "branch", "target", "stack", "depends_on", "closed", "findings",
+        "id", "title", "layer", "branch", "target", "stack", "depends_on", "closed", "findings", "status", "raw_status",
     )
     assert tuple(field.name for field in fields(types.RepoConfig)) == (
         "bead_prefix", "sanity_member", "qa_member", "primary_checkout", "worktree_base", "lint_command",

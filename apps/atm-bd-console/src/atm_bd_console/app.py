@@ -14,7 +14,7 @@ from rich.cells import cell_len
 from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
 from textual.errors import NoWidget
 from textual.message import Message
@@ -22,9 +22,10 @@ from textual.widgets import OptionList, Static, TabbedContent, TabPane
 from textual.widgets._tabbed_content import ContentTab
 from textual.widgets.option_list import Option
 
-from . import prs, render, status
+from . import prs, render, status, status_table
 from .build import display_identity, identity
-from .icons import SPRINT_STATE_ICONS
+from .enums import SprintState
+from .icons import SPRINT_ICONS
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
@@ -36,13 +37,13 @@ STEP_KINDS = ("dev", "sanity", "qa", "fix")
 def status_header(snapshot: Snapshot) -> Text:
     """Show sprint counts using the same status icons as the DAG."""
     states = [sprint.state for sprint in snapshot.sprints]
-    closed, running = states.count("closed"), states.count("in_progress")
+    closed, running = states.count(SprintState.CLOSED), states.count(SprintState.IN_PROGRESS)
     waiting = len(states) - closed - running
     result = Text(f"sprints {closed}/{len(states)} · ")
-    for index, (state, count) in enumerate((("closed", closed), ("in_progress", running), ("not_ready", waiting))):
+    for index, (state, count) in enumerate(((SprintState.CLOSED, closed), (SprintState.IN_PROGRESS, running), (SprintState.NOT_READY, waiting))):
         if index:
             result.append(" · ")
-        glyph, style = SPRINT_STATE_ICONS[state]
+        glyph, style = SPRINT_ICONS[state]
         result.append(glyph, style=style)
         result.append(f" {count}")
     return result
@@ -64,7 +65,7 @@ def _lock_message(error: Error) -> str:
     if error.kind == "lock_held":
         age = "no snapshot" if error.snapshot_age_s is None else f"snapshot age {error.snapshot_age_s}s"
         return f"atm-bd console: lock held by a running console ({age}); {error.fix}"
-    return f"atm-bd console: {error.kind}: {error.path}: {error.message}; {error.fix}"
+    return f"atm-bd console: {error.kind}: {getattr(error, 'path', '')}: {getattr(error, 'message', '')}; {error.fix}"
 
 
 class GraphText(Static):
@@ -126,7 +127,7 @@ class ConsoleApp(App[int]):
     #diagnostics { height: 1fr; overflow: auto; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("m", "toggle_pr_history", "PR history"),
@@ -158,6 +159,7 @@ class ConsoleApp(App[int]):
         with TabbedContent(initial="dispatch"):
             with TabPane("Dispatch", id="dispatch"), VerticalScroll(id="dispatch-panel"):
                 yield Static(id="dashboard")
+                yield Static(id="status-table")
             with TabPane("Status", id="status"):
                 yield Static(id="status-header")
                 yield Static("↔ Wide graph · focus graph and use ←/→ to pan", id="status-overflow")
@@ -335,7 +337,7 @@ class ConsoleApp(App[int]):
         sprints.clear_options()
         options = []
         for sprint in snapshot.sprints:
-            glyph, style = SPRINT_STATE_ICONS[sprint.state]
+            glyph, style = SPRINT_ICONS[sprint.state]
             label = Text()
             label.append(glyph, style=style)
             label.append(f" {sprint.id}  {sprint.title}")
@@ -344,7 +346,7 @@ class ConsoleApp(App[int]):
         if highlighted is not None and highlighted < len(snapshot.sprints):
             sprints.highlighted = highlighted
         elif snapshot.sprints:
-            sprints.highlighted = next((index for index, sprint in enumerate(snapshot.sprints) if sprint.state != "closed"), 0)
+            sprints.highlighted = next((index for index, sprint in enumerate(snapshot.sprints) if sprint.state != SprintState.CLOSED), 0)
         self.refresh_views()
         # Panel sizes settle after the first layout; render once more at the laid-out size.
         self.call_after_refresh(self.refresh_views)
@@ -382,6 +384,9 @@ class ConsoleApp(App[int]):
         if not self._status_view_initialized:
             first_line = next((line for line in lines if line.strip()), None)
             if first_line is not None:
+                if panel.virtual_size.width <= 0:
+                    self.call_after_refresh(self._refresh_status_viewport)
+                    return
                 indent = first_line[:len(first_line) - len(first_line.lstrip())]
                 panel.scroll_to(x=cell_len(indent), animate=False, immediate=True)
                 self._status_view_initialized = True
@@ -395,6 +400,7 @@ class ConsoleApp(App[int]):
         dashboard_width = min(panel.size.width or width, width)
         if snapshot is not None:
             height = panel.size.height or self.size.height
+            self.query_one("#status-table", Static).update(status_table.rich_table(status_table.rows(snapshot)))
             self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
             self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
             self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))

@@ -7,9 +7,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from contract_samples import STEP
 from rich.cells import cell_len
 
+from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
+from atm_bd_console.enums import CiState, SprintState
+from atm_bd_console.model import _agent_views
 from atm_bd_console.render import _age, _error_text, dashboard, status_bar
 from atm_bd_console.result import (
     CommandFailed,
@@ -27,13 +31,16 @@ from atm_bd_console.types import (
     Action,
     AgentView,
     GhStatus,
+    Member,
     Metrics,
+    Phase,
     PrRow,
     PullRequest,
     Row,
     Section,
     SectionRow,
     Snapshot,
+    Task,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -98,9 +105,30 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
     pacific_test(check)
 
 
+def test_dashboard_renders_every_member_from_roster_fixture(fake_bin, monkeypatch) -> None:
+    monkeypatch.setenv("ATM_BODY", (FIXTURES / "atm" / "members.json").read_text())
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+    members = atm_source.members("atm-dev")
+    assert isinstance(members, Ok)
+    agents = _agent_views(members.value, (), None, Ok(()), NOW)
+    rendered = dashboard(replace(snapshot(), agents=agents, errors=(), sections=(), sent=()), 120, 40)
+
+    for name, glyph, style in (
+        ("aria", "\U000f05a8", "#FFA60D"),
+        ("boris", "\U000f06c4", "#FF8C66"),
+        ("cy", "\U000f01a6", "#E551BA"),
+        ("dara", "\U000f029b", None),
+        ("eli", "\U000f01e7", "#2DE057"),
+    ):
+        position = rendered.plain.index(glyph + name)
+        if style is not None:
+            assert any(span.start == position and span.end == position + 1 and span.style == style
+                       for span in rendered.spans)
+
+
 def test_sections_error_first_sent_last_height_and_links() -> None:
     error = Timeout("timeout", ("atm",), 5, "retry")
-    pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", "pending", ())
+    pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", CiState.RUNNING, ())
     actions = tuple(Action(NOW - timedelta(minutes=number), "send", "dev-sanity", ("atm-bh-5",), "sent", None)
                     for number in range(6))
     value = replace(
@@ -156,6 +184,35 @@ def test_multiline_task_description_stays_on_one_width_fitted_row(width: int) ->
         assert lines[3].endswith("…")
     else:
         assert lines[3].endswith("<review> Inspect 界 branch and report findings. </review> " + "detail " * 19 + "detail")
+
+
+@pytest.mark.parametrize("known_step", [True, False])
+@pytest.mark.parametrize(("description", "summary"), [
+    (('<atm-task id="atm-bi-6.group-dev" sprint="bi-6"> <description><![CDATA['
+      'Implement dev bead `atm-bi-6.group-dev`…'), 'Implement dev bead `atm-bi-6.group-dev`…'),
+    (('<atm-task id="atm-bi-6.group-dev" sprint="bi-6">\n<description><![CDATA[\n'
+      '  Implement\tdev bead\nLater instructions\n]]></description>\n</atm-task>'), 'Implement dev bead'),
+    ('\n  Plain\ttext summary\nLater instructions', 'Plain text summary'),
+    (' \n\t', ''),
+])
+def test_dispatch_task_uses_bead_title_or_plain_first_line(known_step: bool, description: str, summary: str) -> None:
+    task_id = "atm-bi-6.group-dev"
+    title = "Implement status table"
+    task = Task(task_id, "arch-ctm", "active", 0, NOW, NOW, description)
+    step = replace(STEP, bead_id=task_id, kind="dev", title=title, top_epic="atm-phase-bi", tag="phase-bi")
+    phase = Phase("atm-phase-bi", "phase-bi", "Phase BI", False, (), (step,) if known_step else (), ())
+    agents = _agent_views((Member("arch-ctm", "active", NOW),), (task,), phase, Ok(()), NOW)
+    expected = title if known_step else summary
+    assert agents[0].rows[0].description == expected
+    value = replace(snapshot(), agents=agents, errors=(), sections=(), sent=())
+
+    line = next(line for line in dashboard(value, 240, 40).plain.splitlines() if "bi-6.group-dev" in line)
+
+    assert "<" not in line and "CDATA" not in line and "]]>" not in line
+    assert "Later instructions" not in line
+    assert expected in line
+    if expected:
+        assert line.index("bi-6.group-dev") < line.index(expected)
 
 
 def test_status_bar_formats_and_cell_width() -> None:
@@ -254,3 +311,16 @@ def test_stopped_snapshot_renders_beads_and_pr_history() -> None:
     assert "== PRs (1)" in rendered
     assert "PR #1850" in rendered
     assert "== Sent" in rendered
+
+
+def test_stopped_snapshot_renders_unknown_bead_status_icon() -> None:
+    decoded = from_json(Snapshot, (FIXTURES / "contract" / "snapshot-stopped-closed.json").read_text())
+    assert isinstance(decoded, Ok)
+    sprint = decoded.value.sprints[0]
+    step = replace(sprint.steps[0], status=SprintState.UNKNOWN)
+    value = replace(decoded.value, sprints=(replace(sprint, steps=(step,)),))
+
+    rendered = dashboard(value, 120, 40).plain
+
+    assert "bh-6.qa" in rendered
+    assert "? unknown" in rendered
