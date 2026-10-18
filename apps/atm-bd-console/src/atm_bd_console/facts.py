@@ -6,6 +6,7 @@ from datetime import datetime
 from .dispatch import sprint_of
 from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .ids import short_id
+from .pr_selection import select_pr
 from .types import AgentView, Member, PrRow, Snapshot, Sprint, Step, Task
 
 # ANC-024: the roster model string, lower-cased, is matched by contains; the first hit wins. SOL comes last
@@ -120,8 +121,8 @@ def _qa_result(steps: tuple[Step, ...]) -> AgentIcon | None:
 def _selected_pr(sprint: Sprint, steps: tuple[Step, ...], snapshot: Snapshot) -> PrRow | None:
     branches = {sprint.branch, *(step.branch for step in steps if step.branch)}
     candidates = [row for row in snapshot.prs if row.pr.head in branches]
-    priority = {PrState.OPEN: 2, PrState.DRAFT: 2, PrState.MERGED: 1, PrState.CLOSED: 0}
-    return max(candidates, key=lambda row: (priority.get(row.pr.state, -1), row.pr.number), default=None)
+    selected = select_pr(row.pr for row in candidates)
+    return next((row for row in candidates if row.pr is selected), None)
 
 
 def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:

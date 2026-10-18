@@ -11,6 +11,7 @@ from typing import Literal
 from . import command
 from .ci import ci_failure_key
 from .enums import CiState, PrState
+from .pr_selection import select_pr
 from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unreachable
 from .types import GhStatus, PullRequest
 
@@ -119,10 +120,9 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
         return Err(error), _status(mode, False, error)
     if mode == "rest" and branch_groups:
         selected: dict[int, PullRequest] = {}
-        priority = {PrState.OPEN: 2, PrState.DRAFT: 2, PrState.MERGED: 1, PrState.CLOSED: 0}
         for branches in branch_groups:
             matching = (pr for pr in rows if pr.head in branches)
-            pr = max(matching, key=lambda value: (priority.get(value.state, -1), value.number), default=None)
+            pr = select_pr(matching)
             if pr is not None:
                 selected[pr.number] = pr
         updates: dict[int, PullRequest] = {}
