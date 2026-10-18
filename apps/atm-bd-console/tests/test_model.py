@@ -564,6 +564,21 @@ def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
     assert actions == ()
 
 
+def test_held_section_is_one_not_ready_row_per_bead_and_no_gate_noise() -> None:
+    qa_one = step("qa-one", "atm-bh-1", kind="qa", ready=False, assignee=None, branch=None, worktree=None)
+    qa_two = step("qa-two", "atm-bh-1", kind="qa", ready=False, assignee=None, branch=None, worktree=None)
+    sanity = step(
+        "sanity", "atm-bh-1", kind="sanity", ready=False, status=SprintState.IN_PROGRESS, assignee="solar",
+        branch=None, worktree=None,
+    )
+    snapshot, actions, _ = tick(inputs(phase(qa_one, qa_two, sanity)), STATE, NOW, render)
+
+    held = snapshot.sections[0].rows
+    assert sorted((row.bead_id, row.reason) for row in held) == [("qa-one", "not ready"), ("qa-two", "not ready")]
+    assert "<missing>" not in repr(snapshot)
+    assert actions == ()
+
+
 def test_open_fix_and_future_poured_sanity_and_qa_do_not_notify_missing_metadata() -> None:
     fix = step("atm-bh-1.fix", "atm-bh-1", kind="fix", ready=True, branch="fix/bh-1", assignee="solar")
     future = tuple(step(
@@ -576,7 +591,8 @@ def test_open_fix_and_future_poured_sanity_and_qa_do_not_notify_missing_metadata
         snapshot, actions, state = tick(supplied, state, NOW + timedelta(minutes=minutes), render)
         held = snapshot.sections[0].rows
         assert {row.bead_id for row in held if row.reason == "not ready"} == {step.bead_id for step in future}
-        assert any("<missing>" in row.reason for row in held)
+        assert len(held) == len(future)
+        assert all("<missing>" not in row.reason for row in held)
         assert snapshot.problems == ()
         assert snapshot.errors == ()
         assert actions == ()
