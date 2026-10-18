@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import re
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -84,7 +83,7 @@ def run(argv: list[str] | None = None) -> int:
     except skill_source.SkillSourceError as error:
         print(f"atm-bd skill: {error}", file=sys.stderr)
         return 1
-    except (ImportError, KeyError, OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError) as error:
+    except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
         name = source.name if "source" in locals() else "bundled"
         if name != "bundled":
             message = f"{name} is not installable by atm-bd {__version__}: {error}"

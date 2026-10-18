@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import re
-import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import __version__
+from . import __version__, command
+from .result import Err
 
 REPOSITORY = "https://github.com/randlee/atm-bd-orchestration"
 _PLUGIN = Path("plugins/atm-bd-orchestration")
@@ -41,14 +41,14 @@ def bundled_directory() -> Path:
 
 
 def _run_git(args: list[str]) -> str:
-    try:
-        result = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
-    except OSError as error:
-        raise SkillSourceError(f"{REPOSITORY}: git could not run: {error}") from error
-    if result.returncode:
-        detail = (result.stderr or result.stdout).strip() or f"git exited {result.returncode}"
+    result = command.run(["git", *args], f"check access to {REPOSITORY} and retry")
+    if isinstance(result, Err):
+        error = result.error
+        detail = getattr(error, "stderr", "") or (
+            f"timed out after {error.seconds}s" if hasattr(error, "seconds") else error.kind
+        )
         raise SkillSourceError(f"{REPOSITORY}: git {' '.join(args)} failed: {detail}")
-    return result.stdout
+    return result.value.stdout
 
 
 def _remote_tags() -> tuple[str, ...]:
