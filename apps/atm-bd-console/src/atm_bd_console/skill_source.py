@@ -17,6 +17,8 @@ _PLUGIN = Path("plugins/atm-bd-orchestration")
 _REQUIRED_FILES = ("install.py", "manifest.yaml", "registry.yaml")
 _TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+# A shallow clone over a slow link needs far longer than the 20 s default for quick queries.
+CLONE_TIMEOUT_S = 300
 
 
 class SkillSourceError(RuntimeError):
@@ -41,8 +43,8 @@ def bundled_directory() -> Path:
     raise SkillSourceError(f"bundled {REPOSITORY}/plugins/atm-bd-orchestration is missing")
 
 
-def _run_git(args: list[str]) -> str:
-    result = command.run(["git", *args], f"check access to {REPOSITORY} and retry")
+def _run_git(args: list[str], *, timeout_s: int = command.DEFAULT_TIMEOUT_S) -> str:
+    result = command.run(["git", *args], f"check access to {REPOSITORY} and retry", timeout_s=timeout_s)
     if isinstance(result, Err):
         error = result.error
         detail = getattr(error, "stderr", "") or (
@@ -105,7 +107,10 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
     with tempfile.TemporaryDirectory(prefix="atm-bd-skill-") as temporary:
         try:
             checkout = Path(temporary) / "checkout"
-            _run_git(["clone", "--depth", "1", "--single-branch", "--branch", ref, REPOSITORY, str(checkout)])
+            _run_git(
+                ["clone", "--depth", "1", "--single-branch", "--branch", ref, REPOSITORY, str(checkout)],
+                timeout_s=CLONE_TIMEOUT_S,
+            )
             pkg_dir = checkout / _PLUGIN
             _validate_pkg_dir(pkg_dir, ref)
             commit = _run_git(["-C", str(checkout), "rev-parse", "HEAD"]).strip()

@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from atm_bd_console import skill_source
+from atm_bd_console import command, skill_source
+from atm_bd_console.result import Err, Ok, Timeout
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
@@ -21,7 +22,7 @@ def make_plugin(path: Path, *, installer: str = "# installer data\n") -> Path:
 def test_remote_tags_are_sorted_like_git_tag_list(monkeypatch) -> None:
     calls = []
 
-    def run(args):
+    def run(args, **_kwargs):
         calls.append(args)
         return (
             "b\trefs/tags/v0.9.0\n"
@@ -51,7 +52,7 @@ def test_release_resolves_to_shallow_clone_as_data_without_running_it(monkeypatc
     calls = []
     cloned = []
 
-    def run(args):
+    def run(args, **_kwargs):
         calls.append(args)
         if args[:3] == ["ls-remote", "--tags", "--refs"]:
             return f"{COMMIT}\trefs/tags/v0.16.0\n"
@@ -82,7 +83,7 @@ def test_release_resolves_to_shallow_clone_as_data_without_running_it(monkeypatc
 def test_latest_clones_main_and_reports_its_commit(monkeypatch, tmp_path: Path) -> None:
     calls = []
 
-    def run(args):
+    def run(args, **_kwargs):
         calls.append(args)
         if args[0] == "ls-remote":
             return ""
@@ -103,7 +104,7 @@ def test_latest_clones_main_and_reports_its_commit(monkeypatch, tmp_path: Path) 
 
 def test_unknown_release_lists_available_tags_without_cloning(monkeypatch) -> None:
     calls = []
-    monkeypatch.setattr(skill_source, "_run_git", lambda args: calls.append(args) or f"{COMMIT}\trefs/tags/v0.16.0\n")
+    monkeypatch.setattr(skill_source, "_run_git", lambda args, **_kwargs: calls.append(args) or f"{COMMIT}\trefs/tags/v0.16.0\n")
 
     with (
         pytest.raises(skill_source.SkillSourceError, match=r"unknown version 9\.9\.9; available tags: v0\.16\.0"),
@@ -114,7 +115,7 @@ def test_unknown_release_lists_available_tags_without_cloning(monkeypatch) -> No
 
 
 def test_missing_release_artifact_fails_before_yield_with_app_version(monkeypatch, tmp_path: Path) -> None:
-    def run(args):
+    def run(args, **_kwargs):
         if args[0] == "ls-remote":
             return f"{COMMIT}\trefs/tags/v0.16.0\n"
         if args[0] == "clone":
@@ -134,7 +135,7 @@ def test_missing_release_artifact_fails_before_yield_with_app_version(monkeypatc
 
 
 def test_errors_raised_while_the_tree_is_in_use_are_not_relabelled(monkeypatch, tmp_path: Path) -> None:
-    def run(args):
+    def run(args, **_kwargs):
         if args[0] == "ls-remote":
             return f"{COMMIT}\trefs/tags/v0.16.0\n"
         if args[0] == "clone":
@@ -148,8 +149,30 @@ def test_errors_raised_while_the_tree_is_in_use_are_not_relabelled(monkeypatch, 
         raise PermissionError("target is not writable")
 
 
+def test_clone_gets_the_clone_timeout_and_a_timeout_names_the_clone(monkeypatch) -> None:
+    seen: list[tuple[list[str], int]] = []
+
+    def run(argv, fix, *, timeout_s, **_kwargs):
+        seen.append((list(argv), timeout_s))
+        if argv[1] == "ls-remote":
+            return Ok(command.Output(0, f"{COMMIT}\trefs/tags/v0.16.0\n"))
+        return Err(Timeout("timeout", tuple(argv), timeout_s, fix))
+
+    monkeypatch.setattr(skill_source.command, "run", run)
+
+    with (
+        pytest.raises(skill_source.SkillSourceError, match=rf"git clone .* failed: timed out after {skill_source.CLONE_TIMEOUT_S}s"),
+        skill_source.resolve_source(version="0.16.0"),
+    ):
+        raise AssertionError("a timed-out clone must not be yielded")
+    clone_timeout = next(timeout for argv, timeout in seen if argv[1] == "clone")
+    ls_timeout = next(timeout for argv, timeout in seen if argv[1] == "ls-remote")
+    assert clone_timeout == skill_source.CLONE_TIMEOUT_S > command.DEFAULT_TIMEOUT_S
+    assert ls_timeout == command.DEFAULT_TIMEOUT_S
+
+
 def test_network_failure_names_upstream_url_and_git_error(monkeypatch) -> None:
-    def fail(_args):
+    def fail(_args, **_kwargs):
         raise skill_source.SkillSourceError(f"{skill_source.REPOSITORY}: git ls-remote failed: offline")
 
     monkeypatch.setattr(skill_source, "_run_git", fail)
