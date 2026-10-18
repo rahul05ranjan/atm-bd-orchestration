@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -108,6 +110,107 @@ def consumer_files(root: Path) -> dict[str, bytes]:
             key = path.relative_to(root).as_posix()
             files[re.sub(r"^\.backup/[^/]+/", ".backup/<run>/", key)] = path.read_bytes()
     return files
+
+
+@pytest.fixture
+def host_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tool_dir = tmp_path / "tools"
+    tool_dir.mkdir()
+    compose_version = importlib.metadata.version("sc-compose")
+    outputs = {
+        "python3": f'if [ "$1" = "--version" ]; then echo "Python 3.13.0"; else echo "{compose_version}"; fi',
+        "sc-compose": f'echo "sc-compose {compose_version}"',
+        "atm": 'echo "atm 99.0.0"',
+        "atm-bd": 'echo "atm-bd 99.0.0"',
+        "bd": 'echo "bd 99.0.0"',
+        "jq": 'echo "jq-99.0.0"',
+    }
+    for name, body in outputs.items():
+        executable = tool_dir / name
+        executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tool_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+@pytest.fixture
+def skill_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, str]:
+    for name, value in (
+        ("GIT_CONFIG_GLOBAL", os.devnull), ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_AUTHOR_NAME", "test"), ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
+        ("GIT_COMMITTER_NAME", "test"), ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
+    ):
+        monkeypatch.setenv(name, value)
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    origin = tmp_path / "origin.git"
+    work = tmp_path / "work"
+    git("init", "-q", "--bare", "-b", "main", str(origin))
+    git("clone", "-q", str(origin), str(work))
+    shutil.copytree(PLUGIN, work / "plugins" / "atm-bd-orchestration")
+    git("-C", str(work), "add", ".")
+    git("-C", str(work), "commit", "-q", "-m", "tagged release")
+    tag_commit = git("-C", str(work), "rev-parse", "HEAD")
+    git("-C", str(work), "tag", "v0.16.0")
+    module = load_bundled_installer()
+    (work / "plugins" / "atm-bd-orchestration" / module.CONFIG_TEMPLATE).unlink()
+    git("-C", str(work), "add", "-A")
+    git("-C", str(work), "commit", "-q", "-m", "unreadable main tree")
+    main_commit = git("-C", str(work), "rev-parse", "HEAD")
+    git("-C", str(work), "push", "-q", "origin", "main", "--tags")
+    url = origin.as_uri()
+    monkeypatch.setattr(skill_source, "REPOSITORY", url)
+    return url, tag_commit, main_commit
+
+
+def test_real_git_lists_and_clones_tag_and_main(skill_remote: tuple[str, str, str], capsys) -> None:
+    _url, tag_commit, main_commit = skill_remote
+    assert skill.run(["--list"]) == 0
+    assert capsys.readouterr().out == "v0.16.0\norchestration\n"
+    with skill_source.resolve_source(version="0.16.0") as source:
+        assert (source.name, source.commit) == ("v0.16.0", tag_commit)
+        assert (source.pkg_dir / "install.py").is_file()
+        assert (source.pkg_dir / load_bundled_installer().CONFIG_TEMPLATE).is_file()
+    assert not source.pkg_dir.exists()
+    with skill_source.resolve_source(latest=True) as source:
+        assert (source.name, source.commit) == ("main", main_commit)
+        assert (source.pkg_dir / "install.py").is_file()
+        assert not (source.pkg_dir / load_bundled_installer().CONFIG_TEMPLATE).exists()
+    assert not source.pkg_dir.exists()
+
+
+@pytest.mark.usefixtures("host_tools")
+@pytest.mark.parametrize("failure", ["unknown", "git", "unreadable"])
+def test_real_source_failures_leave_target_unchanged(
+    failure: str, skill_remote: tuple[str, str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    url, _tag_commit, _main_commit = skill_remote
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "sentinel").write_bytes(b"do not change")
+    before = consumer_files(target)
+    if failure == "unknown":
+        args = ["9.9.9"]
+        expected = "unknown version 9.9.9; available tags: v0.16.0"
+    elif failure == "git":
+        url = (tmp_path / "missing.git").as_uri()
+        monkeypatch.setattr(skill_source, "REPOSITORY", url)
+        args = ["--latest"]
+        expected = f"{url}: git ls-remote --tags --refs {url} failed:"
+    else:
+        args = ["--latest"]
+        expected = f"main is not installable by atm-bd {skill.__version__}:"
+
+    assert skill.run([*args, "--dest", str(target)]) == 1
+    error = capsys.readouterr().err
+    assert expected in error
+    if failure == "git":
+        assert "fatal:" in error
+    if failure == "unreadable":
+        assert load_bundled_installer().CONFIG_TEMPLATE in error
+    assert consumer_files(target) == before
+    assert sorted(path.relative_to(target).as_posix() for path in target.rglob("*")) == ["sentinel"]
 
 
 @pytest.fixture
@@ -234,7 +337,7 @@ def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path:
     (("--overwrite",), ".claude", True),
 ], ids=["default", "codex", "overwrite"])
 def test_bundled_skill_matches_install_py_file_for_file_offline_with_legacy_owned_file(
-    tmp_path: Path, monkeypatch, flags: tuple[str, ...], subdir: str, conflict: bool,
+    tmp_path: Path, monkeypatch, host_tools, flags: tuple[str, ...], subdir: str, conflict: bool,
 ) -> None:
     module = load_bundled_installer()
     pkg_dir = tmp_path / "plugin"
@@ -250,7 +353,6 @@ def test_bundled_skill_matches_install_py_file_for_file_offline_with_legacy_owne
             shipped = consumer / ".claude/agents/ceremony-qa.md"
             shipped.parent.mkdir(parents=True, exist_ok=True)
             shipped.write_bytes(b"locally modified\n")
-    monkeypatch.setattr(skill, "_installer", lambda: module)
     monkeypatch.setattr(skill.skill_source, "bundled_directory", lambda: pkg_dir)
     monkeypatch.setattr(skill.skill_source, "_run_git", lambda *_: (_ for _ in ()).throw(AssertionError("network")))
 
