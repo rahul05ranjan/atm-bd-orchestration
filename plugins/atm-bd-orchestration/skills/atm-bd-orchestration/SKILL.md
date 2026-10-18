@@ -158,9 +158,9 @@ poured dev bead takes; it is a lower bound: the PR's actual base (the layer
 below it) is `pr_target` or a descendant of it. A fix bead's target is the top of its stack, set at
 dispatch. Every PR lands on the top of its stack; there are no forks. A dev or fix branch
 is cut from the top of its stack; before dev-complete or fix-complete the dev rebases onto the
-stack's current top, opens the PR against it and closes with the `/sc-gh-stack-view` output. The lead
-links the PR on top of the phase stack
-(`/sc-gh-stack`), before the sanity check. Layer 0 alone cannot form a stack:
+stack's current top (the last entry of the stack bead's `layers`), opens the PR against it and runs the close hook. dev-sanity
+links the PR on top of the phase stack under the stack bead's claim
+(`docs/requirements/sanity-stack.md`), on PASS, before the close. Layer 0 alone cannot form a stack:
 its PR waits unlinked on the trunk (sanity accepts it there, and `stack-top`
 returns its branch so the next root sprint lands on it), and the lead links
 layers 0 and 1 together, `gh stack link --base <trunk> <pr0> <pr1>`, when

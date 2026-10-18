@@ -1,8 +1,8 @@
 # Lifecycle (sprint level)
 
 Dev work is complete when its sanity check passes, not when the dev pushes.
-The dev's ATM task stays open while sanity runs (about two minutes; a
-reminder during the wait is expected and answered by waiting). Sanity
+The dev's ATM task stays open while sanity runs (a reminder during the wait
+is expected and answered by waiting). Sanity
 assignment, QA assignment and the close of the dev's task are mechanical: the
 close hook `atm-task-close.py` ([requirements/task-close-hook.md](../requirements/task-close-hook.md))
 runs them as the phase lead the moment the verdict is known. On PASS the
@@ -95,9 +95,3 @@ Each ATM task id equals its bead id (correlation.md).
 | QA verdict | qa bead `close_reason` |
 | round | `metadata.round` on qa and fix beads; `metadata.sanity_round` on a sanity bead |
 | severity | `metadata.severity` on fix and finding beads |
-
-dev-sanity appends the sanity ledger `.sc/sanity-log/phase-<p>.jsonl` with
-`sanity-run-history`: two rows per run, one for LLM and one for JEV, sharing a
-`run_id` and the final verdict. quality-mgr appends
-`.sc/qa-log/phase-<p>.jsonl` and `.sc/qa-log/phase-<p>-stats.jsonl` when it
-closes qa.

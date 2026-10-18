@@ -11,8 +11,8 @@ through; when they always work, dev-sanity runs them itself.
 
 ### The stack bead (ledger and lock)
 
-1. One bead per stack, `<prefix>-phase-<x>.stack`, child of the phase epic, created by the lead with the integration branch and closed when the stack lands. Its metadata is the whole stack: `trunk`, `stack_number`, `lease_s` (default 900), and `layers`, an ordered list of `{branch, pr, head, base, linked}`; the last entry is the top. It is the only record of layer order, and it works with GitHub unreachable.
-2. The claim is the lock: `bd update <stack bead> --claim` before any stack write, by sanity-stack and by the lead alike (unstack, restack, land). Release is the compare-and-set `bd update <stack bead> --if-assignee "$ATM_IDENTITY" --status open --assignee ""`. A claim older than `lease_s` with no event on the stack bead since is abandoned: `bd reclaim` it, re-derive `layers` from the GitHub chain (REST bases and local ancestry), notice to the lead, proceed.
+1. One bead per stack, `<prefix>-phase-<x>.stack`, child of the phase epic, created by the lead with the integration branch and closed when the stack lands. Its metadata is the whole stack: `trunk`, `stack_number`, and `layers`, an ordered list of `{branch, pr, head, base, linked}`; the last entry is the top. It is the only record of layer order, and it works with GitHub unreachable.
+2. The claim is the lock: `bd update <stack bead> --claim` before any stack write, by sanity-stack and by the lead alike (unstack, restack, land). Release is the compare-and-set `bd update <stack bead> --if-assignee "$ATM_IDENTITY" --status open --assignee ""`. A claim older than the lease (a script constant, 900 s) with no event on the stack bead since is abandoned: `bd reclaim` it, re-derive `layers` from the REST chain (item 9), notice to the lead, proceed.
 
 ### Input (fenced JSON from dev-sanity)
 
@@ -25,12 +25,12 @@ through; when they always work, dev-sanity runs them itself.
 6. Release the lock. Return fenced JSON: `stacked` (with the new top and `stack_number`), `rebase_required`, `lock_timeout` or `stack_failed`, with the evidence.
 7. Ancestor check fails: `rebase_required`, link nothing, write nothing. A third branch also on the old top is not this spawn's problem; it gets `rebase_required` when its own sanity passes.
 8. A link that fails for a stack reason (stale local tracking, a stack number minted anew, a PR retargeted or closed, a non-linear stack): repair with the `sc-gh-stack` recipes within this one layer, never rewriting a layer that has children; unrecoverable: `stack_failed` to the lead as stack owner, lock released, ledger unchanged.
-9. The catalog gh-stack keeps in the linking worktree (`.git/worktrees/<name>/gh-stack`) is a snapshot, never the authority: `layers` on the bead is. A torn link (linked on GitHub, ledger not written) is repaired by re-deriving `layers` from the GitHub chain, under the lock, before anything else.
+9. `layers` on the bead is the authority; gh-stack's own catalog in the linking worktree (`.git/worktrees/<name>/gh-stack`) is a snapshot. The one repair this agent owns, under the lock and before anything else, is re-deriving `layers` from the linked chain on GitHub (filtered REST pull list bases plus local ancestry) when the bead and the chain disagree (a torn link, an abandoned claim).
 
 ### Lock timeout (never blocks the team, never a human)
 
 10. On `timeout_s` the subagent returns `lock_timeout` with the holder, the claim time and the holder's active task (stack bead assignee and `atm task list`).
-11. dev-sanity keeps the sanity task active, appends `STACK.LOCK_WAIT holder=<x> since=<t>` to the sanity bead notes, sends the holder one plain message asking for the release, continues its other sanity checks, and re-spawns after the holder's reply or after another `timeout_s`. The dev keeps waiting on its open task. It never refuses the task, never sends the dev a FAIL, never escalates to a person; when the lease expires, item 2 applies.
+11. dev-sanity keeps the sanity task active, sends the holder one plain message asking for the release, continues its other sanity checks, and re-spawns after the holder's reply or after another `timeout_s`. The dev keeps waiting on its open task. It never refuses the task, never sends the dev a FAIL, never escalates to a person; when the lease expires, item 2 applies.
 
 ### dev-sanity's side
 
