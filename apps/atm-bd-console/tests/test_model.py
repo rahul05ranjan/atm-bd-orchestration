@@ -129,6 +129,26 @@ def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
     assert tuple(agent.rows[0].state for agent in snapshot.agents) == ("running", "queued")
 
 
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    (
+        ("PASS: 0 findings filed", "pass"),
+        ("FAIL: 3 findings filed", "fail"),
+        ("PASSING", "pass"),
+        ("FAILURE", "fail"),
+        ("pass: ok", None),
+        ("Fail: 3 findings", None),
+        ("  FAIL", None),
+        ("\tPASS: ok", None),
+        ("", None),
+        (None, None),
+        ("unknown", None),
+    ),
+)
+def test_qa_state_close_reason_uses_exact_prefix(reason, expected) -> None:
+    assert qa_state_from_close(reason) == expected
+
+
 def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> None:
     assert qa_state_from_close("PASS: 0 findings filed") == "pass"
     assert qa_state_from_close("PASS: 2 carried findings confirmed") == "pass"
@@ -153,6 +173,8 @@ def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> N
         ("PASS: 0 findings filed", "pass", "#2EA043"),
         ("PASS: 2 carried findings confirmed", "pass", "#2EA043"),
         ("FAIL: 3 findings filed", "fail", "#F85149"),
+        ("pass: 0 findings filed", None, None),
+        ("  FAIL: 3 findings filed", None, None),
     ),
 )
 def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color) -> None:

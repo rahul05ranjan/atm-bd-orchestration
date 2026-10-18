@@ -283,13 +283,12 @@ def _agent_views(
 
 
 def qa_state_from_close(reason: str | None) -> Literal["pass", "fail"] | None:
-    """Interpret the first token of a closed QA step's close reason."""
+    """Interpret the exact prefix of a closed QA step's close reason."""
     if reason is None:
         return None
-    normalized = reason.strip().upper()
-    if normalized.startswith("PASS"):
+    if reason.startswith("PASS"):
         return "pass"
-    if normalized.startswith("FAIL"):
+    if reason.startswith("FAIL"):
         return "fail"
     return None
 
