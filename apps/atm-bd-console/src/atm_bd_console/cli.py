@@ -92,8 +92,10 @@ def main(argv: list[str] | None = None) -> int:
             result = runner.step(loaded.value, state, md_table, lock.value)
             snapshot, _ = result
         if md_table:
-            if snapshot.errors or snapshot.phase_data is None:
-                detail = _error_text(snapshot.errors[0]) if snapshot.errors else "partial_snapshot: phase unavailable"
+            if snapshot.errors or snapshot.phase_data is None or snapshot.gh.truncated:
+                detail = (_error_text(snapshot.errors[0]) if snapshot.errors else
+                          "partial_snapshot: phase unavailable" if snapshot.phase_data is None else
+                          "partial_snapshot: GitHub data truncated")
                 print(f"{invocation}: {detail}", file=sys.stderr)
                 return 2
             print(status_table.markdown(status_table.rows(snapshot)))

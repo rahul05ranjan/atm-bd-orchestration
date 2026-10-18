@@ -57,7 +57,7 @@ def cli_runtime(monkeypatch, tmp_path):
 
 
 def test_cron_markdown_uses_shared_rows_and_dry_run(cli_runtime, monkeypatch, capsys):
-    snapshot = replace(SNAPSHOT, errors=())
+    snapshot = replace(SNAPSHOT, errors=(), gh=replace(SNAPSHOT.gh, ok=True, error=None, truncated=False))
     calls = []
 
     def step(config, state, force, store):
@@ -81,6 +81,15 @@ def test_cron_markdown_rejects_partial_snapshot(cli_runtime, monkeypatch, capsys
     output = capsys.readouterr()
     assert output.out == ""
     assert "timeout" in output.err
+
+
+def test_cron_markdown_rejects_truncated_github_snapshot(cli_runtime, monkeypatch, capsys):
+    snapshot = replace(SNAPSHOT, errors=(), gh=replace(SNAPSHOT.gh, ok=True, error=None, truncated=True))
+    monkeypatch.setattr(cli.runner, "step", lambda config, state, force, store: runner.StepResult(snapshot, state))
+    assert cli.main(["cron", "--phase", "x", "--md-table"]) != 0
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "partial_snapshot" in output.err and "truncated" in output.err
 
 
 def test_as_is_not_a_console_option(capsys) -> None:
