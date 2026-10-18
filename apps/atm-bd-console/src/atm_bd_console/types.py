@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, TypeAlias
 
 from .enums import CiState, MergeState, PrState, QaState, SprintState
+from .migrations import migrate_pull_request_ci, migrate_snapshot_ci
 from .result import Error, Result
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
 StepKind: TypeAlias = Literal["dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"]
 AgentStatus: TypeAlias = Literal["busy", "stalling", "blocked", "offline", "idle"]
 
+_LEGACY_CI = {"success": CiState.PASS, "pending": CiState.RUNNING, "failure": CiState.FAIL_BUG}
 
 
 @dataclass(frozen=True)
@@ -141,11 +143,12 @@ class PullRequest:
     head: str
     base: str
     head_sha: str
-    ci: CiState
+    ci: CiState = field(metadata={"json_migration": migrate_pull_request_ci, "legacy_ci": _LEGACY_CI})
     failed_checks: tuple[str, ...]
     state: PrState = PrState.OPEN
     raw_ci: str = ""
     raw_state: str = ""
+
 
 
 
@@ -331,7 +334,7 @@ class Snapshot:
     metrics: Metrics
     gh: GhStatus
     top_pr: int | None
-    top_ci: CiState | None
+    top_ci: CiState | None = field(metadata={"json_migration": migrate_snapshot_ci, "legacy_ci": _LEGACY_CI})
     mermaid: str
     sprints: tuple[SprintView, ...]
     interval_s: int

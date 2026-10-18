@@ -8,7 +8,20 @@ from pathlib import Path
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import BEAD, CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, PRS_FILE, SAMPLES, SNAPSHOT, STEP, TASK
+from contract_samples import (
+    BEAD,
+    CONFIG,
+    ERRORS,
+    INPUTS,
+    NOT_FOUND,
+    PHASE,
+    PLUS_TWO,
+    PRS_FILE,
+    SAMPLES,
+    SNAPSHOT,
+    STEP,
+    TASK,
+)
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json

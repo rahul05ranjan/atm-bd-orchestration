@@ -9,8 +9,6 @@ from enum import StrEnum
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from .ci import ci_failure_key
-from .enums import CiState
 from .result import (
     Err,
     Error,
@@ -163,15 +161,6 @@ def _decode(cls: Any, value: Any, path: str) -> Any:
 def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
     if not isinstance(value, dict):
         raise _DecodeError(path, "expected object")
-    if cls.__name__ == "Snapshot" and value.get("top_ci") in ("success", "pending", "failure"):
-        value = dict(value)
-        value["top_ci"] = {"success": CiState.PASS, "pending": CiState.RUNNING,
-                           "failure": CiState.FAIL_BUG}[value["top_ci"]]
-    if cls.__name__ == "PullRequest" and value.get("ci") in ("success", "pending", "failure"):
-        value = dict(value)
-        legacy = value["ci"]
-        value["ci"] = {"success": CiState.PASS, "pending": CiState.RUNNING,
-                       "failure": ci_failure_key(tuple(value.get("failed_checks", ())))}[legacy]
     hints = get_type_hints(cls)
     names = [field.name for field in fields(cls)]
     unknown = sorted(set(value) - set(names))
@@ -188,7 +177,11 @@ def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
                 decoded[name] = field.default_factory()
                 continue
             raise _DecodeError(f"{path}.{name}", "missing field")
-        decoded[name] = _decode(hints[name], value[name], f"{path}.{name}")
+        raw = value[name]
+        migrate = field.metadata.get("json_migration")
+        if migrate is not None:
+            raw = migrate(raw, value, field.metadata)
+        decoded[name] = _decode(hints[name], raw, f"{path}.{name}")
     return cls(**decoded)
 
 
