@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
             if name != "snapshot":
                 sub.add_argument("--dry-run", action="store_true")
             sub.add_argument("--no-fetch", action="store_true")
+    # Help-only: `skill` is dispatched above, before this parser reads its options, so this entry never parses.
+    commands.add_parser("skill", help="install or list atm-bd-orchestration skills; `skill --help` lists its options")
     args = parser.parse_args(argv)
     invocation = f"{CONSOLE_NAME} {args.command}"
     if not args.phase:

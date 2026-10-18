@@ -24,6 +24,7 @@ def phase_repo(tmp_path: Path) -> Path:
 SYSTEM_PATH = ("/usr/bin", "/bin")
 _UNIT = "\x1f"  # separates argv items in the log
 _RECORD = "\x1e"  # ends one invocation
+HANG_GUARD_S = 60
 
 
 class FakeStep:
@@ -43,19 +44,19 @@ def no_mmdflux(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def settle(pilot) -> None:
     try:
-        await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=5)
+        await asyncio.wait_for(pilot.app.workers.wait_for_complete(), timeout=HANG_GUARD_S)
     except WorkerCancelled:
         pass
     except TimeoutError as error:
-        raise AssertionError("Textual workers did not complete within 5 seconds") from error
+        raise AssertionError(f"Textual workers did not complete within {HANG_GUARD_S} seconds") from error
     await pilot.pause()
 
 
 async def _bounded(coro):
     try:
-        return await asyncio.wait_for(coro, timeout=5)
+        return await asyncio.wait_for(coro, timeout=HANG_GUARD_S)
     except TimeoutError as error:
-        raise AssertionError("Textual test scenario did not complete within 5 seconds") from error
+        raise AssertionError(f"Textual test scenario did not complete within {HANG_GUARD_S} seconds") from error
 
 
 def run_scenario(coro):

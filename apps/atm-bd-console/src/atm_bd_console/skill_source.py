@@ -25,6 +25,10 @@ class SkillSourceError(RuntimeError):
     """A source could not be listed or resolved into an installable tree."""
 
 
+class RepositoryError(SkillSourceError):
+    """git could not read REPOSITORY; the ref is not at fault, so the caller does not relabel it."""
+
+
 @dataclass(frozen=True)
 class SkillSource:
     name: str
@@ -33,14 +37,11 @@ class SkillSource:
 
 
 def bundled_directory() -> Path:
-    """Return the packaged bundle, or the plugin in an editable source checkout."""
+    """Return the skills packaged into atm_bd_console/_skills at build time; nothing else is consulted."""
     packaged = Path(__file__).resolve().parent / "_skills"
-    checkout = Path(__file__).resolve().parents[4] / _PLUGIN
-    if packaged.is_dir():
-        return packaged
-    if checkout.is_dir():
-        return checkout
-    raise SkillSourceError(f"bundled {REPOSITORY}/plugins/atm-bd-orchestration is missing")
+    if not packaged.is_dir():
+        raise SkillSourceError("bundled skills are missing from this atm-bd install; reinstall atm-bd")
+    return packaged
 
 
 def _run_git(args: list[str], *, timeout_s: int = command.DEFAULT_TIMEOUT_S) -> str:
@@ -50,11 +51,12 @@ def _run_git(args: list[str], *, timeout_s: int = command.DEFAULT_TIMEOUT_S) -> 
         detail = getattr(error, "stderr", "") or (
             f"timed out after {error.seconds}s" if isinstance(error, Timeout) else error.kind
         )
-        raise SkillSourceError(f"{REPOSITORY}: git {' '.join(args)} failed: {detail}")
+        raise RepositoryError(f"{REPOSITORY}: git {' '.join(args)} failed: {detail}")
     return result.value.stdout
 
 
-def _remote_tags() -> tuple[str, ...]:
+def remote_tags() -> tuple[str, ...]:
+    """List the release tags upstream, sorted like `git tag -l`."""
     output = _run_git(["ls-remote", "--tags", "--refs", REPOSITORY])
     tags = {
         ref.removeprefix("refs/tags/")
@@ -64,11 +66,6 @@ def _remote_tags() -> tuple[str, ...]:
         if ref.startswith("refs/tags/")
     }
     return tuple(sorted(tags))
-
-
-def list_tags() -> tuple[str, ...]:
-    """List release refs from the upstream repository, in `git tag -l` order."""
-    return _remote_tags()
 
 
 def _validate_pkg_dir(pkg_dir: Path, source: str) -> None:
@@ -93,7 +90,7 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
         yield SkillSource("bundled", pkg_dir, commit)
         return
 
-    tags = _remote_tags()
+    tags = remote_tags()
     if latest:
         ref, name = "main", "main"
     else:
@@ -115,10 +112,10 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
             _validate_pkg_dir(pkg_dir, ref)
             commit = _run_git(["-C", str(checkout), "rev-parse", "HEAD"]).strip()
             if not _COMMIT_RE.fullmatch(commit):
-                raise SkillSourceError(f"{REPOSITORY}: git rev-parse HEAD returned an invalid commit: {commit!r}")
+                raise RepositoryError(f"{REPOSITORY}: git rev-parse HEAD returned an invalid commit: {commit!r}")
+        except RepositoryError:
+            raise
         except SkillSourceError as error:
-            if error.args and str(error).startswith(f"{REPOSITORY}:"):
-                raise
             raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
         except OSError as error:
             raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error

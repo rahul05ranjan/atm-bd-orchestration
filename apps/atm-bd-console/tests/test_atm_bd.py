@@ -28,6 +28,7 @@ from typing import get_args
 
 import pytest
 from contract_samples import PHASE_TEMPLATES
+from process_helpers import run_process
 
 from atm_bd_console import beads_source
 from atm_bd_console.atm_bd import (
@@ -577,10 +578,11 @@ def render(template: str, values: dict, tmp_path: Path) -> subprocess.CompletedP
     assert binary, "sc-compose is required for the D5 render check: install sc-compose >= 1.7.0"
     var_file = tmp_path / "vars.json"
     var_file.write_text(json.dumps(values))
-    return subprocess.run(
+    return run_process(
+        "strict template render",
         (binary, "render", "--strict", "--root", str(TEMPLATES), "--file", str(TEMPLATES / template),
          "--var-file", str(var_file)),
-        capture_output=True, text=True, check=False,
+        check=False,
     )
 
 

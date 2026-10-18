@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import run_scenario
+from conftest import HANG_GUARD_S, run_scenario
 from contract_samples import (
     ACTION,
     BEAD,
@@ -27,6 +27,7 @@ from contract_samples import (
     TIMEOUT,
     WORKTREE,
 )
+from process_helpers import run_process
 from rich.text import Text
 
 from atm_bd_console import app, cli, runner
@@ -38,6 +39,7 @@ from atm_bd_console.status_table import markdown, rows
 from atm_bd_console.types import INITIAL_STATE, Due
 
 PKG = Path(__file__).resolve().parents[1]
+FIXED_NOW = datetime(2026, 10, 15, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -52,7 +54,7 @@ def cli_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
-    monkeypatch.setattr(cli, "now", lambda: datetime(2026, 10, 15, tzinfo=UTC))
+    monkeypatch.setattr(cli, "now", lambda: FIXED_NOW)
     return config
 
 
@@ -121,7 +123,8 @@ def test_headless_option_is_rejected(command, capsys) -> None:
 
 
 def test_headless_and_show_do_not_load_textual(tmp_path) -> None:
-    check = subprocess.run(
+    check = run_process(
+        "headless imports",
         [
             sys.executable,
             "-c",
@@ -132,7 +135,7 @@ def test_headless_and_show_do_not_load_textual(tmp_path) -> None:
                 "assert 'textual' not in sys.modules"
             ),
         ],
-        capture_output=True, text=True, check=False, cwd=tmp_path,
+        check=False, cwd=tmp_path,
     )
     assert check.returncode == 0, check.stderr
 
@@ -179,16 +182,18 @@ def test_installed_cron_command_runs_one_headless_tick(tmp_path) -> None:
         assert uv is not None, "uv is required to run the console entry point"
         command = [uv, "run", "--frozen", "--project", str(PKG), "atm-bd"]
 
-    help_result = subprocess.run(
+    help_result = run_process(
+        "installed command help",
         [*command, "--help"],
-        capture_output=True, text=True, check=False, cwd=repo, env=environment,
+        check=False, cwd=repo, env=environment,
     )
     assert help_result.returncode == 0, help_result.stderr
     assert "run one tick and exit" in help_result.stdout
 
-    check = subprocess.run(
+    check = run_process(
+        "installed cron command",
         [*command, "cron", "--phase", "bh", "--dry-run"],
-        capture_output=True, text=True, check=False, cwd=repo, env=environment,
+        check=False, cwd=repo, env=environment,
     )
     assert check.returncode == 0, check.stderr + check.stdout
     assert check.stdout == ""
@@ -423,7 +428,7 @@ def test_cron_reports_all_and_only_actions_from_this_tick(cli_runtime, monkeypat
 @pytest.mark.parametrize("command", ("cron", "snapshot"))
 @pytest.mark.parametrize("stale", (False, True))
 def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monkeypatch, capsys, stale, command) -> None:
-    generated_at = cli.now() - timedelta(seconds=2 * cli_runtime.interval_s + 1 if stale else 0)
+    generated_at = FIXED_NOW - timedelta(seconds=2 * cli_runtime.interval_s + 1 if stale else 0)
     snapshot = replace(SNAPSHOT, generated_at=generated_at, root_closed=False, stopped=None, errors=())
     acquired = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
     assert isinstance(acquired, Ok)
@@ -449,7 +454,7 @@ def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monk
     if stale:
         last_tick = generated_at.astimezone().strftime("%H:%M")
         assert output[1] == {
-            "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
+            "at": "2026-10-15T00:00:00Z", "kind": "error",
             "text": f"atm-bd {command}: console stopped updating (last tick {last_tick})",
         }
 
@@ -475,17 +480,16 @@ def test_snapshot_subcommand_runs_one_dry_tick_without_actions(cli_runtime, monk
     assert capsys.readouterr().out == ""
 
 
-def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, capsys, tmp_path) -> None:
-    ready = tmp_path / "holder-ready"
+def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, capsys) -> None:
     code = (
-        "import sys; from pathlib import Path; from atm_bd_console.state import acquire_lock; "
+        "import sys; from atm_bd_console.state import acquire_lock; "
         "from atm_bd_console.result import Ok; "
         "held = acquire_lock(sys.argv[1], sys.argv[2]); assert isinstance(held, Ok); "
-        "Path(sys.argv[3]).write_text('ready'); sys.stdin.read()"
+        "print('ready', flush=True); sys.stdin.read()"
     )
     child = subprocess.Popen(
-        [sys.executable, "-c", code, cli_runtime.repo_root, PHASE_FILE.root_id, str(ready)],
-        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        [sys.executable, "-c", code, cli_runtime.repo_root, PHASE_FILE.root_id],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     calls = []
 
@@ -497,15 +501,14 @@ def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, caps
 
     monkeypatch.setattr(cli.runner, "step", step)
     try:
-        deadline = time.monotonic() + 5
-        while not ready.exists():
-            assert child.poll() is None, "lock holder exited before signaling readiness"
-            assert time.monotonic() < deadline, "lock holder was not ready within 5 seconds"
-            time.sleep(0.01)
+        assert child.stdout is not None
+        ready, _, _ = select.select([child.stdout], [], [], HANG_GUARD_S)
+        assert ready, f"lock holder did not signal readiness within {HANG_GUARD_S} seconds"
+        assert child.stdout.readline().strip() == "ready", "lock holder exited before signaling readiness"
         locked = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
         assert isinstance(locked, Err) and isinstance(locked.error, LockHeld)
         child.kill()
-        child.wait(timeout=5)
+        child.wait(timeout=HANG_GUARD_S)
         assert child.returncode is not None and child.returncode < 0
 
         assert cli.main(["cron", "--phase", "bh"]) == 0
@@ -514,7 +517,7 @@ def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, caps
     finally:
         if child.poll() is None:
             child.kill()
-        child.communicate(timeout=5)
+        child.communicate(timeout=HANG_GUARD_S)
 
 
 def test_headless_prints_only_actions_from_the_current_tick(cli_runtime, monkeypatch, capsys) -> None:
@@ -548,7 +551,7 @@ def test_headless_io_failures_keep_path_message_and_fix(cli_runtime, monkeypatch
     assert cli.main(["cron", "--phase", "bh"]) == 0
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert output == [{
-        "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
+        "at": "2026-10-15T00:00:00Z", "kind": "error",
         "text": f"atm-bd cron: io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
     }]
 
@@ -563,7 +566,7 @@ def test_lock_failure_reports_full_invocation_and_error(cli_runtime, monkeypatch
     assert cli.main([command, "--phase", "bh"]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output == {
-        "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
+        "at": "2026-10-15T00:00:00Z", "kind": "error",
         "text": f"atm-bd {command}: {cli._error_text(error)}",
     }
 

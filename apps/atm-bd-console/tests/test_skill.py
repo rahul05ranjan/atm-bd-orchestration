@@ -6,13 +6,13 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from process_helpers import run_process
 
 from atm_bd_console import cli, skill, skill_source
 
@@ -77,10 +77,8 @@ def make_consumer(path: Path, installer, pkg_dir: Path = PLUGIN) -> Path:
     (path / ".claude/agents").mkdir(parents=True)
     (path / ".beads").mkdir()
     (path / ".beads/metadata.json").write_text(json.dumps({"backend": "dolt", "dolt_mode": "server"}), encoding="utf-8")
-    subprocess.run(["git", "init", "-q", str(path)], check=True)
-    subprocess.run(
-        ["git", "-C", str(path), "remote", "add", "origin", "https://github.com/example/repo.git"], check=True,
-    )
+    run_process("initialize consumer", ["git", "init", "-q", str(path)])
+    run_process("configure consumer remote", ["git", "-C", str(path), "remote", "add", "origin", "https://github.com/example/repo.git"])
     values = {}
     for name in installer.config_variables(pkg_dir):
         if name == "requirements_globs":
@@ -142,7 +140,7 @@ def skill_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, 
         monkeypatch.setenv(name, value)
 
     def git(*args: str) -> str:
-        return subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+        return run_process("skill remote git", ["git", *args], cwd=tmp_path).stdout.strip()
 
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
@@ -185,6 +183,9 @@ def test_real_git_lists_and_clones_tag_and_main(skill_remote: tuple[str, str, st
 def test_real_source_failures_leave_target_unchanged(
     failure: str, skill_remote: tuple[str, str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
 ) -> None:
+    # The installer is loaded from the bundled tree, which only a wheel build copies into the package;
+    # this checkout reads the committed plugin that the packaged copy is generated from.
+    monkeypatch.setattr(skill_source, "bundled_directory", lambda: PLUGIN)
     url, _tag_commit, _main_commit = skill_remote
     target = tmp_path / "target"
     target.mkdir()
@@ -271,7 +272,7 @@ def test_orchestration_flag_and_installer_passthrough(installer, tmp_path: Path)
 
 
 def test_list_prints_remote_tags_and_set_without_loading_or_running_installer(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(skill.skill_source, "list_tags", lambda: ("v0.16.0", "v0.16.1"))
+    monkeypatch.setattr(skill.skill_source, "remote_tags", lambda: ("v0.16.0", "v0.16.1"))
     monkeypatch.setattr(skill, "_installer", lambda: (_ for _ in ()).throw(AssertionError("installer")))
 
     assert skill.run(["--list"]) == 0
@@ -384,7 +385,7 @@ def test_skill_is_wired_into_cli_and_help(capsys) -> None:
     with pytest.raises(SystemExit) as top:
         cli.main(["--help"])
     assert top.value.code == 0
-    assert "skill" not in capsys.readouterr().out
+    assert "{console,cron,show,snapshot,skill}" in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as sub:
         cli.main(["skill", "--help"])

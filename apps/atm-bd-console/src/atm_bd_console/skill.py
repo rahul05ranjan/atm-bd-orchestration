@@ -55,7 +55,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.version or args.dest is not None or args.codex or args.set or args.overwrite:
             parser.error("--list cannot be combined with a version or install options")
         try:
-            print("\n".join((*skill_source.list_tags(), "orchestration")))
+            print("\n".join((*skill_source.remote_tags(), "orchestration")))
         except skill_source.SkillSourceError as error:
             print(f"atm-bd skill: {error}", file=sys.stderr)
             return 1

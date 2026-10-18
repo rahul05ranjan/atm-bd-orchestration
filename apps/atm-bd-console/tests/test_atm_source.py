@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -159,13 +160,20 @@ def test_missing_atm_binary_is_a_typed_error(tmp_path, monkeypatch) -> None:
     assert result.error.fix == "install the atm CLI and put it on PATH, then rerun `atm members --team atm-dev --json`"
 
 
-def test_decode_error_is_a_typed_error(monkeypatch) -> None:
+def test_decode_error_is_the_runners_command_failed_without_exit_code(monkeypatch) -> None:
     error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
-    monkeypatch.setattr(atm_source.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
 
     result = atm_source._run(["atm", "members", "--json"], "trinity")
 
-    assert isinstance(result, Err) and isinstance(result.error, Unreachable)
+    assert isinstance(result, Err) and isinstance(result.error, CommandFailed)
+    assert result.error.code == -1
+
+
+def test_child_runs_as_the_configured_identity(fake_bin) -> None:
+    fake_bin.make("atm", 'printf "%s" "$ATM_IDENTITY"\n')
+
+    assert atm_source._run(["atm", "whoami"], "trinity") == Ok("trinity")
 
 
 def test_assign_with_non_serializable_vars_returns_error_and_removes_tempfile(tmp_path, monkeypatch) -> None:
@@ -251,4 +259,6 @@ def test_command_failed_fix_names_the_identity_the_console_ran_as(fake_bin) -> N
     result = atm_source.members("atm-dev", "trinity")
 
     assert isinstance(result, Err) and isinstance(result.error, CommandFailed)
-    assert result.error.fix == "run `ATM_IDENTITY=trinity atm members --team atm-dev --json` by hand and read its stderr"
+    assert result.error.fix == (
+        "rerun `atm members --team atm-dev --json` as ATM_IDENTITY=trinity and read its stderr, or pass a larger timeout"
+    )
