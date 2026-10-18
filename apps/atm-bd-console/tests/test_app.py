@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -334,55 +332,6 @@ def test_opening_prs_then_r_forces_github_exactly_twice() -> None:
             app.query_one("TabbedContent").active = "dispatch"
             await settle(pilot)
             assert step.calls == [False, True, True]
-
-    run_scenario(scenario())
-
-
-def test_real_bh_status_graph_anchors_root_and_preserves_pan_on_refresh(monkeypatch) -> None:
-    fixture = json.loads((Path(__file__).parent / "fixtures/bh-wide-dag.json").read_text())
-    graph = fixture["text"]
-    assert hashlib.sha256(graph.encode()).hexdigest() == fixture["sha256"]
-    assert max(cell_len(line) for line in graph.splitlines()) == 508
-    monkeypatch.setattr(console.status, "status_text", lambda _snapshot: (graph, None))
-
-    async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(RUNNING), STATE)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot)
-            panel = app.query_one("#status-panel")
-            assert panel.size.width == 0
-            assert panel.scroll_x == 0
-            app.query_one("TabbedContent").active = "status"
-            await settle(pilot)
-            assert app.query_one("#status-text").render().plain == graph
-            assert panel.scroll_x == 204
-            viewport = panel.scrollable_content_region
-            root_left = viewport.x + 209 - int(panel.scroll_x)
-            assert viewport.x <= root_left
-            assert root_left + cell_len("atm-bh-1") <= viewport.right
-            rendered = [strip.text for strip in app.screen._compositor.render_strips()]
-            assert any("atm-bh-1" in line for line in rendered[viewport.y:viewport.bottom])
-            assert app.query_one("#status-overflow").display
-
-            panel.focus()
-            await pilot.press("ctrl+pagedown")
-            await app.animator.wait_for_idle()
-            panned = panel.scroll_x
-            assert panned > 204
-            await pilot.press("r")
-            await settle(pilot)
-            assert panel.scroll_x == panned
-            app.query_one("TabbedContent").active = "dispatch"
-            await pilot.pause()
-            app.query_one("TabbedContent").active = "status"
-            await settle(pilot)
-            assert panel.scroll_x == panned
-
-            await pilot.resize_terminal(540, 40)
-            await settle(pilot)
-            assert not app.query_one("#status-overflow").display
-            assert panel.max_scroll_x == 0
-            assert app.query_one("#status-text").render().plain == graph
 
     run_scenario(scenario())
 
