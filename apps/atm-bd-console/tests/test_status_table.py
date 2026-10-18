@@ -6,7 +6,7 @@ from contract_samples import BEAD, CONFIG, GH_STATUS, INPUTS, MEMBER, PHASE, PR_
 
 from atm_bd_console import runner, status_table
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
-from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, _qa_result, agent_icon_of, sprint_facts
+from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, _gavel, agent_icon_of, sprint_facts
 from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
 from atm_bd_console.result import Ok
@@ -37,14 +37,14 @@ def test_rows_use_active_tasks_order_and_ignore_queued():
 
 
 def test_sprint_producer_list_covers_every_enum_member():
-    facts = replace(sprint_facts(_snapshot())[0], active=(), last_qa=None)
+    facts = replace(sprint_facts(_snapshot())[0], active=(), gavel=None)
     for state in SprintState:
         current = replace(facts, status=state)
         assert next(value for producer in STATE if (value := producer(current))) == (state,)
 
 
 def test_rows_preserve_ci_and_pr_enum_values_and_absent_source_defaults(monkeypatch):
-    facts = replace(sprint_facts(_snapshot())[0], active=(), last_qa=None)
+    facts = replace(sprint_facts(_snapshot())[0], active=(), gavel=None)
 
     def row_for(current):
         monkeypatch.setattr(status_table, "sprint_facts", lambda _snapshot, current=current: (current,))
@@ -96,35 +96,59 @@ def test_sprint_facts_cover_active_queued_qa_and_pr_sources():
                                            problems=("GitHub data off",)),)
 
 
-def test_latest_qa_is_invalidated_by_later_dev():
+def test_gavel_needs_a_closed_dev_step_and_follows_open_finding_children():
     snapshot = _snapshot()
     dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
-    qa = replace(STEP, bead_id="qa", kind="qa", carry_forward=None, sprint_bead=SPRINT.id,
-                 closed_at=NOW + timedelta(seconds=1), close_reason="PASS")
-    snapshot = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, qa)))
+    finding = replace(STEP, bead_id="finding", kind="finding", carry_forward=None, sprint_bead=SPRINT.id,
+                      status=SprintState.OPEN, closed_at=None)
+    snapshot = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, finding)))
+    assert rows(snapshot)[0].state == (AgentIcon.QA_FAIL,)
+    closed = replace(finding, status=SprintState.CLOSED, closed_at=NOW + timedelta(seconds=1))
+    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(dev, closed)))
     assert rows(snapshot)[0].state == (AgentIcon.QA_PASS,)
-    qa = replace(qa, closed_at=NOW - timedelta(seconds=1))
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(dev, qa)))
+    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(replace(dev, closed_at=None), finding)))
     assert rows(snapshot)[0].state == (SprintState.IN_PROGRESS,)
 
 
 def test_qa_kind_and_sprint_result_distinction_are_documented():
     assert all(term in (getdoc(agent_icon_of) or "") for term in ("qa", "sprint_qa", "fix"))
-    assert all(term in (getdoc(_qa_result) or "") for term in ("qa", "carry_forward", "sprint"))
+    assert all(term in (getdoc(_gavel) or "") for term in ("dev", "finding", "QA verdict"))
 
 
-def test_fix_verification_does_not_replace_sprint_qa_result():
+def test_fix_verification_is_an_active_agent_and_stored_qa_verdicts_never_set_the_gavel():
     snapshot = _snapshot()
+    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
     sprint_qa = replace(STEP, bead_id="sprint-qa", kind="qa", carry_forward=None, sprint_bead=SPRINT.id,
-                        closed_at=NOW, close_reason="PASS")
-    fix_qa = replace(sprint_qa, bead_id="fix-qa", carry_forward="finding", closed_at=NOW + timedelta(seconds=1),
+                        closed_at=NOW + timedelta(seconds=1), close_reason="FAIL")
+    fix_qa = replace(sprint_qa, bead_id="fix-qa", carry_forward="finding", closed_at=NOW + timedelta(seconds=2),
                      close_reason="FAIL")
-    phase = replace(snapshot.phase_data, steps=(sprint_qa, fix_qa))
-    snapshot = replace(snapshot, phase_data=phase, task_data=())
-    assert sprint_facts(snapshot)[0].last_qa is AgentIcon.QA_PASS
-    assert sprint_facts(replace(snapshot, phase_data=replace(phase, steps=(fix_qa,))))[0].last_qa is None
+    snapshot = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, sprint_qa, fix_qa)))
+    assert rows(snapshot)[0].state == (AgentIcon.QA_PASS,)
     running = replace(snapshot, task_data=(replace(TASK, id=fix_qa.bead_id, state_since=NOW),))
     assert sprint_facts(running)[0].active[0].icon is AgentIcon.QA_RUNNING
+    assert rows(running)[0].state == (AgentIcon.QA_RUNNING,)
+
+
+def _sprint_with(snapshot, status, steps):
+    sprint = replace(snapshot.phase_data.sprints[0], status=status)
+    return replace(snapshot, phase_data=replace(snapshot.phase_data, sprints=(sprint,), steps=steps), task_data=())
+
+
+def test_blocked_and_ready_sprints_with_no_agent_draw_their_status_icon():
+    snapshot = _snapshot()
+    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    finding = replace(STEP, bead_id="finding", kind="finding", carry_forward=None, sprint_bead=SPRINT.id,
+                      status=SprintState.OPEN, closed_at=None)
+    assert rows(_sprint_with(snapshot, SprintState.BLOCKED, ()))[0].state == (SprintState.BLOCKED,)
+    assert rows(_sprint_with(snapshot, SprintState.READY, ()))[0].state == (SprintState.READY,)
+    assert rows(_sprint_with(snapshot, SprintState.BLOCKED, (dev, finding)))[0].state == (SprintState.BLOCKED,)
+
+
+def test_closed_sprint_draws_closed_icon_not_gavel():
+    snapshot = _snapshot()
+    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    assert rows(_sprint_with(snapshot, SprintState.CLOSED, (dev,)))[0].state == (SprintState.CLOSED,)
+    assert icon(SprintState.CLOSED)[0] == "\U000f05e0"
 
 
 def test_pr_preference_and_conflict_require_matching_base():
@@ -292,8 +316,13 @@ def test_twenty_spec_rows_and_rich_colours():
             harness = "claude-code" if model in ("fable", "opus", "sonnet", "haiku") else "codex-cli"
             members.append(replace(MEMBER, name=agent, model=model, harness=harness))
         if index in (6, 11):
+            steps.append(replace(STEP, bead_id=f"{sprint.id}.dev", sprint_bead=sprint.id, kind="dev",
+                                 carry_forward=None, closed_at=NOW))
             steps.append(replace(STEP, bead_id=f"{sprint.id}.qa", sprint_bead=sprint.id, kind="qa",
                                  carry_forward=None, closed_at=NOW, close_reason="FAIL" if index == 6 else "PASS"))
+        if index == 6:
+            steps.append(replace(STEP, bead_id=f"{sprint.id}.finding", sprint_bead=sprint.id, kind="finding",
+                                 carry_forward=None, status=SprintState.OPEN, closed_at=None))
         if index in pr_values:
             number, state, ci = pr_values[index]
             pr = replace(PR_ROW.pr, number=number, head=sprint.branch, state=state, ci=ci,

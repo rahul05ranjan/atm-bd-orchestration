@@ -7,7 +7,7 @@ from atm_bd_console import icons, status_table
 
 MATCH_SITES = (
     (icons, "icon"), (icons, "merge_icon"),
-    (status_table, "_qa"), (status_table, "_sprint"),
+    (status_table, "_sprint_status"),
 )
 
 
