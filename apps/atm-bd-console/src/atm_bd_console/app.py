@@ -218,6 +218,23 @@ class ConsoleApp(App[int]):
     def action_show_diagnostics(self) -> None:
         self.query_one(TabbedContent).active = "diagnostics"
 
+    def _record_error(self, source: str, error: Error | Exception) -> None:
+        if isinstance(error, Exception):
+            message = str(error)
+        else:
+            detail = getattr(error, "message", getattr(error, "path", ""))
+            message = f"{error.kind}: {detail}; {error.fix}"
+        now = datetime.now(UTC)
+        entry = f"{render._clock(now, seconds=True)} {source}: {message}"
+        self.diagnostics = [*self.diagnostics[-19:], entry]
+        try:
+            self.diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.diagnostics_path.open("a", encoding="utf-8") as log_file:
+                timestamp = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+                log_file.write(f"{timestamp} {source}: {message}\n")
+        except OSError as log_error:
+            self.diagnostics = [*self.diagnostics[-19:], f"log: {log_error}"]
+
     def on_text_selected(self) -> None:
         """A finished text selection outside the DAG is copied with a toast (#253)."""
         text = self.screen.get_selected_text()
@@ -238,9 +255,10 @@ class ConsoleApp(App[int]):
         try:
             self.input_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.input_log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write(f"{datetime.now(UTC).strftime('%H:%M:%S.%f')[:-3]} {entry}\n")
-        except OSError:
-            pass
+                timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                log_file.write(f"{timestamp} {entry}\n")
+        except OSError as log_error:
+            self.diagnostics = [*self.diagnostics[-19:], f"input log: {log_error}"]
 
     async def on_event(self, event: events.Event) -> None:
         # Traced before dispatch, so presses the StatusPanel/SprintList stop are recorded too. The trace is
@@ -399,7 +417,10 @@ class ConsoleApp(App[int]):
         dashboard_width = min(panel.size.width or width, width)
         if snapshot is not None:
             height = panel.size.height or self.size.height
-            self.query_one("#status-table", Static).update(status_table.rich_table(status_table.rows(snapshot)))
+            table = self.query_one("#status-table", Static)
+            table.display = snapshot.phase_data is not None
+            if snapshot.phase_data is not None:
+                table.update(status_table.rich_table(status_table.rows(snapshot)))
             self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
             self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
             self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))

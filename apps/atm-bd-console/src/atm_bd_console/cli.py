@@ -22,6 +22,14 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+def _cadence(args: argparse.Namespace) -> int | None:
+    # The liveness window is judged from the interval a tick records, so a cron tick records its schedule
+    # unless --interval says otherwise; without this a 15-minute cron recorded 60 s and read as stopped.
+    if args.interval is None and args.command == "cron":
+        return config_source.CRON_CADENCE_S
+    return args.interval
+
+
 def _error_text(error: Error) -> str:
     if isinstance(error, IoFailed):
         return f"{error.kind}: {error.path}: {error.message}: {error.fix}"
@@ -79,12 +87,12 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(snapshot, Ok) and (snapshot.value.stopped is not None or not snapshot_stale(snapshot.value, now())):
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
-            return 0
-        last = f" (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})" if isinstance(snapshot, Ok) else ""
+            return 2 if snapshot.value.phase_data is None else 0
+        last = f" (last tick {render._clock(snapshot.value.generated_at)})" if isinstance(snapshot, Ok) else ""
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
     md_table = getattr(args, "md_table", False)
-    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, github_poll_interval_s=args.github_poll_interval, github_quota_threshold=args.github_quota_threshold, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
+    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=_cadence(args), github_poll_interval_s=args.github_poll_interval, github_quota_threshold=args.github_quota_threshold, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
     if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3
@@ -101,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(lock.error)}"}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
-                text = f"{invocation}: console stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
+                text = f"{invocation}: console stopped updating (last tick {render._clock(snapshot.value.generated_at)})"
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:
