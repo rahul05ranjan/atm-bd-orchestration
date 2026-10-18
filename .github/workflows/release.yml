@@ -242,6 +242,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.gate-and-tag.outputs.build_ref }}
+          fetch-depth: 0
       - uses: ./.github/actions/setup-python-release-build
         with:
           release_ref: ${{ needs.gate-and-tag.outputs.build_ref }}
@@ -301,6 +302,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.gate-and-tag.outputs.build_ref }}
+          fetch-depth: 0
       - uses: ./.github/actions/setup-python-release-build
         with:
           release_ref: ${{ needs.gate-and-tag.outputs.build_ref }}

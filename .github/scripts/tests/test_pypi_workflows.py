@@ -57,6 +57,18 @@ def test_ci_checks_both_artifacts_with_the_publisher_twine():
     assert "*.whl" in checks[0] and "*.tar.gz" in checks[0]
 
 
+def test_python_release_builds_keep_full_history_for_console_identity():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    for name in ("build-python-wheels", "build-python-sdists"):
+        checkout = next(step for step in workflow["jobs"][name]["steps"]
+                        if step.get("uses", "").startswith("actions/checkout@"))
+        assert checkout["with"]["fetch-depth"] == 0
+    action = yaml.safe_load((ROOT / ".github/actions/setup-python-release-build/action.yml").read_text())
+    checkout = next(step for step in action["runs"]["steps"]
+                    if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == 0
+
+
 @pytest.mark.parametrize("mode,expected", [("absent", 1), ("auth", 1), ("complete", 0)])
 def test_copied_release_verifier_fails_closed(tmp_path, mode, expected):
     action = yaml.safe_load((ROOT / ".github/actions/verify-published-release/action.yml").read_text())
