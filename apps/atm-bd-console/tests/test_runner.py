@@ -612,6 +612,8 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
     assert snapshot.gh == GhStatus(CONFIG.github, False, TIMEOUT, SNAPSHOT.generated_at, False)
     assert snapshot.gh.error == TIMEOUT and snapshot.errors == (TIMEOUT,)
     assert writes == [replace(cached, gh=snapshot.gh, attempted_at=snapshot.generated_at)]
+    error_events = [fields for action, fields in events if action == "error"]
+    assert len(error_events) == 1 and error_events[0]["error"] == asdict(TIMEOUT)
 
 
 @pytest.mark.parametrize("interval_s", (120, 600))
@@ -662,8 +664,6 @@ def test_paused_refresh_preserves_cached_availability_and_read_time(monkeypatch)
     result, status = runner._refresh_github(replace(CONFIG, github="graphql"), NOW, cached)
     assert isinstance(result, Err)
     assert status.paused and status.ok is True and status.error is None and status.at == EARLIER
-    error_events = [fields for action, fields in events if action == "error"]
-    assert len(error_events) == 1 and error_events[0]["error"] == asdict(TIMEOUT)
 
 
 def test_github_off_skips_forced_read_and_event(github_runtime) -> None:
