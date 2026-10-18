@@ -14,7 +14,7 @@ from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState, SprintState
 from atm_bd_console.model import _agent_views
-from atm_bd_console.render import _age, _error_text, dashboard, status_bar
+from atm_bd_console.render import _age, _error_text, dashboard, github_quotas, status_bar
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
@@ -221,17 +221,17 @@ def test_status_bar_formats_and_cell_width() -> None:
 
     def check() -> None:
         expected = (FIXTURES / "render" / "status-bar-ok.txt").read_text().rstrip("\n")
-        assert status_bar(value, 120).plain == expected.replace(" | ", " | gh poll 600s / 50% | ", 1) + " | lead ·fenix"
+        assert status_bar(value, 200).plain == "gh core ?/? · graphql ?/? · reset --:-- | " + expected.replace(" | ", " | gh poll 600s / 50% | ", 1) + " | lead ·fenix"
         assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain == (
             "gh: off | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
-        assert status_bar(failed, 160).plain == (
-            "gh: graphql ⛔ timeout 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+        assert status_bar(failed, 200).plain == (
+            "gh core ?/? · graphql ?/? · reset --:-- | gh: graphql ⛔ timeout 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
-        assert status_bar(truncated_ok, 160).plain == (
-            "gh: graphql ✅ 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+        assert status_bar(truncated_ok, 200).plain == (
+            "gh core ?/? · graphql ?/? · reset --:-- | gh: graphql ✅ 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         for width in (80, 120):
             assert cell_len(status_bar(value, width).plain) <= width
@@ -249,7 +249,25 @@ def test_status_bar_reports_paused_quota_and_local_reset() -> None:
         text = status_bar(replace(snapshot(), gh=gh), 160).plain
         assert "GitHub paused: 2450/5000 graphql remaining, below 50 percent, resets 08:14" in text
         assert "gh poll 120s / 50%" in text
-        assert "gh poll 120s / 50%" in status_bar(replace(snapshot(), gh=gh), 80).plain
+        assert "graphql 2450/5000 ⏸ · reset 08:14" in status_bar(replace(snapshot(), gh=gh), 80).plain
+    pacific_test(check)
+
+
+def test_both_quotas_local_earliest_reset_threshold_and_staleness() -> None:
+    def check() -> None:
+        gh = replace(GhStatus("rest", True, None, NOW, False),
+                     core_remaining=4999, core_limit=5000, core_reset=NOW + timedelta(hours=2),
+                     graphql_remaining=2310, graphql_limit=5000, graphql_reset=NOW + timedelta(hours=1),
+                     quota_at=NOW, poll_interval_s=600)
+        expected = "gh core 4999/5000 · graphql 2310/5000 ⏸ · reset 15:04"
+        assert github_quotas(gh, NOW + timedelta(seconds=600)) == expected
+        assert github_quotas(gh, NOW + timedelta(seconds=601)) == expected + " · age 10m"
+        assert status_bar(replace(snapshot(), gh=gh), 80).plain.startswith(expected)
+        assert "3/9" in status_bar(replace(snapshot(), gh=gh, metrics=Metrics(3, 9, 33, 0)), 120).plain
+        limited = replace(gh, graphql_remaining=4000, paused=True, rate_limited=True)
+        assert "core 4999/5000 ⏸ · graphql 4000/5000" in github_quotas(limited, NOW)
+        equal = replace(gh, graphql_remaining=2500)
+        assert "⏸" not in github_quotas(equal, NOW)
     pacific_test(check)
 
 

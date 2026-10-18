@@ -246,6 +246,30 @@ def github_pause(gh: GhStatus, *, compact: bool = False) -> str:
     return f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource} remaining, {reason}, resets {reset}"
 
 
+def github_quotas(gh: GhStatus, now) -> str:
+    parts = []
+    active_resource = "graphql" if gh.mode == "graphql" else "core"
+    values = (("core", gh.core_remaining, gh.core_limit, gh.core_reset),
+              ("graphql", gh.graphql_remaining, gh.graphql_limit, gh.graphql_reset))
+    resets = []
+    for resource, remaining, limit, reset in values:
+        if remaining is None and limit is None and resource == active_resource and gh.quota_at is None:
+            remaining, limit, reset = gh.quota_remaining, gh.quota_limit, gh.quota_reset
+        value = f"{remaining}/{limit}" if remaining is not None and limit is not None else "?/?"
+        low = remaining is not None and limit is not None and remaining * 100 < limit * gh.quota_threshold
+        marker = " ⏸" if low or (gh.rate_limited and gh.paused and resource == active_resource) else ""
+        parts.append(f"{resource} {value}{marker}")
+        if reset is not None:
+            resets.append(reset)
+    reset_text = _clock(min(resets)) if resets else "--:--"
+    line = f"gh {' · '.join(parts)} · reset {reset_text}"
+    if gh.quota_at is not None:
+        age = (now - gh.quota_at).total_seconds()
+        if age > gh.poll_interval_s:
+            line += f" · age {_age(int(age))}"
+    return line
+
+
 def status_bar(snapshot: Snapshot, width: int) -> Text:
     gh = snapshot.gh
     if gh.mode == "off":
@@ -266,7 +290,19 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     filled = min(9, max(0, round(metrics.pct * 9 / 100)))
     progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"
     hours, minutes = divmod(max(0, metrics.active_s) // 60, 60)
-    line = Text(f"{segment} | {progress} | active {hours}h{minutes:02d}m | tick {_clock(snapshot.generated_at, seconds=True)}")
+    prefix = f"{github_quotas(gh, snapshot.generated_at)} | " if gh.mode != "off" else ""
+    if gh.mode != "off" and width < 140:
+        if gh.paused:
+            short_status = "paused: rate limited" if gh.rate_limited else "paused"
+        elif gh.error is not None or gh.ok is False:
+            short_status = f"{STATUS_FAIL} {gh.error.kind if gh.error is not None else 'unavailable'}"
+        else:
+            short_status = f"{gh.mode} {STATUS_OK}"
+        if gh.truncated:
+            short_status += " 100+"
+        line = Text(f"{prefix}{short_status} | {progress} | tick {_clock(snapshot.generated_at, seconds=True)} | gh poll {gh.poll_interval_s}s / {gh.quota_threshold}% | active {hours}h{minutes:02d}m")
+    else:
+        line = Text(f"{prefix}{segment} | {progress} | active {hours}h{minutes:02d}m | tick {_clock(snapshot.generated_at, seconds=True)}")
     if snapshot.lead:
         agent = next((item for item in snapshot.agents if item.name == snapshot.lead), None)
         line.append(" | lead ")
