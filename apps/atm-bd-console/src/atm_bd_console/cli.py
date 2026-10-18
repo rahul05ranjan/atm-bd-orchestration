@@ -5,26 +5,48 @@ import argparse
 import json
 import shutil
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from . import atm_bd, render, runner, status_table
+from . import atm_bd, atm_source, render, runner, status_table
 from . import config as config_source
 from .build import identity
 from .codec import snapshot_stale, to_json
 from .paths import CONSOLE_NAME
-from .result import Err, Error, IoFailed, Ok
+from .result import CommandFailed, Err, Error, IoFailed, NotFound, Ok
 from .state import acquire_lock, load_snapshot
-from .types import INITIAL_STATE
+from .types import INITIAL_STATE, Config
 
 
 def now() -> datetime:
     return datetime.now(UTC)
 
 
+def _cadence(args: argparse.Namespace) -> int | None:
+    # The liveness window is judged from the interval a tick records, so a cron tick records its schedule
+    # unless --interval says otherwise; without this a 15-minute cron recorded 60 s and read as stopped.
+    if args.interval is None and args.command == "cron":
+        return config_source.CRON_CADENCE_S
+    return args.interval
+
+
 def _error_text(error: Error) -> str:
     if isinstance(error, IoFailed):
         return f"{error.kind}: {error.path}: {error.message}: {error.fix}"
     return f"{error.kind}: {error.fix}"
+
+
+def _notification_startup_error(config: Config) -> Error | None:
+    sender, team = config.notification_sender.split("@", 1)
+    fix = f"run atm teams add-member {team} {sender} --agent-type tool --model none to provision {config.notification_sender}"
+    members = atm_source.members(team, sender)
+    if isinstance(members, Err):
+        if isinstance(members.error, CommandFailed) and f"team '{team}' was not found" in members.error.stderr:
+            return NotFound("not_found", config.notification_sender, fix)
+        return replace(members.error, fix=f"could not verify {config.notification_sender}; {fix}; {members.error.fix}")
+    if not any(member.name == sender for member in members.value):
+        return NotFound("not_found", config.notification_sender, fix)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         if name != "show":
             sub.add_argument("--github", choices=("graphql", "rest", "off"))
             sub.add_argument("--interval", type=int)
+            sub.add_argument("--github-poll-interval", type=int, help="GitHub polling interval in seconds (default 600)")
+            sub.add_argument("--github-quota-threshold", type=int, help="minimum remaining quota percentage (default 50)")
             if name != "snapshot":
                 sub.add_argument("--dry-run", action="store_true")
             sub.add_argument("--no-fetch", action="store_true")
@@ -63,12 +87,12 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(snapshot, Ok) and (snapshot.value.stopped is not None or not snapshot_stale(snapshot.value, now())):
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
-            return 0
-        last = f" (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})" if isinstance(snapshot, Ok) else ""
+            return 2 if snapshot.value.phase_data is None else 0
+        last = f" (last tick {render._clock(snapshot.value.generated_at)})" if isinstance(snapshot, Ok) else ""
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
     md_table = getattr(args, "md_table", False)
-    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
+    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=_cadence(args), github_poll_interval_s=args.github_poll_interval, github_quota_threshold=args.github_quota_threshold, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
     if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3
@@ -85,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(lock.error)}"}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
-                text = f"{invocation}: console stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
+                text = f"{invocation}: console stopped updating (last tick {render._clock(snapshot.value.generated_at)})"
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:
@@ -106,9 +130,13 @@ def main(argv: list[str] | None = None) -> int:
             for action in result.reported:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome}))
         if args.command == "cron":
+            if snapshot.gh.mode != "off":
+                print(json.dumps({"at": snapshot.generated_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                  "kind": "status", "text": render.github_quotas(snapshot.gh, snapshot.generated_at)},
+                                 ensure_ascii=False))
             for error in snapshot.errors:
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(error)}"}))
         return 0
     from .app import run
 
-    return run(loaded.value, None, INITIAL_STATE, None, runner_step=runner.step)
+    return run(loaded.value, None, INITIAL_STATE, _notification_startup_error(loaded.value), runner_step=runner.step)

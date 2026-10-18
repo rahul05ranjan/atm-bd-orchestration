@@ -86,6 +86,29 @@ def render(context):
     raise AssertionError(f"unexpected dispatch: {context.step.bead_id}")
 
 
+@pytest.mark.parametrize("cached", (False, True))
+def test_paused_github_does_not_report_unavailability(cached: bool) -> None:
+    gh = GhStatus("graphql", True if cached else None, None, NOW if cached else None, False,
+                  quota_remaining=2450, quota_limit=5000, quota_reset=NOW + timedelta(hours=1), paused=True)
+    prs = Ok(()) if cached else Err(CommandFailed("command_failed", ("gh",), 1, "paused", "wait"))
+    snapshot, actions, _ = tick(inputs(phase(), gh=gh, prs=prs), STATE, NOW, render)
+    assert "github_unavailable" not in {problem.key for problem in snapshot.problems}
+    assert not any(action.kind == "send" and "GitHub data" in action.text for action in actions)
+
+
+def test_cached_github_error_is_not_readded_as_a_new_tick_error() -> None:
+    cached_error = Timeout("timeout", ("gh", "api"), 10, "retry GitHub")
+    value = inputs(
+        phase(), prs=Ok(()),
+        gh=GhStatus("graphql", False, cached_error, NOW - timedelta(minutes=1), False),
+    )
+
+    snapshot, _, _ = tick(value, STATE, NOW, render)
+
+    assert snapshot.gh.error == cached_error
+    assert cached_error not in snapshot.errors
+
+
 def test_roster_statuses_and_markers() -> None:
     members = tuple(Member(name, presence, NOW - timedelta(minutes=5)) for name, presence in (
         ("busy", "active"), ("stalling", "idle"), ("blocked", "blocked"),
@@ -564,6 +587,21 @@ def test_not_ready_hold_is_visible_without_problem_or_notice() -> None:
     assert actions == ()
 
 
+def test_held_section_is_one_not_ready_row_per_bead_and_no_gate_noise() -> None:
+    qa_one = step("qa-one", "atm-bh-1", kind="qa", ready=False, assignee=None, branch=None, worktree=None)
+    qa_two = step("qa-two", "atm-bh-1", kind="qa", ready=False, assignee=None, branch=None, worktree=None)
+    sanity = step(
+        "sanity", "atm-bh-1", kind="sanity", ready=False, status=SprintState.IN_PROGRESS, assignee="solar",
+        branch=None, worktree=None,
+    )
+    snapshot, actions, _ = tick(inputs(phase(qa_one, qa_two, sanity)), STATE, NOW, render)
+
+    held = snapshot.sections[0].rows
+    assert sorted((row.bead_id, row.reason) for row in held) == [("qa-one", "not ready"), ("qa-two", "not ready")]
+    assert "<missing>" not in repr(snapshot)
+    assert actions == ()
+
+
 def test_open_fix_and_future_poured_sanity_and_qa_do_not_notify_missing_metadata() -> None:
     fix = step("atm-bh-1.fix", "atm-bh-1", kind="fix", ready=True, branch="fix/bh-1", assignee="solar")
     future = tuple(step(
@@ -576,7 +614,8 @@ def test_open_fix_and_future_poured_sanity_and_qa_do_not_notify_missing_metadata
         snapshot, actions, state = tick(supplied, state, NOW + timedelta(minutes=minutes), render)
         held = snapshot.sections[0].rows
         assert {row.bead_id for row in held if row.reason == "not ready"} == {step.bead_id for step in future}
-        assert any("<missing>" in row.reason for row in held)
+        assert len(held) == len(future)
+        assert all("<missing>" not in row.reason for row in held)
         assert snapshot.problems == ()
         assert snapshot.errors == ()
         assert actions == ()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,9 +94,19 @@ def test_pr_assignee_uses_roster_icon_before_name() -> None:
 
 @pytest.mark.parametrize("phase", ("bh", "phase-current"))
 @pytest.mark.parametrize("mode", ("graphql", "rest"))
-def test_successful_empty_prs_name_actual_phase_and_checked_time(phase: str, mode: str) -> None:
-    empty = replace(snapshot(), phase=phase, prs=(), gh=GhStatus(mode, True, None, NOW, False))
-    assert render_prs(empty, 120).plain == f"No open PR for phase {phase} (checked 12:00)"
+def test_successful_empty_prs_name_actual_phase_and_checked_time(phase: str, mode: str, monkeypatch) -> None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Etc/GMT+8")
+    time.tzset()
+    try:
+        empty = replace(snapshot(), phase=phase, prs=(), gh=GhStatus(mode, True, None, NOW, False))
+        assert render_prs(empty, 120).plain == f"No open PR for phase {phase} (checked 04:00)"
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        time.tzset()
 
 
 def test_empty_prs_distinguish_github_off_and_failure() -> None:
@@ -102,6 +114,24 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
     assert render_prs(replace(empty, gh=GhStatus("off", None, None, None, False)), 120).plain == "GitHub checks are off"
     failed = GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, False)
     assert render_prs(replace(empty, gh=failed), 120).plain == "GitHub read failed: timeout"
+
+
+@pytest.mark.parametrize("cached", ("rows", "empty", "none"))
+def test_paused_notice_precedes_cached_rows_and_empty_states(cached: str) -> None:
+    base = snapshot()
+    gh = replace(base.gh, paused=True, quota_remaining=2450, quota_limit=5000,
+                 quota_reset=NOW, at=None if cached == "none" else NOW,
+                 ok=None if cached == "none" else True)
+    value = replace(base, gh=gh, prs=base.prs if cached == "rows" else ())
+    lines = render_prs(value, 120).plain.splitlines()
+    assert lines[0] == (f"GitHub paused: 2450/5000 graphql remaining, below 50 percent, "
+                        f"resets {NOW.astimezone().strftime('%H:%M')}")
+    if cached == "rows":
+        assert "#11" in lines[1] and "#12" in lines[2]
+    elif cached == "empty":
+        assert lines[1].startswith("No open PR for phase")
+    else:
+        assert len(lines) == 1
 
 
 def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
