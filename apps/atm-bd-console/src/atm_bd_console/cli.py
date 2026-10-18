@@ -75,9 +75,10 @@ def main(argv: list[str] | None = None) -> int:
         with lock.value:
             saved = lock.value.load_state()
             state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
-            snapshot, _ = runner.step(loaded.value, state, False, lock.value)
+            result = runner.step(loaded.value, state, False, lock.value)
+            snapshot, _ = result
         if args.command == "cron" and snapshot.stopped is None:
-            for action in (item for item in snapshot.sent if item.at == snapshot.generated_at):
+            for action in result.reported:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))
         if args.command == "cron":
             for error in snapshot.errors:

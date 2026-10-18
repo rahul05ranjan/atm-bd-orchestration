@@ -696,9 +696,11 @@ def test_logging_failure_surfaces_on_early_return(github_runtime, monkeypatch, s
     else:
         monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Err(TIMEOUT))
 
-    snapshot, _ = runner.step(CONFIG, state, False, store)
+    result = runner.step(CONFIG, state, False, store)
+    snapshot, _ = result
 
     assert logging_error in snapshot.errors
+    assert result.reported == ()
     assert recovery_error in snapshot.errors and write_error in snapshot.errors
     assert [name for name, _ in writes] == ["state", "snapshot"]
     assert writes[-1][1] == snapshot
@@ -719,7 +721,8 @@ def test_every_effect_outcome_has_recipient_task_and_error_context(github_runtim
     monkeypatch.setattr(runner.atm_source, "assign", deliver)
     monkeypatch.setattr(runner.atm_source, "send", deliver)
 
-    snapshot, _ = runner.step(replace(CONFIG, dry_run=outcome == "dry_run"), RUNNING_STATE, False, store)
+    result = runner.step(replace(CONFIG, dry_run=outcome == "dry_run"), RUNNING_STATE, False, store)
+    snapshot, _ = result
 
     effect_events = [fields for action, fields in events if action == "action"]
     assert len(effect_events) == len(actions)
@@ -730,6 +733,8 @@ def test_every_effect_outcome_has_recipient_task_and_error_context(github_runtim
             "outcome": outcome, "error": asdict(COMMAND_FAILED) if outcome.startswith("failed") else None,
         }
     assert all(action.outcome == outcome for action in snapshot.sent)
+    assert result.reported == tuple(replace(action, outcome=outcome) for action in actions)
+    assert len(snapshot.sent) == 5
 
 
 def test_process_logger_is_reused_across_ticks(github_runtime, monkeypatch, tmp_path):

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Literal
+from typing import Literal, Self
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .dispatch import verification_reason
@@ -12,6 +12,17 @@ from .log import TickLog, create_console_logger
 from .result import Err, NotFound, Ok
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
+
+
+class StepResult(tuple[Snapshot, State]):
+    """A two-value compatible tick result with all actions reported this tick."""
+
+    reported: tuple[Action, ...]
+
+    def __new__(cls, snapshot: Snapshot, state: State, reported: tuple[Action, ...] = ()) -> Self:
+        result = super().__new__(cls, (snapshot, state))
+        result.reported = reported
+        return result
 
 
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
@@ -138,10 +149,10 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     logger.finish(actions=0)
     persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
-    return snapshot, next_state
+    return StepResult(snapshot, next_state)
 
 
-def step(config: Config, state: State, force_github: bool, store: StateStore):
+def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
     """Run one best-effort tick using the caller-owned lock-backed store."""
     now = datetime.now(UTC)
     logger = TickLog(create_console_logger(config.repo_root))
@@ -160,7 +171,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
         logger.finish(actions=0)
         persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
-        return persisted, state
+        return StepResult(persisted, state)
     config = replace(config, lead=file.value.lead)
     root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
@@ -266,6 +277,5 @@ def step(config: Config, state: State, force_github: bool, store: StateStore):
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return persisted, durable
-    snapshot, next_state = persist(store)
-    return snapshot, next_state
+            return StepResult(persisted, durable, reported)
+    return persist(store)
