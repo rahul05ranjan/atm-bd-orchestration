@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import re
 import sys
 from pathlib import Path
 from types import ModuleType
 
 from . import __version__, skill_source
 
-_COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 _INSTALLER_NAME = "_atm_bd_bundled_skill_installer"
 
 
@@ -40,8 +38,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _source_line(name: str, commit: str) -> str:
-    sha = commit if _COMMIT_RE.fullmatch(commit) else "unknown"
-    return f"installed atm-bd-orchestration orchestration from {name} @ {sha} (atm-bd {__version__})"
+    return f"installed atm-bd-orchestration orchestration from {name} @ {commit} (atm-bd {__version__})"
 
 
 def run(argv: list[str] | None = None) -> int:

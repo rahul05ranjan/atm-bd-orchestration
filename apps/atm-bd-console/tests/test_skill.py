@@ -137,6 +137,14 @@ def test_bundled_default_calls_installer_functions_in_the_app_interpreter(instal
     assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd 0.17.0)\n")
 
 
+@pytest.mark.parametrize("commit", [COMMIT, "unknown"])
+def test_source_line_prints_the_commit_the_source_resolved(commit: str) -> None:
+    # skill_source owns the 40-hex-or-unknown rule; the printed line echoes that value.
+    assert skill._source_line("main", commit) == (
+        f"installed atm-bd-orchestration orchestration from main @ {commit} (atm-bd {skill.__version__})"
+    )
+
+
 def test_orchestration_flag_and_installer_passthrough(installer, tmp_path: Path) -> None:
     fake, _ = installer
     target = tmp_path / "consumer"
