@@ -669,9 +669,11 @@ def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_run
     phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.model, "tick", model_tick)
-    fake_bin.make("atm", f'if [ "$1" = send ]; then test "$ATM_IDENTITY" = "{sender}" || exit 23; '
+    monkeypatch.setenv("ATM_IDENTITY", "unrelated")
+    monkeypatch.setenv("ATM_TEAM", "unrelated")
+    fake_bin.make("atm", f'if [ "$1" = send ]; then test "$ATM_IDENTITY" = "{sender}" && test "$ATM_TEAM" = "{sender_team}" || exit 23; '
                   + ('printf "delivery rejected" >&2; exit 3; ' if delivery_fails else 'cat >/dev/null; ')
-                  + 'else test "$ATM_IDENTITY" = fenix || exit 23; fi\n')
+                  + 'else test "$ATM_IDENTITY" = fenix && test "$ATM_TEAM" = atm-dev || exit 23; fi\n')
     config = replace(CONFIG, dry_run=False, notification_sender=f"{sender}@{sender_team}")
 
     snapshot, _ = runner.step(config, INITIAL_STATE, False, store)

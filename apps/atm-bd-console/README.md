@@ -79,11 +79,13 @@ purposes support orchestration workflows and do not enable additional console
 dispatch kinds.
 
 Plain notifications use `atm-bd@tool` by default, independently of the lead
-used for assignments. Set `notification_sender = "member@team"` in the
-`[console]` table of `.atm-bd/console.toml` to use a different sender. ATM
-must already have the sender's team and member provisioned; automatic creation
-of the default tool identity depends on atm-core issue #1870. Failed sends
-remain visible in snapshot errors and cron error lines.
+used for assignments. The skill installer provisions the default tool identity.
+To use another sender, set `tool_identity: "member@team"` in
+`.claude/project/atm-bd-orchestration.yaml` and provision that identity in ATM.
+Environment variables and command-line flags do not select the sender; ATM
+subprocess identity and team are set from the selected sender. Failed sends
+remain visible in snapshot errors and cron error lines. Task assignments remain
+local to the lead's team (cross-team assignments are tracked by atm-core #1870).
 
 ## Dispatch verification
 

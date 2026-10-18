@@ -13,7 +13,8 @@ The positional field order in `types.py` is part of the current contract:
 `Inputs` from `Config`. Do not add other `Config` mirrors to `Inputs`.
 
 `Config.notification_sender` is the validated `member@team` sender for plain
-notifications, defaulting to `atm-bd@tool`. It is appended with a default so
+notifications, defaulting to `atm-bd@tool` and overridden only by `tool_identity`
+in the repository YAML. It is appended with a default so
 existing callers remain compatible; assignment identity remains `Config.lead`.
 
 `RepoConfig.reviewers_round1` is part of the `RepoConfig` declaration in that

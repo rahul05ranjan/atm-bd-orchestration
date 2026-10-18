@@ -99,6 +99,9 @@ def test_as_is_not_a_console_option(capsys) -> None:
         cli.main(["console", "--phase", "bh", "--as=fenix"])
     assert rejected.value.code == 2
     assert "unrecognized arguments: --as=fenix" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["cron", "--phase", "bh", "--team=other"])
+    assert "unrecognized arguments: --team=other" in capsys.readouterr().err
 
 
 def test_missing_phase_is_a_launch_check(capsys) -> None:
