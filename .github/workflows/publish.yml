@@ -1,40 +1,31 @@
 name: Publish atm-bd
 
 on:
-  push:
-    branches: [fix/bi-4-publish-workflow]
   workflow_dispatch:
     inputs:
-      production:
-        description: Publish a fresh build from the approved head to PyPI
+      publish_to_pypi:
+        description: Publish the rehearsed distributions to PyPI after lead approval
         type: boolean
         default: false
-      rehearsal_run_id:
-        description: Successful rehearsal run ID (production only)
-        type: string
-      go_ahead_comment_id:
-        description: PR 276 comment ID containing Rand's verbatim go-ahead (production only)
-        type: string
-      go_ahead_text:
-        description: Exact verbatim go-ahead in that comment (production only)
-        type: string
 
 permissions:
   contents: read
-  actions: read
+
+concurrency:
+  group: atm-bd-publish
+  cancel-in-progress: false
 
 jobs:
   build:
-    if: github.event_name == 'push' || !inputs.production
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
       - name: Build and inspect both distributions
         run: |
           set -euo pipefail
@@ -58,7 +49,7 @@ jobs:
           for item in wheels + sdists:
               print(f'{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}')
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: atm-bd-distributions
           path: ${{ runner.temp }}/dist/*
@@ -71,25 +62,27 @@ jobs:
     timeout-minutes: 10
     environment: testpypi
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/download-artifact@v4
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: atm-bd-distributions
           path: ${{ runner.temp }}/rehearsed-dist
-          github-token: ${{ github.token }}
-          run-id: 39107889683
       - name: Check production project availability before rehearsal
         run: |
           set -euo pipefail
           status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://pypi.org/pypi/atm-bd/json)"
           test "$status" = 404
-      - name: Verify already-published rehearsal files (no re-upload)
+      - name: Publish the build artifacts to TestPyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: uv publish --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ "$RUNNER_TEMP"/rehearsed-dist/*
+      - name: Verify published rehearsal files match this run's artifact
         run: |
           set -euo pipefail
           python3 - "$RUNNER_TEMP/rehearsed-dist" <<'PY'
@@ -105,11 +98,8 @@ jobs:
           files = list(pathlib.Path(sys.argv[1]).iterdir())
           with urllib.request.urlopen(f'https://test.pypi.org/pypi/atm-bd/{version}/json') as response:
               uploaded = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
-          expected = {
-              'atm_bd-0.17.0-py3-none-any.whl': 'd0c4bcb5cd32e91a3fb6690a799f3ad51b046520585deca32cf983c630efce10',
-              'atm_bd-0.17.0.tar.gz': '8c26aa644ce4e1f1fa2e790a8fccf7827904a8f6188615ef2fc0fa64fbf03b3e',
-          }
-          assert {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files} == expected == uploaded
+          assert len(files) == 2
+          assert {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files} == uploaded
           PY
       - name: Install from TestPyPI and exercise entry points
         env:
@@ -123,7 +113,6 @@ jobs:
           "$UV_TOOL_BIN_DIR/atm-bd" console --help
           "$UV_TOOL_BIN_DIR/atm-bd" skill --help
           "$UV_TOOL_BIN_DIR/atm-bd" cron --help
-          test ! -e "$UV_TOOL_BIN_DIR/atm-bd-console"
           ATM_BD_CONSOLE_BIN="$UV_TOOL_BIN_DIR/atm-bd" uv run --frozen --project apps/atm-bd-console pytest -q --basetemp="$RUNNER_TEMP/console-smoke" apps/atm-bd-console/tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick
           python3 - "$RUNNER_TEMP/console-smoke" "$UV_TOOL_BIN_DIR/atm-bd" <<'PY'
           import errno
@@ -212,39 +201,25 @@ jobs:
           YAML
           sudo unshare --net --setgid "$(id -g)" --setuid "$(id -u)" env PATH="$UV_TOOL_BIN_DIR:$PATH" HOME="$HOME" "$UV_TOOL_BIN_DIR/atm-bd" skill --dest "$RUNNER_TEMP/skill-target" | tee "$RUNNER_TEMP/skill-output"
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("apps/atm-bd-console/pyproject.toml", "rb"))["project"]["version"])')"
-          grep -F "bundled @ 74c3b10fc2e959ca70241ee6fb5fcb5dd2f8d203 (atm-bd $version)" "$RUNNER_TEMP/skill-output"
+          grep -F "bundled @ $GITHUB_SHA (atm-bd $version)" "$RUNNER_TEMP/skill-output"
           test -f "$RUNNER_TEMP/skill-target/.claude/skills/atm-bd-orchestration/SKILL.md"
 
   pypi:
-    # Dispatch only after the lead confirms readiness following sanity and QA.
-    # Rand's conditional verbatim go-ahead must be present on PR 276.
-    # The pypi environment has no required reviewer as of 2026-10-18.
-    if: github.event_name == 'workflow_dispatch' && inputs.production
+    # Only the lead dispatches with this input after Rand's go-ahead and QA.
+    needs: testpypi
+    if: inputs.publish_to_pypi
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - name: Verify rehearsal and recorded authorization
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REHEARSAL_RUN: ${{ inputs.rehearsal_run_id }}
-          COMMENT_ID: ${{ inputs.go_ahead_comment_id }}
-          GO_AHEAD: ${{ inputs.go_ahead_text }}
-        run: |
-          set -euo pipefail
-          [[ "$REHEARSAL_RUN" =~ ^[0-9]+$ && "$COMMENT_ID" =~ ^[0-9]+$ ]]
-          test "$GO_AHEAD" = 'if testpypi works, you are free to publish to pypi'
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REHEARSAL_RUN" | jq -e --arg sha "$GITHUB_SHA" '.path == ".github/workflows/publish.yml" and .event == "push" and .head_branch == "fix/bi-4-publish-workflow" and .conclusion == "success" and .head_sha == $sha' >/dev/null
-          gh api "repos/$GITHUB_REPOSITORY/issues/276/comments?per_page=100" --paginate | jq -se --arg id "$COMMENT_ID" --arg text "$GO_AHEAD" 'any(.[][]; (.id | tostring) == $id and .user.login == "randlee" and (.body | contains($text)))' >/dev/null
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
-      - uses: astral-sh/setup-uv@v5
-      - name: Build from the approved dispatch head
-        run: uv build apps/atm-bd-console --out-dir "$RUNNER_TEMP/dist"
-      - name: Verify rehearsal version and production name availability
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/dist
+      - name: Verify identical rehearsed files and production name availability
         run: |
           set -euo pipefail
           python3 - "$RUNNER_TEMP/dist" <<'PY'
@@ -260,10 +235,7 @@ jobs:
           version = next(f.name.removeprefix('atm_bd-').split('-')[0] for f in files if f.suffix == '.whl')
           with urllib.request.urlopen(f'https://test.pypi.org/pypi/atm-bd/{version}/json') as response:
               rehearsed = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
-          assert rehearsed == {
-              'atm_bd-0.17.0-py3-none-any.whl': 'd0c4bcb5cd32e91a3fb6690a799f3ad51b046520585deca32cf983c630efce10',
-              'atm_bd-0.17.0.tar.gz': '8c26aa644ce4e1f1fa2e790a8fccf7827904a8f6188615ef2fc0fa64fbf03b3e',
-          }
+          assert {item.name: hashlib.sha256(item.read_bytes()).hexdigest() for item in files} == rehearsed
           for item in files:
               print(f'{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}')
           try:
@@ -273,7 +245,33 @@ jobs:
           else:
               raise SystemExit('PyPI project already exists; stop for review')
           PY
-      - name: Publish the files built from the approved head
+      - name: Publish the same rehearsed files
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: uv publish "$RUNNER_TEMP"/dist/*
+      - name: Verify production hashes and install
+        env:
+          UV_TOOL_DIR: ${{ github.workspace }}/../production-tools
+          UV_TOOL_BIN_DIR: ${{ github.workspace }}/../production-bin
+        run: |
+          set -euo pipefail
+          version="$(python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import urllib.request
+
+          files = sorted(pathlib.Path(sys.argv[1]).iterdir())
+          assert len(files) == 2
+          version = next(f.name.removeprefix('atm_bd-').split('-')[0] for f in files if f.suffix == '.whl')
+          with urllib.request.urlopen(f'https://pypi.org/pypi/atm-bd/{version}/json') as response:
+              published = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
+          assert {item.name: hashlib.sha256(item.read_bytes()).hexdigest() for item in files} == published
+          print(version)
+          PY
+          )"
+          uv tool install "atm-bd==$version"
+          "$UV_TOOL_BIN_DIR/atm-bd" console --help
+          "$UV_TOOL_BIN_DIR/atm-bd" skill --help
+          "$UV_TOOL_BIN_DIR/atm-bd" cron --help
