@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import BEAD, CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, SAMPLES, SNAPSHOT, STEP, TASK
+from contract_samples import BEAD, CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, PRS_FILE, SAMPLES, SNAPSHOT, STEP, TASK
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
@@ -44,6 +45,62 @@ def test_pre_enum_snapshot_decodes_to_typed_states() -> None:
     assert isinstance(pr.pr.ci, CiState)
     assert isinstance(pr.pr.state, PrState)
     assert pr.merge is not None and isinstance(pr.merge.state, MergeState)
+
+
+def test_unrelated_dataclasses_with_domain_names_are_not_migrated() -> None:
+    @dataclass
+    class Snapshot:
+        top_ci: str
+
+    @dataclass
+    class PullRequest:
+        ci: str
+        failed_checks: tuple[str, ...]
+
+    assert from_json(Snapshot, '{"top_ci":"success"}') == Ok(Snapshot("success"))
+    assert from_json(PullRequest, '{"ci":"failure","failed_checks":["linux"]}') == Ok(
+        PullRequest("failure", ("linux",))
+    )
+
+
+@pytest.mark.parametrize(
+    ("legacy", "checks", "expected"),
+    [
+        ("success", [], CiState.PASS),
+        ("pending", [], CiState.RUNNING),
+        ("failure", ["test-macos"], CiState.FAIL_MACOS),
+        ("failure", ["test-windows"], CiState.FAIL_WINDOWS),
+        ("failure", ["test-linux"], CiState.FAIL_LINUX),
+        ("failure", ["test-linux", "test-macos"], CiState.FAIL_BUG),
+        ("failure", [], CiState.FAIL_BUG),
+    ],
+)
+def test_legacy_prs_file_and_snapshot_ci_migration(legacy: str, checks: list[str], expected: CiState) -> None:
+    prs_file = json.loads(to_json(PRS_FILE))
+    prs_file["prs"][0].update(ci=legacy, failed_checks=checks)
+    decoded_file = from_json(types.PrsFile, json.dumps(prs_file))
+    assert isinstance(decoded_file, Ok)
+    assert decoded_file.value.prs[0].ci is expected
+
+    snapshot = json.loads(to_json(SNAPSHOT))
+    snapshot["top_ci"] = legacy
+    snapshot["prs"][0]["pr"].update(ci=legacy, failed_checks=checks)
+    decoded_snapshot = from_json(types.Snapshot, json.dumps(snapshot))
+    assert isinstance(decoded_snapshot, Ok)
+    assert decoded_snapshot.value.top_ci is {
+        "success": CiState.PASS, "pending": CiState.RUNNING, "failure": CiState.FAIL_BUG,
+    }[legacy]
+    assert decoded_snapshot.value.prs[0].pr.ci is expected
+
+
+@pytest.mark.parametrize("checks", [None, "linux", [123], {"test": "linux"}])
+def test_legacy_ci_rejects_malformed_failed_checks(checks: object) -> None:
+    prs_file = json.loads(to_json(PRS_FILE))
+    prs_file["prs"][0].update(ci="failure", failed_checks=checks)
+    decoded = from_json(types.PrsFile, json.dumps(prs_file))
+    assert isinstance(decoded, Err)
+    assert isinstance(decoded.error, ParseFailed)
+    assert decoded.error.source.startswith("$.prs[0].failed_checks")
 
 
 def test_legacy_bead_step_and_qa_strings_decode_to_enums() -> None:
