@@ -19,6 +19,7 @@ import pytest
 
 import install
 from test_install import make_repo
+from subprocess_helpers import SUITE_TIMEOUT, run_command
 
 PKG = Path(__file__).resolve().parents[1]
 
@@ -64,8 +65,8 @@ def installed(tmp_path_factory):
     repo = make_repo(tmp_path_factory.mktemp("suites"))
     with absent_installer_tools_faked(tmp_path_factory.mktemp("required-tools")):
         assert install.main(["--dest", str(repo / ".claude"), "--set", "qa_member=quality-mgr"]) == 0
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"], check=True)
+    run_command(["git", "-C", str(repo), "add", "-A"], check=True)
+    run_command(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"], check=True)
     return repo
 
 
@@ -74,8 +75,8 @@ def test_installed_suite_passes(installed, suite):
     skill_dir = installed / suite
     scripts = skill_dir.parent if skill_dir.parent.name == "scripts" else skill_dir.parent / "scripts"
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(scripts), str(scripts.parent)])}
-    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", suite],
-                          cwd=installed, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = run_command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", suite],
+                       timeout=SUITE_TIMEOUT, cwd=installed, env=env, stderr=subprocess.STDOUT, text=True)
     assert proc.returncode == 0, proc.stdout[-16000:]   # room for the pour test's server log tails
 
 
@@ -98,8 +99,7 @@ def test_dev_bead_ids_take_the_installed_prefix(installed):
     plan.write_text('{"sprint": "x-1"}\n{"sprint": "x-2", "depends_on": ["x-1"]}\n')
     code = ("import json, sys; from pathlib import Path; sys.path.insert(0, '.claude/skills/atm-beads/scripts');"
             "import sprint_index_common as c; print(json.dumps(c.load_phase_plan(Path(sys.argv[1]))))")
-    out = subprocess.run([sys.executable, "-c", code, str(plan)], cwd=installed, check=True,
-                         stdout=subprocess.PIPE, text=True).stdout
+    out = run_command([sys.executable, "-c", code, str(plan)], cwd=installed, check=True, text=True).stdout
     index = json.loads(out)
     assert index["root_bead_id"] == "myp-phase-x"
     assert [row["sprint_bead_id"] for row in index["sprints"]] == ["myp-x-1", "myp-x-2"]

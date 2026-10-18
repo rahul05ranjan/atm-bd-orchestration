@@ -19,6 +19,7 @@ import yaml
 
 import gen_manifest
 import install
+from subprocess_helpers import run_command
 
 PKG = Path(__file__).resolve().parents[1]
 SC_COMPOSE = shutil.which("sc-compose") is not None
@@ -301,8 +302,8 @@ AGENTS = ("quality-mgr", "req-qa", "arch-qa", "ruthless-boundary-qa", "my-sanity
 def make_repo(tmp_path: Path, *, drop: tuple = (), agents: tuple = AGENTS, dolt_mode: str = "server") -> Path:
     repo = tmp_path / "my-repo"
     (repo / ".claude" / "agents").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:owner/my-repo.git"], check=True)
+    run_command(["git", "init", "-q", str(repo)], check=True)
+    run_command(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:owner/my-repo.git"], check=True)
     text = REGISTRY.format(worktree_base=repo.resolve().parent / "my-repo-worktrees")
     lines = [line for line in text.splitlines(keepends=True) if not any(line.startswith(f"{d}:") for d in drop)]
     (repo / ".claude/agents/registry.yaml").write_text("".join(lines))
@@ -339,7 +340,7 @@ def pkg_copy(tmp_path):
 
 
 def regenerate(pkg: Path) -> None:
-    subprocess.run(["python3", str(pkg / "tests/gen_manifest.py")], check=True, stdout=subprocess.DEVNULL)
+    run_command(["python3", str(pkg / "tests/gen_manifest.py")], check=True)
 
 
 # ---------------------------------------------------------------- values (no sc-compose)
@@ -729,25 +730,24 @@ def test_migration_owns_shipped_and_legacy_bytes_and_fails_on_others(tmp_path, p
 
 
 def _git_has(rev: str) -> bool:
-    return subprocess.run(["git", "-C", str(PKG), "cat-file", "-e", f"{rev}^{{commit}}"],
-                          stderr=subprocess.DEVNULL).returncode == 0
+    return run_command(["git", "-C", str(PKG), "cat-file", "-e", f"{rev}^{{commit}}"],
+                       stderr=subprocess.PIPE).returncode == 0
 
 
 @needs_sc_compose
 @pytest.mark.skipif(not _git_has("d5b7301"), reason="package history (d5b7301) not in this checkout; fetch-depth 0 needed")
 def test_real_upgrade_from_a_0_2_3_install(tmp_path, capsys):
     """Install with the 0.2.3 installer itself, then upgrade with this one."""
-    top = subprocess.run(["git", "-C", str(PKG), "rev-parse", "--show-toplevel"], check=True,
-                         stdout=subprocess.PIPE, text=True).stdout.strip()
-    archive = subprocess.run(["git", "-C", top, "archive", "d5b7301:plugins/atm-bd-orchestration"],
-                             check=True, stdout=subprocess.PIPE).stdout
+    top = run_command(["git", "-C", str(PKG), "rev-parse", "--show-toplevel"], check=True, text=True).stdout.strip()
+    archive = run_command(["git", "-C", top, "archive", "d5b7301:plugins/atm-bd-orchestration"],
+                          check=True).stdout
     tarfile.open(fileobj=io.BytesIO(archive)).extractall(
         tmp_path / "old", **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
     old_pkg = tmp_path / "old"
     repo = make_repo(tmp_path)
     (repo / ".atm.toml").write_text('[atm]\ndefault_team = "my-team"\n')
-    old = subprocess.run(["python3", str(old_pkg / "install.py"), "--dest", str(repo / ".claude")],
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    old = run_command(["python3", str(old_pkg / "install.py"), "--dest", str(repo / ".claude")],
+                      stderr=subprocess.STDOUT, text=True)
     assert old.returncode == 0, old.stdout
     assert not (repo / install.LOCK_OUT).exists()
     # Copied files from 0.2.3 are owned through config/legacy-owned.json. A rendered file
