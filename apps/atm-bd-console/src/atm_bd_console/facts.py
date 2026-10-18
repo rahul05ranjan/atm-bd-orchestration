@@ -19,11 +19,17 @@ _QA_ICONS = {QaState.RUNNING: AgentIcon.QA_RUNNING, QaState.PASS: AgentIcon.QA_P
 
 
 def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIcon:
-    """The one owner of agent icon selection; icons.icon_for only looks up the icon it returns."""
+    """Select agent icons centrally, including gavels for fix verification.
+
+    ``qa`` is the stored Step kind and roster role; ``sprint_qa`` is a
+    display-row role. Both use the ANC-017 gavel, with the member's QA state
+    when present and running otherwise; icons.icon_for only looks it up.
+    """
     if step_kind == "sanity":
         return AgentIcon.SEVERITY
     if step_kind in ("qa", "sprint_qa"):
-        return _QA_ICONS.get(getattr(member, "qa_state", None), AgentIcon.QA_RUNNING)
+        qa_state = member.qa_state if isinstance(member, AgentView) else None
+        return _QA_ICONS[qa_state] if qa_state is not None else AgentIcon.QA_RUNNING
     if member is None:
         return AgentIcon.OTHER
     model = (member.model or "").lower()
@@ -109,6 +115,12 @@ def task_sprint(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Sprin
 
 
 def _qa_result(steps: tuple[Step, ...]) -> AgentIcon | None:
+    """Select the sprint QA verdict, excluding fix-verification results.
+
+    Stored QA steps use kind ``qa``; ``carry_forward`` identifies a fix or
+    finding verification rather than a sprint review. The ``sprint_qa``
+    spelling is also accepted as the equivalent display-row vocabulary.
+    """
     from .model import qa_state_from_close
 
     closed_qa = tuple(step for step in steps if step.kind in ("qa", "sprint_qa") and not step.carry_forward and step.closed_at)

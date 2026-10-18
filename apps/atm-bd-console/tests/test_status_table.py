@@ -1,11 +1,12 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from inspect import getdoc
 
 from contract_samples import BEAD, CONFIG, GH_STATUS, INPUTS, MEMBER, PHASE, PR_ROW, SNAPSHOT, SPRINT, STEP, TASK
 
 from atm_bd_console import runner, status_table
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
-from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, sprint_facts
+from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, _qa_result, agent_icon_of, sprint_facts
 from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
 from atm_bd_console.result import Ok
@@ -105,6 +106,25 @@ def test_latest_qa_is_invalidated_by_later_dev():
     qa = replace(qa, closed_at=NOW - timedelta(seconds=1))
     snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(dev, qa)))
     assert rows(snapshot)[0].state == (SprintState.IN_PROGRESS,)
+
+
+def test_qa_kind_and_sprint_result_distinction_are_documented():
+    assert all(term in (getdoc(agent_icon_of) or "") for term in ("qa", "sprint_qa", "fix"))
+    assert all(term in (getdoc(_qa_result) or "") for term in ("qa", "carry_forward", "sprint"))
+
+
+def test_fix_verification_does_not_replace_sprint_qa_result():
+    snapshot = _snapshot()
+    sprint_qa = replace(STEP, bead_id="sprint-qa", kind="qa", carry_forward=None, sprint_bead=SPRINT.id,
+                        closed_at=NOW, close_reason="PASS")
+    fix_qa = replace(sprint_qa, bead_id="fix-qa", carry_forward="finding", closed_at=NOW + timedelta(seconds=1),
+                     close_reason="FAIL")
+    phase = replace(snapshot.phase_data, steps=(sprint_qa, fix_qa))
+    snapshot = replace(snapshot, phase_data=phase, task_data=())
+    assert sprint_facts(snapshot)[0].last_qa is AgentIcon.QA_PASS
+    assert sprint_facts(replace(snapshot, phase_data=replace(phase, steps=(fix_qa,))))[0].last_qa is None
+    running = replace(snapshot, task_data=(replace(TASK, id=fix_qa.bead_id, state_since=NOW),))
+    assert sprint_facts(running)[0].active[0].icon is AgentIcon.QA_RUNNING
 
 
 def test_pr_preference_and_conflict_require_matching_base():
