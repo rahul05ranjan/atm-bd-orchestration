@@ -10,6 +10,7 @@ import pytest
 from contract_samples import STEP
 from rich.cells import cell_len
 
+from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState
 from atm_bd_console.model import _agent_views
@@ -102,6 +103,27 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
         assert {"green", "yellow", "red", "dim", "bold"} <= styles
 
     pacific_test(check)
+
+
+def test_dashboard_renders_every_member_from_roster_fixture(fake_bin, monkeypatch) -> None:
+    monkeypatch.setenv("ATM_BODY", (FIXTURES / "atm" / "members.json").read_text())
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+    members = atm_source.members("atm-dev")
+    assert isinstance(members, Ok)
+    agents = _agent_views(members.value, (), None, Ok(()), NOW)
+    rendered = dashboard(replace(snapshot(), agents=agents, errors=(), sections=(), sent=()), 120, 40)
+
+    for name, glyph, style in (
+        ("aria", "\U000f05a8", "#FFA60D"),
+        ("boris", "\U000f06c4", "#FF8C66"),
+        ("cy", "\U000f01a6", "#E551BA"),
+        ("dara", "\U000f029b", None),
+        ("eli", "\U000f01e7", "#2DE057"),
+    ):
+        position = rendered.plain.index(glyph + name)
+        if style is not None:
+            assert any(span.start == position and span.end == position + 1 and span.style == style
+                       for span in rendered.spans)
 
 
 def test_sections_error_first_sent_last_height_and_links() -> None:

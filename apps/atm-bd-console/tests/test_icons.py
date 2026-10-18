@@ -56,6 +56,31 @@ def test_qa_icon_color_tracks_state_and_sanity_icon_is_fixed() -> None:
     assert icon_for(Member("sanity", "idle", None, "sanity")) == ("\U000f01a6", "#E551BA")
 
 
+@pytest.mark.parametrize("model", ["claude", "codex", "unknown"])
+@pytest.mark.parametrize(("harness", "expected"), [
+    ("claude-code", ("\U000f0382", "#FF784D")),
+    ("codex-cli", ("\U000f01e7", "#2DE057")),
+])
+def test_unmatched_models_use_harness_fallback(model: str, harness: str, expected: tuple[str, str]) -> None:
+    assert icon_for(Member("agent", "idle", None, "dev", model, harness)) == expected
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "codex-cli"])
+@pytest.mark.parametrize("model", ["haiku", "sonnet", "opus", "fable", "sol", "luna", "terra", "astra", "unknown"])
+@pytest.mark.parametrize(("agent_type", "qa_state", "expected"), [
+    ("qa", None, ("\U000f029b", None)),
+    ("qa", "running", ("\U000f029b", "#4A5AF8")),
+    ("qa", "pass", ("\U000f029b", "#2EA043")),
+    ("qa", "fail", ("\U000f029b", "#F85149")),
+    ("sanity", None, ("\U000f01a6", "#E551BA")),
+])
+def test_qa_and_sanity_icons_override_harness_and_model(
+    harness: str, model: str, agent_type: str, qa_state: str | None, expected: tuple[str, str | None],
+) -> None:
+    agent = AgentView("agent", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), agent_type, model, harness, qa_state)
+    assert icon_for(agent) == expected
+
+
 def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     tables = (BEAD_STATUS_ICONS, SPRINT_STATE_ICONS, PR_STATE_ICONS, CI_STATE_ICONS)
     glyphs = [glyph for table in tables for glyph, _ in table.values()]
