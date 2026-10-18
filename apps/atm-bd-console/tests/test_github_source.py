@@ -34,6 +34,9 @@ def fake_gh(fake_bin, monkeypatch: pytest.MonkeyPatch, body: object, *, exit_cod
     ("SKIPPED", "COMPLETED", (), CiState.NONE),
     ("NEUTRAL", "COMPLETED", (), CiState.NONE),
     ("PENDING", "IN_PROGRESS", ("windows",), CiState.FAIL_WINDOWS),
+    ("BOGUS", "IN_PROGRESS", (), CiState.UNKNOWN),
+    ("SUCCESS", "BOGUS", (), CiState.UNKNOWN),
+    ("BOGUS", "BOGUS", ("windows",), CiState.FAIL_WINDOWS),
 ])
 def test_ci_classification(conclusion, status, checks, expected):
     assert github_source.ci_state_of(conclusion, status, checks) is expected
@@ -133,6 +136,23 @@ def test_rest_fetches_only_selected_pr_checks_and_failure_outranks_running(monke
     selected_result = next(pr for pr in result.value if pr.number == selected["number"])
     assert selected_result.ci == CiState.FAIL_WINDOWS
     assert selected_result.failed_checks == ("windows",)
+
+
+def test_rest_unknown_check_status_is_preserved(monkeypatch):
+    pull_rows = copy.deepcopy(RECORDED_REST[:1])
+
+    def run(argv, *_args, **_kwargs):
+        if argv == github_source.REST_ARGV:
+            return Ok(Output(0, json.dumps(pull_rows)))
+        return Ok(Output(0, json.dumps({"total_count": 1, "check_runs": [
+            {"name": "test", "conclusion": None, "status": "pulsing"},
+        ]})))
+
+    monkeypatch.setattr(github_source.command, "run", run)
+    result, status = github_source.open_prs("rest", "/repo", ((pull_rows[0]["head"]["ref"],),))
+    assert isinstance(result, Ok) and status.ok
+    assert result.value[0].ci is CiState.UNKNOWN
+    assert result.value[0].raw_ci == "PULSING"
 
 
 def test_graphql_requests_newest_prs_before_the_100_row_limit() -> None:

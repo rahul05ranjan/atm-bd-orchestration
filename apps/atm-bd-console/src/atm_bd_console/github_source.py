@@ -27,6 +27,10 @@ def ci_state_of(conclusion: str | None, status: str | None, failed_checks: tuple
     status = status.upper() if status else None
     if failed_checks or conclusion in FAILURES:
         return ci_failure_key(failed_checks)
+    if conclusion not in (None, "", "PENDING", "EXPECTED", "SUCCESS", "SKIPPED", "NEUTRAL"):
+        return CiState.UNKNOWN
+    if status not in (None, "", "COMPLETED", "QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"):
+        return CiState.UNKNOWN
     if conclusion in ("PENDING", "EXPECTED") or status in ("QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"):
         return CiState.RUNNING
     if conclusion == "SUCCESS":
@@ -133,14 +137,18 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
                 runs = checks["check_runs"]
                 truncated = truncated or checks["total_count"] > len(runs)
                 failed = tuple(str(run["name"]) for run in runs if (run.get("conclusion") or "").upper() in FAILURES)
-                running = any((run.get("status") or "").upper() != "COMPLETED" for run in runs)
+                statuses = tuple((run.get("status") or "").upper() for run in runs)
+                unexpected_status = next((status for status in statuses if status not in (
+                    "", "COMPLETED", "QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED")), "")
+                running = any(status in ("QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED")
+                              for status in statuses)
                 success = any((run.get("conclusion") or "").upper() == "SUCCESS" for run in runs)
                 unexpected = next((str(run.get("conclusion")) for run in runs
                                    if run.get("conclusion") and str(run["conclusion"]).upper()
                                    not in (*FAILURES, "SUCCESS", "SKIPPED", "NEUTRAL")), "")
                 ci = ci_state_of(unexpected or ("SUCCESS" if success else None),
-                                 "IN_PROGRESS" if running else None, failed)
-                updates[pr.number] = replace(pr, ci=ci, failed_checks=failed, raw_ci=unexpected)
+                                 unexpected_status or ("IN_PROGRESS" if running else None), failed)
+                updates[pr.number] = replace(pr, ci=ci, failed_checks=failed, raw_ci=unexpected or unexpected_status)
             except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as exc:
                 error = ParseFailed("parse_failed", "github rest check-runs", str(exc), "retry the GitHub request")
                 return Err(error), _status(mode, False, error)
