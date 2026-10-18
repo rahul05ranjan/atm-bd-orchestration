@@ -13,6 +13,8 @@ from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
 from rich.cells import cell_len
 from textual import events
+from textual.containers import ScrollableContainer
+from textual.geometry import Size
 
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
@@ -383,6 +385,34 @@ def test_real_bh_status_graph_anchors_root_and_preserves_pan_on_refresh(monkeypa
             assert not app.query_one("#status-overflow").display
             assert panel.max_scroll_x == 0
             assert app.query_one("#status-text").render().plain == graph
+
+    run_scenario(scenario())
+
+
+def test_status_initial_anchor_survives_a_viewport_measured_before_layout(monkeypatch) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures/bh-wide-dag.json").read_text())
+    graph = fixture["text"]
+    monkeypatch.setattr(console.status, "status_text", lambda _snapshot: (graph, None))
+    original = ConsoleApp._refresh_status_viewport
+    forced = {"done": False}
+
+    def refresh_before_layout(self) -> None:
+        panel = self.query_one("#status-panel", ScrollableContainer)
+        if not forced["done"] and self.query_one("TabbedContent").active == "status" and panel.scrollable_content_region.width > 0:
+            forced["done"] = True
+            panel.virtual_size = Size(0, panel.virtual_size.height)
+        original(self)
+
+    monkeypatch.setattr(ConsoleApp, "_refresh_status_viewport", refresh_before_layout)
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(RUNNING), STATE)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "status"
+            await settle(pilot)
+            assert forced["done"]
+            assert app.query_one("#status-panel").scroll_x == 204
 
     run_scenario(scenario())
 

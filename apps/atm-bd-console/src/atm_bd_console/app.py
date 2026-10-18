@@ -382,6 +382,9 @@ class ConsoleApp(App[int]):
         if not self._status_view_initialized:
             first_line = next((line for line in lines if line.strip()), None)
             if first_line is not None:
+                if panel.virtual_size.width <= 0:
+                    self.call_after_refresh(self._refresh_status_viewport)
+                    return
                 indent = first_line[:len(first_line) - len(first_line.lstrip())]
                 panel.scroll_to(x=cell_len(indent), animate=False, immediate=True)
                 self._status_view_initialized = True
