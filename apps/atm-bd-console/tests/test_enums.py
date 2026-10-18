@@ -50,6 +50,29 @@ def test_source_adapters_handle_unknown_and_failure_precedence():
     assert ci_state_of("unexpected", None, ()) is CiState.UNKNOWN
 
 
+@pytest.mark.parametrize(
+    ("model", "harness", "expected"),
+    [
+        ("GPT-5.6-Terra", "codex-cli", AgentIcon.TERRA),
+        ("GPT-5.6-Terra", "claude-code", AgentIcon.TERRA),
+        ("Claude-Opus-5-5", "claude-code", AgentIcon.OPUS),
+        ("claude-opus-5-5", "codex-cli", AgentIcon.OPUS),
+        ("claude-sonnet-opus", "claude-code", AgentIcon.SONNET),
+        ("claude", "claude-code", AgentIcon.SONNET),
+        ("codex", "codex-cli", AgentIcon.TERRA),
+        ("unknown", "claude-code", AgentIcon.SONNET),
+        ("unknown", "codex-cli", AgentIcon.TERRA),
+        ("unknown", "foo", AgentIcon.OTHER),
+        (None, None, AgentIcon.OTHER),
+    ],
+)
+def test_agent_icon_matches_model_names_by_contains_then_falls_back_by_harness(
+    model: str | None, harness: str | None, expected: AgentIcon,
+) -> None:
+    member = Member("name", "active", None, "dev", model, harness)
+    assert agent_icon_of(member, "dev") is expected
+
+
 def test_agent_icon_uses_step_role_and_harness_fallback():
     member = Member("name", "active", None, "dev", "unknown", "codex-cli")
     assert agent_icon_of(member, "dev") is AgentIcon.TERRA

@@ -8,6 +8,11 @@ from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .ids import short_id
 from .types import AgentView, Member, PrRow, Snapshot, Sprint, Step, Task
 
+# ANC-024: the roster model string, lower-cased, is matched by contains; the first hit wins. SOL comes last
+# because "sol" is inside "resolve", so a model such as GPT-5.6-Terra-Resolve must take TERRA first.
+_MODEL_ICONS = (AgentIcon.ASTRA, AgentIcon.TERRA, AgentIcon.LUNA, AgentIcon.SOL,
+                AgentIcon.HAIKU, AgentIcon.SONNET, AgentIcon.OPUS, AgentIcon.FABLE)
+
 
 def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIcon:
     if step_kind == "sanity":
@@ -16,17 +21,17 @@ def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIco
         return AgentIcon.QA_RUNNING
     if member is None:
         return AgentIcon.OTHER
-    harness = (member.harness or "").lower()
     model = (member.model or "").lower()
+    named = next((icon for icon in _MODEL_ICONS if icon.value in model), None)
+    if named is not None:
+        return named
+    # ANC-025: an unmatched model falls back by harness; any other harness is OTHER.
+    harness = (member.harness or "").lower()
     if harness == "claude-code":
-        choices = (AgentIcon.HAIKU, AgentIcon.SONNET, AgentIcon.OPUS, AgentIcon.FABLE)
-        fallback = AgentIcon.SONNET
-    elif harness == "codex-cli":
-        choices = (AgentIcon.ASTRA, AgentIcon.TERRA, AgentIcon.LUNA, AgentIcon.SOL)
-        fallback = AgentIcon.TERRA
-    else:
-        return AgentIcon.OTHER
-    return next((choice for choice in choices if choice.value in model), fallback)
+        return AgentIcon.SONNET
+    if harness == "codex-cli":
+        return AgentIcon.TERRA
+    return AgentIcon.OTHER
 
 
 @dataclass(frozen=True)
