@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,17 +11,18 @@ from types import SimpleNamespace
 import pytest
 from conftest import HANG_GUARD_S, FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
-from contract_samples import CONFIG, STATE, TIMEOUT
+from contract_samples import CONFIG, SNAPSHOT, STATE, TIMEOUT
 from rich.cells import cell_len
 from textual import events
 
 from atm_bd_console import app as console
+from atm_bd_console import prs, render
 from atm_bd_console.app import ConsoleApp, run
 from atm_bd_console.build import display_identity, identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
-from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
+from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepView
 
 
 def test_dispatch_uses_shared_status_rows(monkeypatch):
@@ -132,6 +135,40 @@ def test_snapshot_source_failure_is_visible_in_diagnostics_and_written_to_its_lo
             assert "source: timeout" in app.diagnostics_path.read_text()
 
     run_scenario(scenario())
+
+
+def test_display_clocks_are_local_and_diagnostic_files_are_zulu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Etc/GMT+8")
+    time.tzset()
+    try:
+        fixed_now = SNAPSHOT.generated_at
+        monkeypatch.setattr(console, "datetime", SimpleNamespace(now=lambda _tz: fixed_now))
+        snapshot = replace(SNAPSHOT, generated_at=fixed_now)
+        no_pr_snapshot = replace(snapshot, prs=(), gh=GhStatus("graphql", True, None, fixed_now, False))
+        dummy = SimpleNamespace(
+            diagnostics=[], diagnostics_path=tmp_path / "diagnostics.log", input_log_path=tmp_path / "input.log",
+        )
+
+        dashboard_header = render.dashboard(snapshot, 120, 40).plain.splitlines()[0]
+        dispatch_row = render._sent_line(snapshot.sent[0], snapshot).plain
+        pr_sheet = prs.render_prs(no_pr_snapshot, 120).plain
+        ConsoleApp._record_error(dummy, "tick", TIMEOUT)
+        ConsoleApp._trace_input(dummy, "key d")
+        log_view = "\n".join(dummy.diagnostics[-20:]) or "No errors recorded."
+
+        assert dashboard_header.startswith("phase-bh · 04:00 ·")
+        assert dispatch_row.startswith(" 04:00 ")
+        assert "checked 04:00" in pr_sheet
+        assert log_view.startswith("04:00:00 tick: timeout")
+        assert dummy.diagnostics_path.read_text().startswith("2026-10-14T12:00:00Z tick: timeout")
+        assert dummy.input_log_path.read_text().startswith("2026-10-14T12:00:00.000Z key d")
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        time.tzset()
 
 
 def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_a_tab() -> None:

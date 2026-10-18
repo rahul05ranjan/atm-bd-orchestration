@@ -5,7 +5,7 @@ from rich.text import Text
 from .enums import FAILING_CI, MergeState, PrState
 from .icons import icon, merge_icon
 from .ids import short_id
-from .render import _fit, render_agent
+from .render import _clock, _fit, render_agent
 from .types import PrRow, PullRequest, Snapshot
 
 
@@ -45,6 +45,6 @@ def render_prs(snapshot: Snapshot, width: int, include_history: bool = False) ->
             return Text("GitHub checks are off")
         if snapshot.gh.error is not None:
             return Text(f"GitHub read failed: {snapshot.gh.error.kind}")
-        checked = snapshot.gh.at.strftime("%H:%M") if snapshot.gh.at else "unknown time"
+        checked = _clock(snapshot.gh.at) if snapshot.gh.at else "unknown time"
         return Text(f"No open PR for phase {snapshot.phase} (checked {checked})")
     return Text("\n").join(_fit(_row(value, snapshot), width) for value in rows)

@@ -213,12 +213,14 @@ class ConsoleApp(App[int]):
         else:
             detail = getattr(error, "message", getattr(error, "path", ""))
             message = f"{error.kind}: {detail}; {error.fix}"
-        entry = f"{datetime.now(UTC).strftime('%H:%M:%S')} {source}: {message}"
+        now = datetime.now(UTC)
+        entry = f"{render._clock(now, seconds=True)} {source}: {message}"
         self.diagnostics = [*self.diagnostics[-19:], entry]
         try:
             self.diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
             with self.diagnostics_path.open("a", encoding="utf-8") as log_file:
-                log_file.write(entry + "\n")
+                timestamp = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+                log_file.write(f"{timestamp} {source}: {message}\n")
         except OSError as log_error:
             self.diagnostics = [*self.diagnostics[-19:], f"log: {log_error}"]
 
@@ -242,7 +244,8 @@ class ConsoleApp(App[int]):
         try:
             self.input_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.input_log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write(f"{datetime.now(UTC).strftime('%H:%M:%S.%f')[:-3]} {entry}\n")
+                timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                log_file.write(f"{timestamp} {entry}\n")
         except OSError as log_error:
             self.diagnostics = [*self.diagnostics[-19:], f"input log: {log_error}"]
 
