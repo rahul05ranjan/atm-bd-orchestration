@@ -133,6 +133,21 @@ def test_missing_release_artifact_fails_before_yield_with_app_version(monkeypatc
         raise AssertionError("invalid release tree must not be yielded")
 
 
+def test_errors_raised_while_the_tree_is_in_use_are_not_relabelled(monkeypatch, tmp_path: Path) -> None:
+    def run(args):
+        if args[0] == "ls-remote":
+            return f"{COMMIT}\trefs/tags/v0.16.0\n"
+        if args[0] == "clone":
+            make_plugin(Path(args[-1]))
+            return ""
+        return f"{COMMIT}\n"
+
+    monkeypatch.setattr(skill_source, "_run_git", run)
+
+    with pytest.raises(PermissionError), skill_source.resolve_source(version="0.16.0"):
+        raise PermissionError("target is not writable")
+
+
 def test_network_failure_names_upstream_url_and_git_error(monkeypatch) -> None:
     def fail(_args):
         raise skill_source.SkillSourceError(f"{skill_source.REPOSITORY}: git ls-remote failed: offline")

@@ -102,8 +102,8 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
             raise SkillSourceError(f"unknown version {version}; available tags: {offered}")
         name = ref
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="atm-bd-skill-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="atm-bd-skill-") as temporary:
+        try:
             checkout = Path(temporary) / "checkout"
             _run_git(["clone", "--depth", "1", "--single-branch", "--branch", ref, REPOSITORY, str(checkout)])
             pkg_dir = checkout / _PLUGIN
@@ -111,10 +111,11 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
             commit = _run_git(["-C", str(checkout), "rev-parse", "HEAD"]).strip()
             if not _COMMIT_RE.fullmatch(commit):
                 raise SkillSourceError(f"{REPOSITORY}: git rev-parse HEAD returned an invalid commit: {commit!r}")
-            yield SkillSource(name, pkg_dir, commit)
-    except SkillSourceError as error:
-        if error.args and str(error).startswith(f"{REPOSITORY}:"):
-            raise
-        raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
-    except OSError as error:
-        raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
+        except SkillSourceError as error:
+            if error.args and str(error).startswith(f"{REPOSITORY}:"):
+                raise
+            raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
+        except OSError as error:
+            raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
+        # Outside the translation: errors raised by the caller's work with the tree are not the ref's.
+        yield SkillSource(name, pkg_dir, commit)

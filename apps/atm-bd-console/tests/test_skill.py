@@ -185,6 +185,35 @@ def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_p
     assert "0.16.0 is not installable by atm-bd 0.17.0: bad manifest" in error
 
 
+def _raise(error: Exception):
+    def fail(*_args, **_kwargs):
+        raise error
+
+    return fail
+
+
+@pytest.mark.parametrize(
+    ("step", "error", "message"),
+    [
+        ("check_tools", RuntimeError("sc-compose CLI not found"), "sc-compose CLI not found"),
+        ("apply_plan", OSError("target is not writable"), "target is not writable"),
+    ],
+    ids=["prerequisite", "target-write"],
+)
+def test_tag_install_does_not_blame_the_ref_for_host_or_target_failures(
+    installer, tmp_path: Path, monkeypatch, capsys, step: str, error: Exception, message: str,
+) -> None:
+    fake, _ = installer
+    remote = tmp_path / "remote-package"
+    remote.mkdir()
+    source = skill_source.SkillSource("v0.16.0", remote, COMMIT)
+    monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
+    setattr(fake, step, _raise(error))
+
+    assert skill.run(["0.16.0", "--dest", str(tmp_path / "consumer")]) == 1
+    assert capsys.readouterr().err == f"atm-bd skill: {message}\n"
+
+
 def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path: Path, monkeypatch) -> None:
     fake, _ = installer
     marker = tmp_path / "executed"
