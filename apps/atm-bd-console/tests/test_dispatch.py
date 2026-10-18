@@ -147,7 +147,7 @@ def test_missing_sprint_is_an_error_not_a_silent_drop() -> None:
 
 def _context() -> DispatchContext:
     step = Step(
-        "atm-bh-6.qa", "bh-6", "qa", False, False, "open", True, None, "sprint/bh-6-tick", "integrate/phase-bh",
+        "atm-bh-6.qa", "bh-6", "qa", False, False, SprintState.OPEN, True, None, "sprint/bh-6-tick", "integrate/phase-bh",
         "/worktrees/bh-6", 6, "normal", "bh-6", "atm-bh-6", None, None, "QA bh-6", "atm-bh-6.dev", "atm-bh-6", 1, None,
     )
     sprint = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6-tick", "integrate/phase-bh", "phase-bh", (), False, 0)
