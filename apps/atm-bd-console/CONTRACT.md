@@ -12,6 +12,11 @@ The positional field order in `types.py` is part of the current contract:
 `Inputs.interval_s` is always `Config.interval_s`; the bh-9 runner builds
 `Inputs` from `Config`. Do not add other `Config` mirrors to `Inputs`.
 
+`Config.notification_sender` is the validated `member@team` sender for plain
+notifications, defaulting to `atm-bd@tool` and overridden only by `tool_identity`
+in the repository YAML. It is appended with a default so
+existing callers remain compatible; assignment identity remains `Config.lead`.
+
 `RepoConfig.reviewers_round1` is part of the `RepoConfig` declaration in that
 design and remains in its listed position before `plans_dir`.
 
@@ -39,3 +44,13 @@ signature is unchanged. Only sanity and QA dispatch are supported, using the
 matching purpose key and the existing repository-configured recipient.
 `DispatchSpec.template` carries the exact configured relative path to ATM's
 `--template` argument. New `PhaseFile` fields are supplied by keyword.
+
+## GitHub quota settings
+
+`Config.github_poll_interval_s` and `github_quota_threshold` configure the
+independent GitHub poll cadence and minimum remaining percentage. `GhStatus`
+appends quota remaining, limit, reset, paused and rate-limited fields and the
+two effective settings. `PrsFile.attempted_at` records the last poll attempt,
+independently of its last successful `read_at`. New fields default when
+reading older files. Older binaries reject the new fields, so upgrade console
+and cron together before sharing runtime state.

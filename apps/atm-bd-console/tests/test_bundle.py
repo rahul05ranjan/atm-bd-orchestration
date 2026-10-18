@@ -92,6 +92,10 @@ def contents(archive: Path) -> dict[str, bytes]:
 
 def check_archive(archive: Path, expected: dict[str, bytes], expected_commit: str) -> None:
     files = contents(archive)
+    metadata, = (data for name, data in files.items()
+                 if (name.endswith(".dist-info/METADATA") if archive.suffix == ".whl"
+                     else name.endswith("/PKG-INFO") and name.count("/") == 1))
+    assert metadata.splitlines()[0] == b"Metadata-Version: 2.4"
     prefix = "atm_bd_console/" if archive.suffix == ".whl" else next(
         name[: -len("src/atm_bd_console/_build_identity.py")]
         for name in files if name.endswith("src/atm_bd_console/_build_identity.py")

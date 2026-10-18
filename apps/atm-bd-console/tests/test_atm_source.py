@@ -135,7 +135,7 @@ def test_send_and_assign_use_exact_argv_stdin_and_temporary_vars_file(fake_bin, 
     assert not Path(fake_bin.argv()[1][-1]).exists()
 
 
-def test_command_failures_invalid_json_and_timeouts_are_typed_without_raising(fake_bin) -> None:
+def test_command_failures_invalid_json_and_timeouts_are_typed_without_raising(fake_bin, monkeypatch) -> None:
     fake_bin.make("atm", 'printf "permission denied" >&2\nexit 7\n')
     failed = atm_source.members("atm-dev", "trinity")
     assert isinstance(failed, Err) and isinstance(failed.error, CommandFailed)
@@ -145,7 +145,10 @@ def test_command_failures_invalid_json_and_timeouts_are_typed_without_raising(fa
     invalid = atm_source.members("atm-dev", "trinity")
     assert isinstance(invalid, Err) and isinstance(invalid.error, ParseFailed)
 
-    fake_bin.make("atm", 'sleep 2\n')
+    def timeout(argv, **_kwargs):
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
     timed_out = atm_source._run(["atm", "wait"], "trinity", timeout_s=1)
     assert isinstance(timed_out, Err) and isinstance(timed_out.error, Timeout)
 
@@ -186,8 +189,11 @@ def test_assign_with_non_serializable_vars_returns_error_and_removes_tempfile(tm
     assert list(tmp_path.iterdir()) == []
 
 
-def test_public_operations_accept_an_injected_timeout(fake_bin) -> None:
-    fake_bin.make("atm", "sleep 2")
+def test_public_operations_accept_an_injected_timeout(monkeypatch) -> None:
+    def timeout(argv, **_kwargs):
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
     spec = DispatchSpec("dev.md.j2", {"sprint": "bh-3"})
 
     results = (

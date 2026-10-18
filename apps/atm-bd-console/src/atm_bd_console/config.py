@@ -1,13 +1,16 @@
 """Load the console's small, explicit runtime configuration."""
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
-from .atm_bd import phase_file
+import yaml
+
+from .atm_bd import REPO_CONFIG_PATH, phase_file
 from .paths import console_config_path, state_directory
 from .result import ConfigInvalid, Err, IoFailed, Ok, Result
-from .types import Config
+from .types import DEFAULT_NOTIFICATION_SENDER, Config
 
 _GITHUB = frozenset(("graphql", "rest", "off"))
 # The documented cron schedule (SKILL.md: every 15 minutes). A tick's snapshot is judged stale after twice its
@@ -41,12 +44,14 @@ def load_config(
     *,
     github: str | None = None,
     interval_s: int | None = None,
+    github_poll_interval_s: int | None = None,
+    github_quota_threshold: int | None = None,
     dry_run: bool = False,
     no_fetch: bool = False,
 ) -> Result[Config]:
     """Return TOML settings with explicit command-line overrides.
 
-    Missing console.toml uses the documented graphql/60 defaults. The phase
+    Missing console.toml uses the documented graphql/60 and notification sender defaults. The phase
     file must supply the lead and all assignment template paths.
     """
     root = Path(repo_root)
@@ -71,15 +76,40 @@ def load_config(
 
     configured_github = console.get("github", "graphql")
     configured_interval = console.get("interval", 60)
+    repo_path = root / REPO_CONFIG_PATH
+    try:
+        repo_values = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        repo_values = {}
+    except (OSError, UnicodeDecodeError) as error:
+        return Err(IoFailed("io_failed", str(repo_path), str(error), "restore the repository configuration"))
+    except yaml.YAMLError as error:
+        return Err(ConfigInvalid("config_invalid", str(repo_path), str(error), "correct the repository YAML syntax"))
+    if repo_values is None:
+        repo_values = {}
+    if not isinstance(repo_values, dict):
+        return Err(ConfigInvalid("config_invalid", str(repo_path), repr(repo_values), "use a YAML mapping"))
+    notification_sender = repo_values.get("tool_identity", DEFAULT_NOTIFICATION_SENDER)
     chosen_github = github if github is not None else configured_github
     chosen_interval = interval_s if interval_s is not None else configured_interval
+    poll_interval = github_poll_interval_s if github_poll_interval_s is not None else console.get("github_poll_interval", 600)
+    quota_threshold = github_quota_threshold if github_quota_threshold is not None else console.get("github_quota_threshold", 50)
     if not isinstance(chosen_github, str) or chosen_github not in _GITHUB:
         return Err(ConfigInvalid("config_invalid", "github", repr(chosen_github), "use graphql, rest, or off"))
     if not isinstance(chosen_interval, int) or isinstance(chosen_interval, bool) or chosen_interval < 10:
         return Err(ConfigInvalid("config_invalid", "interval", repr(chosen_interval), "use an integer of at least 10 seconds"))
+    if not isinstance(notification_sender, str) or not re.fullmatch(r"[A-Za-z0-9_-]+@[A-Za-z0-9_-]+", notification_sender):
+        return Err(ConfigInvalid("config_invalid", "tool_identity", repr(notification_sender),
+                                 f"set tool_identity in {repo_path} to member@team"))
+    if type(poll_interval) is not int or poll_interval < 1:
+        return Err(ConfigInvalid("config_invalid", "github_poll_interval", repr(poll_interval), "use a positive integer in seconds"))
+    if type(quota_threshold) is not int or not 0 <= quota_threshold <= 100:
+        return Err(ConfigInvalid("config_invalid", "github_quota_threshold", repr(quota_threshold), "use an integer percentage from 0 to 100"))
 
     phase_settings = phase_file(str(root), phase)
     if isinstance(phase_settings, Err):
         return phase_settings
     state_dir = state_directory(root, f"atm-phase-{phase}")
-    return Ok(Config(phase, phase_settings.value.lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch, str(root), str(state_dir)))
+    return Ok(Config(phase, phase_settings.value.lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch,
+                     str(root), str(state_dir), notification_sender=notification_sender,
+                     github_poll_interval_s=poll_interval, github_quota_threshold=quota_threshold))
