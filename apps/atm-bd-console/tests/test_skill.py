@@ -240,6 +240,16 @@ def test_bundled_default_calls_installer_functions_in_the_app_interpreter(instal
     assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd 0.17.0)\n")
 
 
+def test_bundled_default_uses_current_directory(installer, tmp_path: Path, monkeypatch) -> None:
+    fake, _ = installer
+    monkeypatch.setattr(skill.Path, "cwd", classmethod(lambda cls: tmp_path))
+
+    assert skill.run([]) == 0
+
+    plan_call = next(call for call in fake.calls if call[0] == "plan_install")
+    assert plan_call[2] == tmp_path / ".claude"
+
+
 @pytest.mark.parametrize("commit", [COMMIT, "unknown"])
 def test_source_line_prints_the_commit_the_source_resolved(commit: str) -> None:
     # skill_source owns the 40-hex-or-unknown rule; the printed line echoes that value.
@@ -268,9 +278,16 @@ def test_list_prints_remote_tags_and_set_without_loading_or_running_installer(mo
     assert capsys.readouterr().out == "v0.16.0\nv0.16.1\norchestration\n"
 
 
-def test_list_rejects_install_options() -> None:
+@pytest.mark.parametrize("args", [["--list", "--codex"], ["--list", "--dest", "ignored"]])
+def test_list_rejects_install_options(args: list[str]) -> None:
     with pytest.raises(SystemExit) as error:
-        skill.run(["--list", "--codex"])
+        skill.run(args)
+    assert error.value.code == 2
+
+
+def test_cli_passes_skill_arguments_to_skill_parser(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["skill", "--list", "--dest", str(tmp_path)])
     assert error.value.code == 2
 
 

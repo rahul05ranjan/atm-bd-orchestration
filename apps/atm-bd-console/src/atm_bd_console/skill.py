@@ -29,7 +29,7 @@ def _parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--latest", action="store_true", help="install the head of upstream main")
     source.add_argument("--list", action="store_true", help="list upstream release tags and available sets")
-    parser.add_argument("--dest", type=Path, default=Path.cwd(), metavar="REPO", help="target repository (default: current directory)")
+    parser.add_argument("--dest", type=Path, metavar="REPO", help="target repository (default: current directory)")
     parser.add_argument("--orchestration", action="store_true", help="install the orchestration set (the default and only set)")
     parser.add_argument("--codex", action="store_true", help="install skills under .codex")
     parser.add_argument("--set", action="append", default=[], metavar="NAME=VALUE", help="set an installer config value")
@@ -52,7 +52,7 @@ def run(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.list:
-        if args.version or args.codex or args.set or args.overwrite:
+        if args.version or args.dest is not None or args.codex or args.set or args.overwrite:
             parser.error("--list cannot be combined with a version or install options")
         try:
             print("\n".join((*skill_source.list_tags(), "orchestration")))
@@ -66,7 +66,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         installer = _installer()
         installer.check_tools()
-        dest = args.dest.expanduser().resolve()
+        dest = (args.dest or Path.cwd()).expanduser().resolve()
         if dest.name not in {".claude", ".codex"}:
             dest = dest / (".codex" if args.codex else ".claude")
         overrides = installer.parse_set(args.set)
