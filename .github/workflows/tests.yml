@@ -11,6 +11,7 @@ jobs:
   console-tests:
     name: console (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       SC_COMPOSE_VERSION: "1.7.0"
       SC_COMPOSE_SHA256: 5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84
