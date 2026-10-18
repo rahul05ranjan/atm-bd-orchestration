@@ -43,6 +43,22 @@ and app version. Use `atm-bd skill --help` for release and destination options.
 
 ## Launch settings
 
+GitHub polling defaults to GraphQL every 600 seconds, with a minimum remaining
+quota of 50 percent. Set `github_poll_interval` (seconds) and
+`github_quota_threshold` (integer percent, 0–100) under `[console]` in
+`.atm-bd/console.toml`, or override them with `--github-poll-interval` and
+`--github-quota-threshold`. The status bar shows both settings. Each GitHub
+request checks the applicable shared `gh api rate_limit` resource first. Below
+the threshold it retains cached PRs and shows the local reset time; forced
+refreshes obey the same limit. GitHub's quota endpoint can be stale, so a
+rate-limit response also pauses requests until the reported reset. GraphQL
+requests paginate through all PRs and check quota before every page.
+The status bar shows the core and GraphQL quotas from the latest existing
+quota response, the earliest reset in local time, and an age when the data
+is older than the polling interval. A pause marker identifies a resource below
+the threshold. Cron emits the same quota text in a JSONL `status` record;
+`--md-table` remains table-only. Unavailable quota values appear as `?/?`.
+
 Run `atm-bd console --phase bh` from the repository root. For one cron tick,
 use `atm-bd cron --phase bh`; add `--dry-run` to preview actions.
 The phase file `.atm-bd/phase-bh.toml` supplies the assignment identity and
@@ -77,6 +93,15 @@ The console automatically assigns ready sanity and QA work using
 `atm task assign --template` and the phase lead to ATM's `--as`. The other
 purposes support orchestration workflows and do not enable additional console
 dispatch kinds.
+
+Plain notifications use `atm-bd@tool` by default, independently of the lead
+used for assignments. The skill installer provisions the default tool identity.
+To use another sender, set `tool_identity: "member@team"` in
+`.claude/project/atm-bd-orchestration.yaml` and provision that identity in ATM.
+Environment variables and command-line flags do not select the sender; ATM
+subprocess identity and team are set from the selected sender. Failed sends
+remain visible in snapshot errors and cron error lines. Task assignments remain
+local to the lead's team (cross-team assignments are tracked by atm-core #1870).
 
 ## Dispatch verification
 

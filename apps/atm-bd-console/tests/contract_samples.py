@@ -105,7 +105,8 @@ PULL_REQUEST = PullRequest(
     1850, "https://github.com/randlee/atm-core/pull/1850", "sprint/bh-6-tick-rules", "integrate/phase-bh",
     "0123456789abcdef", CiState.FAIL_BUG, ("pytest", "ruff"), raw_ci="FAILURE", raw_state="OPEN",
 )
-GH_STATUS = GhStatus("graphql", False, REJECTED, PLUS_TWO, True)
+GH_STATUS = GhStatus("graphql", False, REJECTED, PLUS_TWO, True, quota_remaining=2450, quota_limit=5000,
+                     quota_reset=PLUS_TWO, paused=True, rate_limited=True)
 REPO_CONFIG = RepoConfig(
     "atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", ".claude/project/quality-policy.md",
     ("req-qa", "arch-qa"), "docs/plans",
@@ -142,7 +143,7 @@ STATE = State(
 )
 PHASE_FILE = PhaseFile("bh", "atm-phase-bh", "phase:bh", ("atm-bh-1", "atm-bh-6"), {"atm-bh-6": ("atm-bh-1",)}, lead="fenix", templates=PHASE_TEMPLATES)
 MERGE_FILE = MergeFile(NOW, {"sprint/bh-6-tick-rules": MERGE})
-PRS_FILE = PrsFile(NOW, GH_STATUS, (PULL_REQUEST,))
+PRS_FILE = PrsFile(NOW, GH_STATUS, (PULL_REQUEST,), attempted_at=NOW)
 ACTION_LINE = ActionLine(NOW, "hold", "arch-ctm", "atm-bh-6", "holding: CI red on the layer below")
 
 # One populated instance per contract dataclass; test_codec asserts this covers every class in result and types.

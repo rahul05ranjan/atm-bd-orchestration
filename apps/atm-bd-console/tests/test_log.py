@@ -28,6 +28,46 @@ def test_events_are_retained_without_console_output(tmp_path, capsys) -> None:
     assert captured.out == "" and captured.err == ""
 
 
+def test_event_level_and_message_are_explicit_and_default_to_info(tmp_path) -> None:
+    created = create_console_logger(tmp_path)
+    assert isinstance(created, Ok)
+
+    assert created.value.event("error", level="error", message="useful failure", code=1) == Ok(None)
+    assert created.value.event("action", outcome="sent") == Ok(None)
+    assert created.value.flush() == Ok(None)
+    queried = created.value.query(levels=("error",), limit=1, order="newest_first")
+
+    assert isinstance(queried, Ok)
+    assert len(queried.value) == 1
+    assert queried.value[0].level == "error"
+    assert queried.value[0].message == "useful failure"
+    all_events = created.value.query(order="newest_first")
+    assert isinstance(all_events, Ok)
+    default_event = next(event for event in all_events.value if event.action == "action")
+    assert default_event.level == "info" and default_event.message is None
+
+
+def test_error_message_formats_boundary_errors_as_one_line() -> None:
+    assert log.error_message({
+        "kind": "command_failed", "argv": ("gh", "api", "graphql", "--paginate"), "code": 1,
+        "stderr": "first stderr line\nsecond stderr line", "fix": "check gh and retry",
+    }) == "`check gh and retry` gh api graphql [1] first stderr line"
+    assert log.error_message({
+        "kind": "command_failed", "argv": ("gh", "api", "graphql"), "code": 1,
+        "stderr": "", "fix": "check gh and retry",
+    }).endswith("[1] no stderr")
+    assert log.error_message({
+        "kind": "timeout", "argv": ("gh", "api", "graphql"), "seconds": 15, "fix": "retry gh",
+    }) == "`retry gh` gh api graphql timeout after 15s"
+    assert log.error_message({
+        "kind": "rejected", "status": 429, "message": "rate limited", "fix": "retry later",
+    }) == "`retry later` rejected HTTP 429: rate limited"
+    assert log.error_message({
+        "kind": "parse_failed", "source": "phase config", "message": "missing root id", "fix": "restore config",
+    }) == "`restore config` parse_failed phase config: missing root id"
+    assert ": ;" not in log.error_message({"kind": "command_failed", "argv": (), "code": 1, "stderr": "", "fix": "retry"})
+
+
 @pytest.mark.parametrize("operation", ("construction", "event", "flush"))
 def test_native_typed_errors_are_exposed_as_console_errors(tmp_path, monkeypatch, operation):
     rejected = create_logger(LoggerConfig(service="", log_root=str(tmp_path)))

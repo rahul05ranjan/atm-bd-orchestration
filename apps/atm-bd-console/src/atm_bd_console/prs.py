@@ -5,7 +5,7 @@ from rich.text import Text
 from .enums import FAILING_CI, MergeState, PrState
 from .icons import icon, merge_icon
 from .ids import short_id
-from .render import _fit, render_agent
+from .render import _fit, github_pause, render_agent
 from .types import PrRow, PullRequest, Snapshot
 
 
@@ -40,11 +40,15 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
 
 def render_prs(snapshot: Snapshot, width: int, include_history: bool = False) -> Text:
     rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if active_pr(row.pr))
+    lines = [_fit(Text(github_pause(snapshot.gh, compact=width < 100)), width)] if snapshot.gh.paused else []
     if not rows:
         if snapshot.gh.mode == "off":
-            return Text("GitHub checks are off")
-        if snapshot.gh.error is not None:
-            return Text(f"GitHub read failed: {snapshot.gh.error.kind}")
-        checked = snapshot.gh.at.strftime("%H:%M") if snapshot.gh.at else "unknown time"
-        return Text(f"No open PR for phase {snapshot.phase} (checked {checked})")
-    return Text("\n").join(_fit(_row(value, snapshot), width) for value in rows)
+            lines.append(Text("GitHub checks are off"))
+        elif snapshot.gh.error is not None:
+            lines.append(Text(f"GitHub read failed: {snapshot.gh.error.kind}"))
+        elif not snapshot.gh.paused or snapshot.gh.at is not None:
+            checked = snapshot.gh.at.strftime("%H:%M") if snapshot.gh.at else "unknown time"
+            lines.append(Text(f"No open PR for phase {snapshot.phase} (checked {checked})"))
+    else:
+        lines.extend(_fit(_row(value, snapshot), width) for value in rows)
+    return Text("\n").join(lines)

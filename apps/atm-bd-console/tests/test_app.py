@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,12 +19,13 @@ from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
 from atm_bd_console.build import display_identity, identity
 from atm_bd_console.enums import SprintState
+from atm_bd_console.log import create_console_logger
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
 
 
-def test_dispatch_uses_shared_status_rows(monkeypatch):
+def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     from atm_bd_console import status_table
 
     values = status_table.rows(RUNNING)
@@ -35,6 +38,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch):
 
     class Node:
         size = SimpleNamespace(width=120, height=40)
+        active = "dispatch"
 
         def update(self, value):
             self.value = value
@@ -45,8 +49,9 @@ def test_dispatch_uses_shared_status_rows(monkeypatch):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            show_pr_history=False, status_error=None, status_text="", diagnostics_path="log",
-                            input_log_path="input", diagnostics=[], call_after_refresh=lambda *_: None,
+                            config=replace(CONFIG, repo_root=str(tmp_path)),
+                            show_pr_history=False, status_error=None, status_text="",
+                            input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
     monkeypatch.setattr(status_table, "rows", shared_rows)
     ConsoleApp.refresh_views(dummy)
@@ -104,34 +109,59 @@ def test_raised_step_keeps_the_app_running_and_shows_the_error() -> None:
     run_scenario(scenario())
 
 
-def test_raised_tick_failure_is_visible_in_diagnostics_and_written_to_its_log(tmp_path: Path) -> None:
+def test_raised_tick_failure_is_logged_and_diagnostics_file_is_removed(tmp_path: Path) -> None:
     async def scenario() -> None:
-        config = replace(CONFIG, state_dir=str(tmp_path / "state"))
+        config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / "state"))
         app = ConsoleApp(config, RaisingStep(), STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
             app.query_one("TabbedContent").active = "diagnostics"
+            app.refresh_views()
             await settle(pilot)
             shown = app.query_one("#diagnostics-text").render().plain
-            assert "tick: io_failed" in shown and str(app.diagnostics_path) in shown
-            assert "step exploded" in app.diagnostics_path.read_text()
+            assert "error: `retry the console tick` io_failed step exploded" in shown
+            assert not (tmp_path / "state" / "diagnostics.log").exists()
 
     run_scenario(scenario())
 
 
-def test_snapshot_source_failure_is_visible_in_diagnostics_and_written_to_its_log(tmp_path: Path) -> None:
+def test_diagnostics_view_reads_structured_log_entries(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    created = create_console_logger(repo_root)
+    assert isinstance(created, Ok)
+    assert created.value.event("error", level="error", message="`retry` timeout after 10s") == Ok(None)
+    assert created.value.flush() == Ok(None)
+
     async def scenario() -> None:
-        config = replace(CONFIG, state_dir=str(tmp_path / "state"))
+        config = replace(CONFIG, repo_root=str(repo_root), state_dir=str(tmp_path / "state"))
         app = ConsoleApp(config, FakeStep(replace(RUNNING, errors=(TIMEOUT,))), STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
             app.query_one("TabbedContent").active = "diagnostics"
+            app.refresh_views()
             await settle(pilot)
             shown = app.query_one("#diagnostics-text").render().plain
-            assert "source: timeout" in shown
-            assert "source: timeout" in app.diagnostics_path.read_text()
+            assert " error: `retry` timeout after 10s" in shown
+            assert not (tmp_path / "state" / "diagnostics.log").exists()
 
     run_scenario(scenario())
+
+
+def test_diagnostic_line_uses_local_clock_and_preserves_message(monkeypatch) -> None:
+    previous_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Etc/GMT+8")
+    time.tzset()
+    try:
+        event = SimpleNamespace(
+            timestamp="2026-10-18T12:00:00+00:00", level="error", message="`retry` gh api [1] rate limited",
+        )
+        assert console._diagnostic_line(event) == "04:00:00 error: `retry` gh api [1] rate limited"
+    finally:
+        if previous_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous_tz)
+        time.tzset()
 
 
 def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_a_tab() -> None:
@@ -467,7 +497,7 @@ def _terminal_press(x: int, y: int) -> tuple[events.MouseDown, events.MouseUp]:
 
 def test_input_trace_records_terminal_presses_keys_and_tab_changes(tmp_path: Path) -> None:
     async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, state_dir=str(tmp_path / "state"), interval_s=3600), FakeStep(), STATE)
+        app = ConsoleApp(replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / "state"), interval_s=3600), FakeStep(), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             tab = app.query_one("#--content-tab-status").region
@@ -503,6 +533,6 @@ def test_off_screen_presses_are_traced_without_raising(tmp_path: Path) -> None:
         trace = [line.split(" ", 1)[1] for line in app.input_log_path.read_text().splitlines()]
         assert "mouse_down x=500 y=500 button=1 widget=off-screen active=dispatch" in trace
         assert "mouse_up x=-1 y=-1 button=1 widget=off-screen active=dispatch" in trace
-        assert not any(line.startswith("input trace:") for line in app.diagnostics)
+        assert not (tmp_path / "state" / "diagnostics.log").exists()
 
     run_scenario(scenario())
