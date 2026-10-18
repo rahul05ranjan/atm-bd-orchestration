@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+
+from atm_bd_console import cli, skill, skill_source
+
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+PLUGIN = Path(__file__).resolve().parents[3] / "plugins" / "atm-bd-orchestration"
+
+
+@dataclass
+class FakePlan:
+    writes: dict
+    removals: list
+    backups: list
+    problems: list
+
+
+class FakeInstaller:
+    InstallError = RuntimeError
+
+    def __init__(self):
+        self.calls = []
+        self.plan = FakePlan({".claude/one": (b"data", False)}, [], [], [])
+
+    def check_tools(self):
+        self.calls.append(("check_tools",))
+
+    def parse_set(self, values):
+        self.calls.append(("parse_set", tuple(values)))
+        return {"bead_prefix": "atm"} if values else {}
+
+    def plan_install(self, pkg_dir, dest, overrides, *, codex, overwrite):
+        self.calls.append(("plan_install", pkg_dir, dest, overrides, codex, overwrite))
+        return self.plan, {"unused": True}
+
+    def package_version(self, pkg_dir):
+        self.calls.append(("package_version", pkg_dir))
+        return "0.16.0"
+
+    def apply_plan(self, plan, version):
+        self.calls.append(("apply_plan", plan, version))
+        return 1
+
+
+def source_context(source: skill_source.SkillSource):
+    @contextmanager
+    def resolve(**kwargs):
+        yield source
+    return resolve
+
+
+def load_bundled_installer():
+    spec = importlib.util.spec_from_file_location("_atm_bd_skill_integration_installer", PLUGIN / "install.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    module.check_tools = lambda: None
+    return module
+
+
+def make_consumer(path: Path, installer, pkg_dir: Path = PLUGIN) -> Path:
+    path.mkdir()
+    (path / ".claude/agents").mkdir(parents=True)
+    (path / ".beads").mkdir()
+    (path / ".beads/metadata.json").write_text(json.dumps({"backend": "dolt", "dolt_mode": "server"}), encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "remote", "add", "origin", "https://github.com/example/repo.git"], check=True,
+    )
+    values = {}
+    for name in installer.config_variables(pkg_dir):
+        if name == "requirements_globs":
+            values[name] = ["docs/requirements.md"]
+        elif name == "adr_globs":
+            values[name] = ["docs/adr/*.md"]
+        elif name == "reviewers_round1":
+            values[name] = ["req-qa", "arch-qa"]
+        elif name not in installer.ROLE_KEYS:
+            values[name] = f"test-{name}"
+    values["roles"] = {"dev-sanity": "quality-mgr", "quality-mgr": "quality-mgr"}
+    import yaml
+
+    (path / ".claude/agents/registry.yaml").write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+    for name in ("quality-mgr", "req-qa", "arch-qa"):
+        (path / ".claude/agents" / f"{name}.md").write_text(f"---\nname: {name}\n---\n", encoding="utf-8")
+    legacy_path = "agents/dev-sanity-jev.md"
+    assert legacy_path in installer.load_legacy_owned(pkg_dir)
+    (path / ".claude" / legacy_path).write_bytes(b"legacy-owned fixture bytes\n")
+    return path
+
+
+def consumer_files(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(root).parts
+    }
+
+
+@pytest.fixture
+def installer(monkeypatch, tmp_path: Path):
+    fake = FakeInstaller()
+    monkeypatch.setattr(skill, "_installer", lambda: fake)
+    pkg = tmp_path / "package-data"
+    pkg.mkdir()
+    source = skill_source.SkillSource("bundled", pkg, COMMIT)
+    monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
+    return fake, source
+
+
+def test_bundled_default_calls_installer_functions_in_the_app_interpreter(installer, tmp_path: Path, capsys) -> None:
+    fake, source = installer
+    target = tmp_path / "consumer"
+    target.mkdir()
+
+    assert skill.run(["--dest", str(target)]) == 0
+
+    assert [call[0] for call in fake.calls] == ["check_tools", "parse_set", "plan_install", "package_version", "apply_plan"]
+    plan_call = next(call for call in fake.calls if call[0] == "plan_install")
+    assert plan_call[1] == source.pkg_dir
+    assert plan_call[2] == target / ".claude"
+    assert plan_call[3:] == ({}, False, False)
+    output = capsys.readouterr().out
+    assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd 0.16.1)\n")
+
+
+def test_orchestration_flag_and_installer_passthrough(installer, tmp_path: Path) -> None:
+    fake, _ = installer
+    target = tmp_path / "consumer"
+    target.mkdir()
+
+    assert skill.run(["--orchestration", "--codex", "--overwrite", "--set", "bead_prefix=atm", "--dest", str(target)]) == 0
+
+    plan_call = next(call for call in fake.calls if call[0] == "plan_install")
+    assert plan_call[2] == target / ".codex"
+    assert plan_call[3:] == ({"bead_prefix": "atm"}, True, True)
+
+
+def test_list_prints_remote_tags_and_set_without_loading_or_running_installer(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(skill.skill_source, "list_tags", lambda: ("v0.16.0", "v0.16.1"))
+    monkeypatch.setattr(skill, "_installer", lambda: (_ for _ in ()).throw(AssertionError("installer")))
+
+    assert skill.run(["--list"]) == 0
+    assert capsys.readouterr().out == "v0.16.0\nv0.16.1\norchestration\n"
+
+
+def test_list_rejects_install_options() -> None:
+    with pytest.raises(SystemExit) as error:
+        skill.run(["--list", "--codex"])
+    assert error.value.code == 2
+
+
+def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_path: Path, monkeypatch, capsys) -> None:
+    fake, _ = installer
+    plugin = tmp_path / "remote-package"
+    plugin.mkdir()
+    source = skill_source.SkillSource("0.16.0", plugin, COMMIT)
+    monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
+    fake.plan_install = lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad manifest"))
+
+    assert skill.run(["0.16.0", "--dest", str(tmp_path / "consumer")]) == 1
+    assert not any(call[0] == "apply_plan" for call in fake.calls)
+    error = capsys.readouterr().err
+    assert "0.16.0 is not installable by atm-bd 0.16.1: bad manifest" in error
+
+
+def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path: Path, monkeypatch) -> None:
+    fake, _ = installer
+    marker = tmp_path / "executed"
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    (remote / "install.py").write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()\n", encoding="utf-8")
+    source = skill_source.SkillSource("main", remote, COMMIT)
+    monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
+
+    assert skill.run(["--latest", "--dest", str(tmp_path / "consumer")]) == 0
+    assert not marker.exists()
+    assert any(call[0] == "plan_install" and call[1] == remote for call in fake.calls)
+
+
+def test_bundled_skill_matches_install_py_file_for_file_offline_with_legacy_owned_file(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    module = load_bundled_installer()
+    pkg_dir = tmp_path / "plugin"
+    shutil.copytree(PLUGIN, pkg_dir)
+    legacy_file = pkg_dir / "config/legacy-owned.json"
+    legacy = json.loads(legacy_file.read_text(encoding="utf-8"))
+    legacy["files"]["agents/dev-sanity-jev.md"] = [module.sha256(b"legacy-owned fixture bytes\n")]
+    legacy_file.write_text(json.dumps(legacy), encoding="utf-8")
+    direct = make_consumer(tmp_path / "direct", module, pkg_dir)
+    through_skill = make_consumer(tmp_path / "through-skill", module, pkg_dir)
+    monkeypatch.setattr(skill, "_installer", lambda: module)
+    monkeypatch.setattr(skill.skill_source, "bundled_directory", lambda: pkg_dir)
+    monkeypatch.setattr(skill.skill_source, "_run_git", lambda *_: (_ for _ in ()).throw(AssertionError("network")))
+
+    assert module.main(["--dest", str(direct / ".claude")], pkg_dir=pkg_dir) == 0
+    assert skill.run(["--dest", str(through_skill)]) == 0
+
+    assert consumer_files(through_skill) == consumer_files(direct)
+
+
+def test_skill_is_wired_into_cli_and_help(capsys) -> None:
+    with pytest.raises(SystemExit) as top:
+        cli.main(["--help"])
+    assert top.value.code == 0
+    assert "skill" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as sub:
+        cli.main(["skill", "--help"])
+    assert sub.value.code == 0
+    output = capsys.readouterr().out
+    assert "--orchestration" in output and "--latest" in output and "--list" in output

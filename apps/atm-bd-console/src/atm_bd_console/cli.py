@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from datetime import UTC, datetime
 
 from . import atm_bd, render, runner
@@ -27,6 +28,12 @@ def _error_text(error: Error) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    values = sys.argv[1:] if argv is None else argv
+    if values and values[0] == "skill":
+        from .skill import run as run_skill
+
+        return run_skill(values[1:])
+
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("--version", action="version", version=identity())
     commands = parser.add_subparsers(dest="command", required=True)
@@ -39,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
             if name != "snapshot":
                 sub.add_argument("--dry-run", action="store_true")
             sub.add_argument("--no-fetch", action="store_true")
+    commands.add_parser("skill", help="install or list orchestration skills")
     args = parser.parse_args(argv)
     invocation = f"{CONSOLE_NAME} {args.command}"
     if not args.phase:
