@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from rich.text import Text
 
-from .enums import CiState, MergeState, PrState
+from .enums import FAILING_CI, MergeState, PrState
 from .icons import icon, merge_icon
 from .ids import short_id
 from .render import _fit, render_agent
@@ -33,8 +33,7 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
         files = f" {', '.join(value.merge.files)}" if value.merge.files and value.merge.state != MergeState.CLEAN else ""
         line.append(f"  merge {glyph}{files}", style=style)
     glyph, style = icon(value.pr.ci)
-    checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci in (
-        CiState.FAIL_MACOS, CiState.FAIL_WINDOWS, CiState.FAIL_LINUX, CiState.FAIL_BUG) else ""
+    checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci in FAILING_CI else ""
     line.append(f"  CI {glyph}{checks}", style=style)
     return line
 

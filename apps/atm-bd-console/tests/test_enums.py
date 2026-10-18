@@ -1,7 +1,7 @@
 import pytest
 
 from atm_bd_console.atm_source import sprint_state_of
-from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
+from atm_bd_console.enums import FAILING_CI, AgentIcon, CiState, MergeState, PrState, SprintState
 from atm_bd_console.facts import agent_icon_of
 from atm_bd_console.github_source import ci_state_of, pr_state_of
 from atm_bd_console.icons import AGENT_ICONS, CI_ICONS, PR_ICONS, SPRINT_ICONS, icon
@@ -48,6 +48,12 @@ def test_source_adapters_handle_unknown_and_failure_precedence():
     assert ci_state_of("CANCELLED", None, ("lint",)) is CiState.FAIL_BUG
     assert ci_state_of("SUCCESS", "COMPLETED", ()) is CiState.PASS
     assert ci_state_of("unexpected", None, ()) is CiState.UNKNOWN
+
+
+def test_failing_ci_is_defined_once_and_names_every_fail_state():
+    assert FAILING_CI == {CiState.FAIL_MACOS, CiState.FAIL_WINDOWS, CiState.FAIL_LINUX, CiState.FAIL_BUG}
+    assert {state for state in CiState if state.value.startswith("fail")} == FAILING_CI
+    assert CiState.PASS not in FAILING_CI and CiState.UNKNOWN not in FAILING_CI
 
 
 @pytest.mark.parametrize(

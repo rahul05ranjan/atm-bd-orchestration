@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
-from .enums import CiState, MergeState, PrState, QaState, SprintState
+from .enums import FAILING_CI, CiState, MergeState, PrState, QaState, SprintState
 from .icons import SPRINT_ICONS
 from .ids import short_id
 from .prs import active_pr
@@ -503,7 +503,7 @@ def _problems(
                     f"missing_pr:{branch}", step.bead_id, step.assignee or inputs.lead,
                     f"pushed branch {branch} has no open PR", now,
                 ))
-    if fresh_github and top_pr is not None and top_pr.ci in (CiState.FAIL_MACOS, CiState.FAIL_WINDOWS, CiState.FAIL_LINUX, CiState.FAIL_BUG):
+    if fresh_github and top_pr is not None and top_pr.ci in FAILING_CI:
         checks = ", ".join(top_pr.failed_checks)
         problems.append(Problem(
             f"top_ci:{top_pr.head_sha}", owner.bead_id if (owner := by_branch.get(top_pr.head)) else None,

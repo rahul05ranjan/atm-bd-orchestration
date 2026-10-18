@@ -44,6 +44,10 @@ class CiState(StrEnum):
     UNKNOWN = "unknown"
 
 
+# Every CI state that means a check failed; one definition for every caller that asks "did CI fail?".
+FAILING_CI = frozenset({CiState.FAIL_MACOS, CiState.FAIL_WINDOWS, CiState.FAIL_LINUX, CiState.FAIL_BUG})
+
+
 class PrState(StrEnum):
     NONE = "none"
     OPEN = "open"
