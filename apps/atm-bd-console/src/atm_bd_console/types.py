@@ -166,6 +166,13 @@ class GhStatus:
     rate_limited: bool = False
     poll_interval_s: int = 600
     quota_threshold: int = 50
+    core_remaining: int | None = None
+    core_limit: int | None = None
+    core_reset: datetime | None = None
+    graphql_remaining: int | None = None
+    graphql_limit: int | None = None
+    graphql_reset: datetime | None = None
+    quota_at: datetime | None = None
 
 
 @dataclass(frozen=True)

@@ -41,7 +41,7 @@ FIELDS: dict[str, str] = {
     "Merge": "branch target state files messages checked_at",
     "Worktree": "path branch head",
     "PullRequest": "number url head base head_sha ci failed_checks state raw_ci raw_state",
-    "GhStatus": "mode ok error at truncated quota_remaining quota_limit quota_reset paused rate_limited poll_interval_s quota_threshold",
+    "GhStatus": "mode ok error at truncated quota_remaining quota_limit quota_reset paused rate_limited poll_interval_s quota_threshold core_remaining core_limit core_reset graphql_remaining graphql_limit graphql_reset quota_at",
     "RepoConfig": "bead_prefix sanity_member qa_member primary_checkout worktree_base lint_command policy_path "
                   "reviewers_round1 plans_dir",
     "Config": "phase lead team github interval_s dry_run no_fetch repo_root state_dir notification_sender github_poll_interval_s github_quota_threshold",

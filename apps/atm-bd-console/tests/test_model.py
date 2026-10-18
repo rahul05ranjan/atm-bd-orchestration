@@ -86,6 +86,16 @@ def render(context):
     raise AssertionError(f"unexpected dispatch: {context.step.bead_id}")
 
 
+@pytest.mark.parametrize("cached", (False, True))
+def test_paused_github_does_not_report_unavailability(cached: bool) -> None:
+    gh = GhStatus("graphql", True if cached else None, None, NOW if cached else None, False,
+                  quota_remaining=2450, quota_limit=5000, quota_reset=NOW + timedelta(hours=1), paused=True)
+    prs = Ok(()) if cached else Err(CommandFailed("command_failed", ("gh",), 1, "paused", "wait"))
+    snapshot, actions, _ = tick(inputs(phase(), gh=gh, prs=prs), STATE, NOW, render)
+    assert "github_unavailable" not in {problem.key for problem in snapshot.problems}
+    assert not any(action.kind == "send" and "GitHub data" in action.text for action in actions)
+
+
 def test_roster_statuses_and_markers() -> None:
     members = tuple(Member(name, presence, NOW - timedelta(minutes=5)) for name, presence in (
         ("busy", "active"), ("stalling", "idle"), ("blocked", "blocked"),

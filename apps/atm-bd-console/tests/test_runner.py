@@ -610,7 +610,8 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
     assert writes == [replace(cached, gh=snapshot.gh, attempted_at=snapshot.generated_at)]
 
 
-def test_github_interval_is_independent_and_paused_refresh_keeps_cache(github_runtime, monkeypatch):
+@pytest.mark.parametrize("interval_s", (120, 600))
+def test_github_interval_is_independent_and_paused_refresh_keeps_cache(github_runtime, monkeypatch, interval_s):
     store, _, _, inputs = github_runtime
     clock = [NOW]
     cache = [replace(PRS_FILE, read_at=EARLIER, attempted_at=NOW,
@@ -633,15 +634,15 @@ def test_github_interval_is_independent_and_paused_refresh_keeps_cache(github_ru
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=())))
     monkeypatch.setattr(store, "load_prs", lambda: Ok(cache[0]))
     monkeypatch.setattr(store, "write_prs", lambda value: cache.__setitem__(0, value) or Ok(None))
-    config = replace(CONFIG, github_poll_interval_s=120, dry_run=True)
+    config = replace(CONFIG, github_poll_interval_s=interval_s, dry_run=True)
     runner.step(config, RUNNING_STATE, False, store)
     assert calls == []
-    clock[0] += timedelta(seconds=120)
+    clock[0] += timedelta(seconds=interval_s)
     snapshot, _ = runner.step(config, RUNNING_STATE, False, store)
     assert calls == [clock[0]] and snapshot.gh.paused
     assert inputs[-1].prs == Ok(PRS_FILE.prs) and cache[0].prs == PRS_FILE.prs
     assert cache[0].read_at == EARLIER and cache[0].attempted_at == clock[0]
-    clock[0] += timedelta(seconds=119)
+    clock[0] += timedelta(seconds=interval_s - 1)
     runner.step(config, RUNNING_STATE, False, store)
     assert len(calls) == 1
     clock[0] += timedelta(seconds=1)

@@ -30,7 +30,7 @@ from .result import (
     Timeout,
     Unreachable,
 )
-from .types import Action, AgentView, Member, Row, Snapshot
+from .types import Action, AgentView, GhStatus, Member, Row, Snapshot
 
 _STATUSES = {
     "busy": ("●", "green"),
@@ -237,6 +237,15 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
     return Text("\n").join(_fit(line, width) for line in lines)
 
 
+def github_pause(gh: GhStatus, *, compact: bool = False) -> str:
+    resource = "graphql" if gh.mode == "graphql" else "core"
+    reset = _clock(gh.quota_reset) if gh.quota_reset else "unknown"
+    reason = "rate limited" if gh.rate_limited else f"below {gh.quota_threshold}{'%' if compact else ' percent'}"
+    if compact:
+        return f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource}, {reason}, reset {reset}"
+    return f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource} remaining, {reason}, resets {reset}"
+
+
 def status_bar(snapshot: Snapshot, width: int) -> Text:
     gh = snapshot.gh
     if gh.mode == "off":
@@ -244,13 +253,7 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     else:
         read_at = _clock(gh.at) if gh.at else "--:--"
         if gh.paused:
-            resource = "graphql" if gh.mode == "graphql" else "core"
-            reset = _clock(gh.quota_reset) if gh.quota_reset else "unknown"
-            reason = "rate limited" if gh.rate_limited else f"below {gh.quota_threshold} percent"
-            segment = f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource} remaining, {reason}, resets {reset}"
-            if width < 100:
-                short_reason = "rate limited" if gh.rate_limited else f"below {gh.quota_threshold}%"
-                segment = f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource}, {short_reason}, reset {reset}"
+            segment = github_pause(gh, compact=width < 100)
         elif gh.error is not None or gh.ok is False:
             kind = gh.error.kind if gh.error is not None else "unavailable"
             segment = f"gh: {gh.mode} {STATUS_FAIL} {kind} {read_at}"

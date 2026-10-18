@@ -162,7 +162,7 @@ def test_unknown_sprint_and_github_failures_are_reported():
     sprint = replace(snapshot.phase_data.sprints[0], status=sprint_state_of("wat"), raw_status="wat")
     phase = replace(snapshot.phase_data, sprints=(sprint,), closed=False)
     inputs = replace(INPUTS, phase=Ok(phase), tasks=Ok(()), members=Ok(snapshot.member_data),
-                     gh=replace(snapshot.gh, mode="off", ok=None), prs=Ok(()), merges=(), remotes=None)
+                     gh=replace(snapshot.gh, mode="off", ok=None, paused=False), prs=Ok(()), merges=(), remotes=None)
     result, _, _ = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
     row = rows(result)[0]
     assert row.state == (SprintState.UNKNOWN,)

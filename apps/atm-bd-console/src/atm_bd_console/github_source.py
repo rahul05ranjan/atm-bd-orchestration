@@ -24,6 +24,14 @@ REQUEST_TIMEOUT_S = 20
 QUOTA_ARGV = ("gh", "api", "rate_limit")
 
 
+def _quota_entry(resources, resource):
+    entry = resources[resource]
+    remaining, limit, reset = entry["remaining"], entry["limit"], entry["reset"]
+    if any(type(value) is not int for value in (remaining, limit, reset)) or limit <= 0 or remaining < 0 or reset < 0:
+        raise ValueError("invalid quota values")
+    return remaining, limit, datetime.fromtimestamp(reset, UTC)
+
+
 class Budget:
     def __init__(self, mode: Literal["graphql", "rest"], repo_root: str | Path | None,
                  threshold: int, interval_s: int, now: datetime, previous: GhStatus):
@@ -41,16 +49,22 @@ class Budget:
             return quota
         resource = "graphql" if self.mode == "graphql" else "core"
         try:
-            entry = json.loads(quota.value.stdout)["resources"][resource]
-            remaining, limit, reset = entry["remaining"], entry["limit"], entry["reset"]
-            if any(type(value) is not int for value in (remaining, limit, reset)) or limit <= 0 or remaining < 0 or reset < 0:
-                raise ValueError("invalid quota values")
-            reset_at = datetime.fromtimestamp(reset, UTC)
+            resources = json.loads(quota.value.stdout)["resources"]
+            remaining, limit, reset_at = _quota_entry(resources, resource)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
             return Err(ParseFailed("parse_failed", "github quota", str(exc), "retry the GitHub quota request"))
+        other_resource = "core" if resource == "graphql" else "graphql"
+        try:
+            other = _quota_entry(resources, other_resource)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            other = (None, None, None)
+        core = (remaining, limit, reset_at) if resource == "core" else other
+        graphql = (remaining, limit, reset_at) if resource == "graphql" else other
         paused = remaining * 100 < limit * status.quota_threshold
         self.status = replace(status, quota_remaining=remaining, quota_limit=limit, quota_reset=reset_at,
-                              paused=paused, rate_limited=False)
+                              paused=paused, rate_limited=False, core_remaining=core[0], core_limit=core[1],
+                              core_reset=core[2], graphql_remaining=graphql[0], graphql_limit=graphql[1],
+                              graphql_reset=graphql[2], quota_at=self.now)
         if paused:
             return Err(CommandFailed("command_failed", argv, 1, "GitHub quota below threshold", "wait for quota recovery"))
         response = command.run(argv, fix, **kwargs)
@@ -142,7 +156,10 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
         status = replace(status, quota_remaining=budget.status.quota_remaining, quota_limit=budget.status.quota_limit,
                          quota_reset=budget.status.quota_reset, paused=budget.status.paused,
                          rate_limited=budget.status.rate_limited, poll_interval_s=budget.status.poll_interval_s,
-                         quota_threshold=budget.status.quota_threshold)
+                         quota_threshold=budget.status.quota_threshold, core_remaining=budget.status.core_remaining,
+                         core_limit=budget.status.core_limit, core_reset=budget.status.core_reset,
+                         graphql_remaining=budget.status.graphql_remaining, graphql_limit=budget.status.graphql_limit,
+                         graphql_reset=budget.status.graphql_reset, quota_at=budget.status.quota_at)
     return result, status
 
 
