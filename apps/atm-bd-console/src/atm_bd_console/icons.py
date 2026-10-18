@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .enums import AgentIcon, CiState, PrState, SprintState
 from .types import AgentView, Member
 
 Icon = tuple[str, str | None]
@@ -81,6 +82,49 @@ MERGE_STATE_ICONS: dict[str, Icon] = {
     "conflict": ("\U000f062c", "#F85149"),
     "error": ("\U000f062d", "#F85149"),
 }
+
+AGENT_ICONS: dict[AgentIcon, Icon] = {
+    **{AgentIcon(key): value for key, value in _CLAUDE_MODELS.items()},
+    **{AgentIcon(key): value for key, value in _CODEX_MODELS.items()},
+    AgentIcon.OTHER: ("·", None),
+    AgentIcon.SEVERITY: ("\U000f01a6", "#E551BA"),
+    AgentIcon.QA_RUNNING: ("\U000f029b", "#4A5AF8"),
+    AgentIcon.QA_PASS: ("\U000f029b", "#2EA043"),
+    AgentIcon.QA_FAIL: ("\U000f029b", "#F85149"),
+}
+SPRINT_ICONS: dict[SprintState, Icon] = {
+    **{SprintState(key): value for key, value in BEAD_STATUS_ICONS.items()},
+    SprintState.NOT_READY: ("\U000f137c", "#D97757"),
+    SprintState.UNKNOWN: ("?", "#F85149"),
+}
+CI_ICONS: dict[CiState, Icon] = {
+    CiState.NONE: CI_STATE_ICONS["none"],
+    CiState.RUNNING: CI_STATE_ICONS["pending"],
+    CiState.PASS: CI_STATE_ICONS["success"],
+    CiState.FAIL_MACOS: CI_STATE_ICONS["fail_macos"],
+    CiState.FAIL_WINDOWS: CI_STATE_ICONS["fail_windows"],
+    CiState.FAIL_LINUX: CI_STATE_ICONS["fail_linux"],
+    CiState.FAIL_BUG: CI_STATE_ICONS["fail_bug"],
+    CiState.UNKNOWN: ("?", "#F85149"),
+}
+PR_ICONS: dict[PrState, Icon] = {
+    **{PrState(key): value for key, value in PR_STATE_ICONS.items()},
+    PrState.NONE: ("-", None),
+    PrState.CONFLICT: MERGE_STATE_ICONS["conflict"],
+    PrState.UNKNOWN: ("?", "#F85149"),
+}
+
+
+def icon(member: AgentIcon | SprintState | CiState | PrState) -> Icon:
+    if type(member) is AgentIcon:
+        return AGENT_ICONS[member]
+    if type(member) is SprintState:
+        return SPRINT_ICONS[member]
+    if type(member) is CiState:
+        return CI_ICONS[member]
+    if type(member) is PrState:
+        return PR_ICONS[member]
+    raise TypeError(f"unsupported icon: {member!r}")
 _FAILED_PLATFORMS = (
     ("fail_macos", ("macos", "darwin")),
     ("fail_windows", ("windows", "win-", "win_")),
