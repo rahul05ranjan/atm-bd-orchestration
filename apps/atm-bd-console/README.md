@@ -53,6 +53,11 @@ the threshold it retains cached PRs and shows the local reset time; forced
 refreshes obey the same limit. GitHub's quota endpoint can be stale, so a
 rate-limit response also pauses requests until the reported reset. GraphQL
 requests paginate through all PRs and check quota before every page.
+The status bar shows the core and GraphQL quotas from the latest existing
+quota response, the earliest reset in local time, and an age when the data
+is older than the polling interval. A pause marker identifies a resource below
+the threshold. Cron emits the same quota text in a JSONL `status` record;
+`--md-table` remains table-only. Unavailable quota values appear as `?/?`.
 
 Run `atm-bd console --phase bh` from the repository root. For one cron tick,
 use `atm-bd cron --phase bh`; add `--dry-run` to preview actions.

@@ -49,8 +49,6 @@ def test_only_selected_resource_controls_pause(monkeypatch, mode, active, active
     else:
         assert isinstance(result, Ok)
         assert calls == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV if mode == "graphql" else github_source.REST_ARGV]
-
-
 @pytest.mark.parametrize("mode", ("graphql", "rest"))
 def test_both_resources_come_from_existing_quota_request_and_survive_cache(monkeypatch, mode):
     calls = []

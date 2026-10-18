@@ -77,6 +77,24 @@ def test_cron_markdown_uses_shared_rows_and_dry_run(cli_runtime, monkeypatch, ca
     assert calls == [(True, True)]
 
 
+def test_cron_quota_status_matches_status_bar(cli_runtime, monkeypatch, capsys):
+    gh = replace(SNAPSHOT.gh, mode="graphql", core_remaining=4999, core_limit=5000,
+                 core_reset=FIXED_NOW + timedelta(hours=2), graphql_remaining=2310, graphql_limit=5000,
+                 graphql_reset=FIXED_NOW + timedelta(hours=1), quota_at=FIXED_NOW - timedelta(seconds=601),
+                 poll_interval_s=600, quota_threshold=50, paused=True, rate_limited=False)
+    snapshot = replace(SNAPSHOT, generated_at=FIXED_NOW, gh=gh, stopped=None, errors=())
+    monkeypatch.setattr(cli.runner, "step", lambda config, state, force, store: runner.StepResult(snapshot, state))
+    assert cli.main(["cron", "--phase", "x"]) == 0
+    stdout = capsys.readouterr().out
+    assert "graphql 2310/5000 ⏸" in stdout
+    output = [json.loads(line) for line in stdout.splitlines()]
+    assert output == [{"at": "2026-10-15T00:00:00Z", "kind": "status",
+                       "text": cli.render.github_quotas(gh, FIXED_NOW)}]
+    assert "core 4999/5000" in output[0]["text"] and "graphql 2310/5000 ⏸" in output[0]["text"]
+    assert output[0]["text"] in cli.render.status_bar(snapshot, 200).plain
+    assert "age 10m" in output[0]["text"]
+
+
 def test_cron_markdown_rejects_partial_snapshot(cli_runtime, monkeypatch, capsys):
     snapshot = replace(SNAPSHOT, errors=(TIMEOUT,))
     monkeypatch.setattr(cli.runner, "step", lambda config, state, force, store: runner.StepResult(snapshot, state))
@@ -403,10 +421,10 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
     monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped="idle", errors=()), INITIAL_STATE))
     assert cli.main(["cron", "--phase", "bh"]) == 0
-    assert capsys.readouterr().out == ""
+    assert json.loads(capsys.readouterr().out)["kind"] == "status"
     monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped="closed", errors=()), INITIAL_STATE))
     assert cli.main(["cron", "--phase", "bh"]) == 0
-    assert capsys.readouterr().out == ""
+    assert json.loads(capsys.readouterr().out)["kind"] == "status"
     monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), INITIAL_STATE))
     assert cli.main(["cron", "--phase", "bh"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
@@ -419,8 +437,8 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
         monkeypatch.setattr(cli.runner, "step", lambda *_, value=failed_snapshot: runner.StepResult(value, INITIAL_STATE))
         assert cli.main(["cron", "--phase", "bh"]) == 0
         output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-        assert len(output) == 1
-        assert output[0]["kind"] == "error" and "inspect the console log directory" in output[0]["text"]
+        assert [line["kind"] for line in output] == ["status", "error"]
+        assert "inspect the console log directory" in output[1]["text"]
 
 
 @pytest.mark.parametrize("outcome", [None, "", "sent", "dry_run", "failed command_failed"])
@@ -439,7 +457,8 @@ def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys, outcome)
     monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped=None, errors=(), sent=(reported_action,)), INITIAL_STATE, (reported_action,)))
 
     assert cli.main(["cron", "--phase", "bh"]) == 0
-    assert json.loads(capsys.readouterr().out)["outcome"] == outcome
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[0]["outcome"] == outcome and output[1]["kind"] == "status"
 
 
 @pytest.mark.parametrize("count", (0, 3, 6))
@@ -475,7 +494,7 @@ def test_cron_reports_all_and_only_actions_from_this_tick(cli_runtime, monkeypat
 
     def tick(inputs, state, *_args):
         actions = tuple(replace(ACTION, at=inputs.now, text=f"action-{index}") for index in range(count))
-        snapshot = replace(SNAPSHOT, generated_at=inputs.now, root_closed=False, stopped=None, errors=(), sent=())
+        snapshot = replace(SNAPSHOT, generated_at=inputs.now, root_closed=False, stopped=None, errors=(), sent=(), gh=inputs.gh)
         return snapshot, actions, state
 
     monkeypatch.setattr(runner.model, "tick", tick)
@@ -577,7 +596,7 @@ def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, caps
 
         assert cli.main(["cron", "--phase", "bh"]) == 0
         assert calls == [(cli_runtime.repo_root, INITIAL_STATE, False, Path(cli_runtime.state_dir))]
-        assert capsys.readouterr().out == ""
+        assert json.loads(capsys.readouterr().out)["kind"] == "status"
     finally:
         if child.poll() is None:
             child.kill()
@@ -592,7 +611,7 @@ def test_headless_prints_only_actions_from_the_current_tick(cli_runtime, monkeyp
 
     assert cli.main(["cron", "--phase", "bh"]) == 0
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert len(output) == 1 and output[0]["text"] == "current action"
+    assert len(output) == 2 and output[0]["text"] == "current action" and output[1]["kind"] == "status"
 
 
 @pytest.mark.parametrize("failure_stage", ("lock", "tick"))
@@ -614,7 +633,8 @@ def test_headless_io_failures_keep_path_message_and_fix(cli_runtime, monkeypatch
 
     assert cli.main(["cron", "--phase", "bh"]) == 0
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert output == [{
+    errors = [line for line in output if line["kind"] == "error"]
+    assert errors == [{
         "at": "2026-10-15T00:00:00Z", "kind": "error",
         "text": f"atm-bd cron: io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
     }]
@@ -720,9 +740,10 @@ def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch,
     assert cli.main(["cron", "--phase", "bh"]) == 0
 
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert len(output) == 2 and all(line["kind"] == "error" for line in output)
-    assert "state.json.corrupt-" in output[0]["text"]
-    assert logging_error.fix in output[1]["text"]
+    errors = [line for line in output if line["kind"] == "error"]
+    assert len(errors) == 2
+    assert "state.json.corrupt-" in errors[0]["text"]
+    assert logging_error.fix in errors[1]["text"]
     persisted = load_snapshot(tmp_path, PHASE_FILE.root_id)
     assert isinstance(persisted, Ok) and persisted.value.stopped == "closed"
     assert len(persisted.value.errors) == 2 and persisted.value.errors[0].kind == "parse_failed"
