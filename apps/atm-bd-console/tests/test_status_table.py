@@ -124,6 +124,13 @@ def test_unknown_sprint_and_github_failures_are_reported():
     row = rows(result)[0]
     assert row.state == (SprintState.UNKNOWN,)
     assert row.ci is CiState.UNKNOWN and row.pr_state is PrState.UNKNOWN
+    table = rich_table((row,))
+    state_cell = table.columns[1]._cells[0]
+    ci_cell = table.columns[2]._cells[0]
+    pr_cell = table.columns[3]._cells[0]
+    assert (state_cell.plain, state_cell.spans[0].style) == ("?", "#2D81E0")
+    assert (ci_cell.plain, ci_cell.style) == ("?", "#2D81E0")
+    assert (pr_cell.plain, pr_cell.style) == ("?", "#2D81E0")
     assert any("wat" in problem.text for problem in result.problems)
     assert any("GitHub data off" in problem.text for problem in result.problems)
 

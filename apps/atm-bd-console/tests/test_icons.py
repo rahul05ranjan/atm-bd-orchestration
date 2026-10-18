@@ -135,13 +135,13 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
         CiState.FAIL_BUG: ("\U000f00e4", "#F85149"),
         CiState.RUNNING: ("\U000f0898", "#58A6FF"),
         CiState.NONE: ("\U000f01d8", "#2D81E0"),
-        CiState.UNKNOWN: ("?", "#F85149"),
+        CiState.UNKNOWN: ("?", "#2D81E0"),
     }
     assert {state: merge_icon(state) for state in MergeState} == {
         MergeState.CLEAN: ("\U000f062d", "#2EA043"),
         MergeState.CONFLICT: ("\U000f062c", "#F85149"),
         MergeState.ERROR: ("\U000f062d", "#F85149"),
-        MergeState.UNKNOWN: ("?", "#F85149"),
+        MergeState.UNKNOWN: ("?", "#2D81E0"),
     }
 
 
@@ -162,19 +162,19 @@ def test_enum_icon_tables_are_complete_and_exact():
         SprintState.HOOKED: ("\U000f06e2", "#2DE057"), SprintState.ACCEPTED: ("\U000f0513", "#E551BA"),
         SprintState.PLANNED: ("\U000f00ef", "#FFB726"), SprintState.PROPOSED: ("\U000f06e8", "#FFB726"),
         SprintState.READY: ("\U000f040d", "#0077FF"), SprintState.NOT_READY: ("\U000f137c", "#D97757"),
-        SprintState.UNKNOWN: ("?", "#F85149"),
+        SprintState.UNKNOWN: ("?", "#2D81E0"),
     }
     expected_ci = {
         CiState.NONE: ("\U000f01d8", "#2D81E0"), CiState.RUNNING: ("\U000f0898", "#58A6FF"),
         CiState.PASS: ("\U000f062c", "#2EA043"), CiState.FAIL_MACOS: ("\U000f0035", "#F85149"),
         CiState.FAIL_WINDOWS: ("\U000f05b3", "#F85149"), CiState.FAIL_LINUX: ("\U000f033d", "#F85149"),
-        CiState.FAIL_BUG: ("\U000f00e4", "#F85149"), CiState.UNKNOWN: ("?", "#F85149"),
+        CiState.FAIL_BUG: ("\U000f00e4", "#F85149"), CiState.UNKNOWN: ("?", "#2D81E0"),
     }
     expected_prs = {
         PrState.NONE: ("-", None), PrState.OPEN: ("\U000f04c2", "#2D81E0"),
         PrState.DRAFT: ("\U000f0cb6", "#FFA60D"), PrState.MERGED: ("\U000f062d", "#8957E5"),
         PrState.CLOSED: ("\U000f073a", "#F85149"), PrState.CONFLICT: ("\U000f062c", "#F85149"),
-        PrState.UNKNOWN: ("?", "#F85149"),
+        PrState.UNKNOWN: ("?", "#2D81E0"),
     }
     for enum, table, expected in ((AgentIcon, AGENT_ICONS, expected_agents), (SprintState, SPRINT_ICONS, expected_sprints),
                                   (CiState, CI_ICONS, expected_ci), (PrState, PR_ICONS, expected_prs)):

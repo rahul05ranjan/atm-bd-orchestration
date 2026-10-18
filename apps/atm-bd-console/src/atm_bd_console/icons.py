@@ -35,7 +35,7 @@ SPRINT_ICONS: dict[SprintState, Icon] = {
     SprintState.PROPOSED: ("\U000f06e8", "#FFB726"),
     SprintState.READY: ("\U000f040d", "#0077FF"),
     SprintState.NOT_READY: ("\U000f137c", "#D97757"),
-    SprintState.UNKNOWN: ("?", "#F85149"),
+    SprintState.UNKNOWN: ("?", "#2D81E0"),
 }
 CI_ICONS: dict[CiState, Icon] = {
     CiState.PASS: ("\U000f062c", "#2EA043"),
@@ -45,7 +45,7 @@ CI_ICONS: dict[CiState, Icon] = {
     CiState.FAIL_BUG: ("\U000f00e4", "#F85149"),
     CiState.RUNNING: ("\U000f0898", "#58A6FF"),
     CiState.NONE: ("\U000f01d8", "#2D81E0"),
-    CiState.UNKNOWN: ("?", "#F85149"),
+    CiState.UNKNOWN: ("?", "#2D81E0"),
 }
 PR_ICONS: dict[PrState, Icon] = {
     PrState.OPEN: ("\U000f04c2", "#2D81E0"),
@@ -54,7 +54,7 @@ PR_ICONS: dict[PrState, Icon] = {
     PrState.CLOSED: ("\U000f073a", "#F85149"),
     PrState.CONFLICT: ("\U000f062c", "#F85149"),
     PrState.NONE: ("-", None),
-    PrState.UNKNOWN: ("?", "#F85149"),
+    PrState.UNKNOWN: ("?", "#2D81E0"),
 }
 BEAD_STATUS_ICONS: dict[SprintState, Icon] = {key: SPRINT_ICONS[key] for key in (
     SprintState.OPEN, SprintState.BLOCKED, SprintState.IN_PROGRESS, SprintState.DEFERRED, SprintState.CLOSED,
