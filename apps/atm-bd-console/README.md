@@ -1,4 +1,31 @@
-# Console operational logs
+# atm-bd
+
+`atm-bd` provides a terminal dashboard and single-tick cron runner for ATM and
+Beads orchestration. It also bundles the orchestration skills for installation
+into a repository.
+
+## Installation and prerequisites
+
+Install the package with `uv tool install atm-bd` (Python 3.11 or newer).
+The console and cron commands operate on a configured repository and require
+the `atm`, `bd`, and `git` executables on `PATH`. The Status graph also uses
+`mmdflux` when available.
+
+Before running `atm-bd skill`, install the `sc-compose` CLI and ensure the
+host `python3` on `PATH` can import `pydantic`, `yaml` (PyYAML), and the
+`sc-compose` Python wheel. The CLI, host wheel, and the wheel in the atm-bd
+environment must have matching versions within the bundled manifest's range;
+the installer checks these requirements before writing files. The host Python
+dependencies can be installed with `python3 -m pip install pydantic pyyaml
+'sc-compose>=1.7.0,<2'`; install the matching `sc-compose` CLI separately.
+
+From the repository root, run `atm-bd skill` to install the bundled skills
+without fetching a release. It reports the bundled source ref, commit SHA,
+and app version. Use `atm-bd skill --help` for release and destination options.
+Existing users of the old package should run `uv tool uninstall
+atm-bd-console` before installing `atm-bd`.
+
+## Console operational logs
 
 ## Launch settings
 

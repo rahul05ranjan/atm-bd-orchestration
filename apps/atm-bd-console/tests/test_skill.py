@@ -132,7 +132,7 @@ def test_bundled_default_calls_installer_functions_in_the_app_interpreter(instal
     assert plan_call[2] == target / ".claude"
     assert plan_call[3:] == ({}, False, False)
     output = capsys.readouterr().out
-    assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd 0.16.1)\n")
+    assert output.endswith(f"installed atm-bd-orchestration orchestration from bundled @ {COMMIT} (atm-bd 0.17.0)\n")
 
 
 def test_orchestration_flag_and_installer_passthrough(installer, tmp_path: Path) -> None:
@@ -172,7 +172,7 @@ def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_p
     assert skill.run(["0.16.0", "--dest", str(tmp_path / "consumer")]) == 1
     assert not any(call[0] == "apply_plan" for call in fake.calls)
     error = capsys.readouterr().err
-    assert "0.16.0 is not installable by atm-bd 0.16.1: bad manifest" in error
+    assert "0.16.0 is not installable by atm-bd 0.17.0: bad manifest" in error
 
 
 def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path: Path, monkeypatch) -> None:

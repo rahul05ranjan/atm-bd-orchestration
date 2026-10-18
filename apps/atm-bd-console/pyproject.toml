@@ -1,8 +1,16 @@
 [project]
 name = "atm-bd"
-version = "0.16.1"
+version = "0.17.0"
+description = "ATM and Beads orchestration console, cron runner, and bundled skills"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Rand Lee" }]
 requires-python = ">=3.11"
 dependencies = ["rich>=15.0.0,<16", "textual>=8.2.8,<9", "sc-observability>=1.5.0,<2", "pyyaml", "pydantic", "sc-compose>=1.7.0,<2"]
+
+[project.urls]
+Repository = "https://github.com/randlee/atm-bd-orchestration"
+Issues = "https://github.com/randlee/atm-bd-orchestration/issues"
 
 [project.scripts]
 atm-bd = "atm_bd_console.cli:main"
