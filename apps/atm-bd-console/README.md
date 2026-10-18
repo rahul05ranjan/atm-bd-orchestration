@@ -4,6 +4,22 @@
 Beads orchestration. It also bundles the orchestration skills for installation
 into a repository.
 
+## Development validation
+
+From the repository root, `just lint` runs the console's lint and type gates.
+Pyright checks only `apps/atm-bd-console/src`, including the enum matches whose
+`assert_never` fallbacks make missing cases type errors. `tests/` is not included in the static type-check gate;
+the test suite is validated by pytest at runtime. Ruff checks both `src` and `tests`.
+The GitHub Actions console source type-check step uses the same scope.
+
+Run the checks directly from `apps/atm-bd-console`:
+
+```bash
+uv run --frozen pytest -q
+uv run --frozen --group dev ruff check src tests
+uv run --frozen pyright src
+```
+
 ## Installation and prerequisites
 
 Install the package with `uv tool install atm-bd` (Python 3.11 or newer).
