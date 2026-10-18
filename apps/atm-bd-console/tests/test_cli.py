@@ -31,7 +31,7 @@ from rich.text import Text
 
 from atm_bd_console import app, cli, runner
 from atm_bd_console.build import identity
-from atm_bd_console.enums import MergeState
+from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.status_table import markdown, rows
@@ -637,7 +637,7 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
 def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch, tmp_path, capsys):
     config = replace(CONFIG, repo_root=str(tmp_path))
     phase_file = replace(PHASE_FILE, sprints=(), depends_on={})
-    root = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    root = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(config))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(phase_file))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -682,13 +682,13 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
             return fixed_now if tz else fixed_now.replace(tzinfo=None)
 
     phase_file = replace(PHASE_FILE, sprints=(SPRINT.id,), depends_on={SPRINT.id: ()})
-    root = replace(BEAD, id=phase_file.root_id, title="phase", status="open", labels=(phase_file.label,), parent=None, metadata={})
+    root = replace(BEAD, id=phase_file.root_id, title="phase", status=SprintState.OPEN, labels=(phase_file.label,), parent=None, metadata={})
     sprint = replace(
-        BEAD, id=SPRINT.id, title=SPRINT.title, status="open", labels=("stage:sprint",), parent=root.id,
+        BEAD, id=SPRINT.id, title=SPRINT.title, status=SprintState.OPEN, labels=("stage:sprint",), parent=root.id,
         metadata={"layer": SPRINT.layer, "branch": SPRINT.branch, "pr_target": SPRINT.target, "stack": SPRINT.stack},
     )
     sanity = replace(
-        BEAD, id="atm-bh-6.group-sanity", title="sanity", status="open", labels=("stage:dev-sanity",),
+        BEAD, id="atm-bh-6.group-sanity", title="sanity", status=SprintState.OPEN, labels=("stage:dev-sanity",),
         parent=sprint.id, assignee=None,
         metadata={
             "dev_bead": "atm-bh-6.group-dev", "sprint": "bh-6", "sprint_bead": sprint.id,

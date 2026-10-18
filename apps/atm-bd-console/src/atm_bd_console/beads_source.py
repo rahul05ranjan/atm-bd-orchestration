@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import command
+from .atm_source import sprint_state_of
 from .result import Err, Ok, ParseFailed, Result
 from .types import Bead
 
@@ -15,10 +16,10 @@ def _bead(raw: dict[str, Any]) -> Bead:
         return datetime.fromisoformat(value).astimezone(UTC) if value else None
     close_reason = raw.get("close_reason")
     return Bead(
-        raw["id"], raw["title"], raw["status"], tuple(raw.get("labels", ())), raw.get("parent"),
+        raw["id"], raw["title"], sprint_state_of(raw["status"]), tuple(raw.get("labels", ())), raw.get("parent"),
         tuple(raw.get("blocked_by", ())), raw.get("assignee"), raw.get("metadata", {}),
         when("created_at") or datetime.now(UTC), when("claimed_at"), when("closed_at"),
-        close_reason if isinstance(close_reason, str) else None,
+        close_reason if isinstance(close_reason, str) else None, raw["status"],
     )
 
 

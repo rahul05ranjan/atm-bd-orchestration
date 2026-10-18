@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from rich.cells import cell_len
 
-from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
+from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.icons import (
     AGENT_ICONS,
     BEAD_STATUS_ICONS,
@@ -43,13 +43,13 @@ def test_model_icons_are_case_insensitive_and_use_harness_fallbacks() -> None:
 def test_qa_icon_color_tracks_state_and_sanity_icon_is_fixed() -> None:
     qa = AgentView("qa", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), "qa")
     assert icon_for(qa) == ("\U000f029b", None)
-    assert icon_for(AgentView("qa", "busy", qa.status_since, 0, (), "qa", qa_state="running")) == (
+    assert icon_for(AgentView("qa", "busy", qa.status_since, 0, (), "qa", qa_state=QaState.RUNNING)) == (
         "\U000f029b", "#4A5AF8",
     )
-    assert icon_for(AgentView("qa", "idle", qa.status_since, 0, (), "qa", qa_state="pass")) == (
+    assert icon_for(AgentView("qa", "idle", qa.status_since, 0, (), "qa", qa_state=QaState.PASS)) == (
         "\U000f029b", "#2EA043",
     )
-    assert icon_for(AgentView("qa", "idle", qa.status_since, 0, (), "qa", qa_state="fail")) == (
+    assert icon_for(AgentView("qa", "idle", qa.status_since, 0, (), "qa", qa_state=QaState.FAIL)) == (
         "\U000f029b", "#F85149",
     )
     assert icon_for(Member("sanity", "idle", None, "sanity")) == ("\U000f01a6", "#E551BA")
@@ -68,13 +68,13 @@ def test_unmatched_models_use_harness_fallback(model: str, harness: str, expecte
 @pytest.mark.parametrize("model", ["haiku", "sonnet", "opus", "fable", "sol", "luna", "terra", "astra", "unknown"])
 @pytest.mark.parametrize(("agent_type", "qa_state", "expected"), [
     ("qa", None, ("\U000f029b", None)),
-    ("qa", "running", ("\U000f029b", "#4A5AF8")),
-    ("qa", "pass", ("\U000f029b", "#2EA043")),
-    ("qa", "fail", ("\U000f029b", "#F85149")),
+    ("qa", QaState.RUNNING, ("\U000f029b", "#4A5AF8")),
+    ("qa", QaState.PASS, ("\U000f029b", "#2EA043")),
+    ("qa", QaState.FAIL, ("\U000f029b", "#F85149")),
     ("sanity", None, ("\U000f01a6", "#E551BA")),
 ])
 def test_qa_and_sanity_icons_override_harness_and_model(
-    harness: str, model: str, agent_type: str, qa_state: str | None, expected: tuple[str, str | None],
+    harness: str, model: str, agent_type: str, qa_state: QaState | None, expected: tuple[str, str | None],
 ) -> None:
     agent = AgentView("agent", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), agent_type, model, harness, qa_state)
     assert icon_for(agent) == expected
@@ -93,7 +93,7 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     glyphs.extend(icon_for(member)[0] for member in model_members)
     glyphs.extend(
         icon_for(AgentView("qa", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), "qa", qa_state=state))[0]
-        for state in (None, "running", "pass", "fail")
+        for state in (None, QaState.RUNNING, QaState.PASS, QaState.FAIL)
     )
     glyphs.extend((
         icon_for(Member("sanity", "idle", None, "sanity"))[0],

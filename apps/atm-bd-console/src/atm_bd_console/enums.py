@@ -59,3 +59,9 @@ class MergeState(StrEnum):
     CONFLICT = "conflict"
     ERROR = "error"
     UNKNOWN = "unknown"
+
+
+class QaState(StrEnum):
+    RUNNING = "running"
+    PASS = "pass"
+    FAIL = "fail"

@@ -9,7 +9,7 @@ from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
-from atm_bd_console.enums import CiState, MergeState, PrState, SprintState
+from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _reconcile_problems, _sprint_views, due, qa_state_from_close, tick
 from atm_bd_console.result import CommandFailed, Err, NotFound, Ok, Timeout
@@ -53,7 +53,7 @@ PHASE_BH_SPRINTS = (
 
 def step(bead_id: str, sprint: str, **changes) -> Step:
     value = Step(
-        bead_id=bead_id, sprint=sprint, kind="dev", quick_fix=False, anchor=False, status="open", ready=False,
+        bead_id=bead_id, sprint=sprint, kind="dev", quick_fix=False, anchor=False, status=SprintState.OPEN, ready=False,
         assignee=None, branch=f"sprint/{sprint}", target="sprint/bh-1", worktree=f"/worktrees/{sprint}",
         layer=1, difficulty="normal", tag=sprint, top_epic="atm-phase-bh", claimed_at=None,
         closed_at=None, title=bead_id, checked_bead=None, sprint_bead=None, qa_round=None, carry_forward=None,
@@ -132,10 +132,10 @@ def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
 @pytest.mark.parametrize(
     ("reason", "expected"),
     (
-        ("PASS: 0 findings filed", "pass"),
-        ("FAIL: 3 findings filed", "fail"),
-        ("PASSING", "pass"),
-        ("FAILURE", "fail"),
+        ("PASS: 0 findings filed", QaState.PASS),
+        ("FAIL: 3 findings filed", QaState.FAIL),
+        ("PASSING", QaState.PASS),
+        ("FAILURE", QaState.FAIL),
         ("pass: ok", None),
         ("Fail: 3 findings", None),
         ("  FAIL", None),
@@ -146,51 +146,51 @@ def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
     ),
 )
 def test_qa_state_close_reason_uses_exact_prefix(reason, expected) -> None:
-    assert qa_state_from_close(reason) == expected
+    assert qa_state_from_close(reason) is expected
 
 
 def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> None:
-    assert qa_state_from_close("PASS: 0 findings filed") == "pass"
-    assert qa_state_from_close("PASS: 2 carried findings confirmed") == "pass"
-    assert qa_state_from_close("FAIL: 3 findings filed") == "fail"
+    assert qa_state_from_close("PASS: 0 findings filed") is QaState.PASS
+    assert qa_state_from_close("PASS: 2 carried findings confirmed") is QaState.PASS
+    assert qa_state_from_close("FAIL: 3 findings filed") is QaState.FAIL
     assert qa_state_from_close("needs follow-up") is None
-    older = step("qa-old", "atm-bh-1", kind="qa", status="closed", assignee="quality-mgr",
+    older = step("qa-old", "atm-bh-1", kind="qa", status=SprintState.CLOSED, assignee="quality-mgr",
                  closed_at=NOW - timedelta(minutes=2), close_reason="FAIL old")
-    newer = step("qa-new", "atm-bh-1", kind="qa", status="closed", assignee="quality-mgr",
+    newer = step("qa-new", "atm-bh-1", kind="qa", status=SprintState.CLOSED, assignee="quality-mgr",
                  closed_at=NOW - timedelta(minutes=1), close_reason="PASS current")
     qa = Member("quality-mgr", "idle", NOW, agent_type="qa")
     snapshot, _, _ = tick(inputs(phase(older, newer), members=Ok((qa,))), STATE, NOW, render)
-    assert snapshot.agents[0].qa_state == "pass"
-    active = step("qa-active", "atm-bh-1", kind="qa", status="in_progress", assignee="quality-mgr")
+    assert snapshot.agents[0].qa_state is QaState.PASS
+    active = step("qa-active", "atm-bh-1", kind="qa", status=SprintState.IN_PROGRESS, assignee="quality-mgr")
     task = Task("qa-active", "quality-mgr", "active", 0, NOW, NOW, "QA")
     snapshot, _, _ = tick(inputs(phase(older, newer, active), members=Ok((qa,)), tasks=Ok((task,))), STATE, NOW, render)
-    assert snapshot.agents[0].qa_state == "running"
+    assert snapshot.agents[0].qa_state is QaState.RUNNING
 
 
 @pytest.mark.parametrize(
     ("reason", "expected_state", "expected_color"),
     (
-        ("PASS: 0 findings filed", "pass", "#2EA043"),
-        ("PASS: 2 carried findings confirmed", "pass", "#2EA043"),
-        ("FAIL: 3 findings filed", "fail", "#F85149"),
+        ("PASS: 0 findings filed", QaState.PASS, "#2EA043"),
+        ("PASS: 2 carried findings confirmed", QaState.PASS, "#2EA043"),
+        ("FAIL: 3 findings filed", QaState.FAIL, "#F85149"),
         ("pass: 0 findings filed", None, None),
         ("  FAIL: 3 findings filed", None, None),
     ),
 )
 def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color) -> None:
     qa = Member("quality-mgr", "active", NOW, agent_type="qa")
-    active = step("atm-bi-5.group-qa", "atm-bi-5", kind="qa", status="in_progress", assignee=qa.name)
+    active = step("atm-bi-5.group-qa", "atm-bi-5", kind="qa", status=SprintState.IN_PROGRESS, assignee=qa.name)
     task = Task(active.bead_id, qa.name, "active", 0, NOW, NOW, "QA review")
 
     running, _, _ = tick(
         inputs(phase(active), members=Ok((qa,)), tasks=Ok((task,))), STATE, NOW, render,
     )
-    assert running.agents[0].qa_state == "running"
+    assert running.agents[0].qa_state is QaState.RUNNING
     assert icon_for(running.agents[0]) == ("\U000f029b", "#4A5AF8")
 
-    closed = replace(active, status="closed", closed_at=NOW, close_reason=reason)
+    closed = replace(active, status=SprintState.CLOSED, closed_at=NOW, close_reason=reason)
     result, _, _ = tick(inputs(phase(closed), members=Ok((qa,))), STATE, NOW, render)
-    assert result.agents[0].qa_state == expected_state
+    assert result.agents[0].qa_state is expected_state
     assert icon_for(result.agents[0]) == ("\U000f029b", expected_color)
 
 
@@ -200,7 +200,7 @@ def test_existing_out_of_phase_bead_is_red_and_missing_bead_is_yellow() -> None:
         Task("foreign", "solar", "active", 1, NOW, NOW, "foreign task"),
         Task("missing", "solar", "assigned", 2, NOW, NOW, "missing bead"),
     )
-    foreign = Bead("foreign", "foreign task", "open", (), "other-root", (), "solar", {}, NOW, None, None)
+    foreign = Bead("foreign", "foreign task", SprintState.OPEN, (), "other-root", (), "solar", {}, NOW, None, None)
     supplied = inputs(phase(), members=Ok((member,)), tasks=Ok(tasks), task_beads=Ok((foreign,)))
     snapshot, _, _ = tick(supplied, STATE, NOW, render)
     assert [row.marker for row in snapshot.agents[0].rows] == ["red", "yellow"]
@@ -285,7 +285,7 @@ def test_recorded_phase_bh_dag_labels_are_compact_and_keep_all_edges() -> None:
 
 def test_dag_label_boundaries_handle_long_assignees_and_unbroken_unicode_words() -> None:
     title = "bh-8: renderers with a deliberately long description that must be truncated after two concise lines"
-    active = step("atm-bh-8.group-dev", "atm-bh-8", status="in_progress", assignee="a-very-long-assignee-name")
+    active = step("atm-bh-8.group-dev", "atm-bh-8", status=SprintState.IN_PROGRESS, assignee="a-very-long-assignee-name")
     unicode_title = "bh-9: 測試 supercalifragilisticexpialidociousunbrokenword"
     value = phase(active, sprints=(
         Sprint("atm-bh-8", title, 8, "sprint/bh-8", "base", "phase-bh", (), False, 0),
@@ -382,7 +382,7 @@ def test_missing_pr_only_after_successful_fresh_github_read() -> None:
     for gh in (GhStatus("off", None, None, None, False), GhStatus("graphql", False, NotFound("not_found", "gh", "retry"), NOW, False)):
         snapshot, _, _ = tick(replace(base, gh=gh), STATE, NOW, render)
         assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
-    closed = inputs(phase(step("dev", "atm-bh-1", branch="pushed", status="closed")),
+    closed = inputs(phase(step("dev", "atm-bh-1", branch="pushed", status=SprintState.CLOSED)),
                     remotes=Ok((RemoteRef("pushed", "sha"),)), gh=success.gh)
     snapshot, _, _ = tick(closed, STATE, NOW, render)
     assert not any(problem.key.startswith("missing_pr") for problem in snapshot.problems)
@@ -457,7 +457,7 @@ def test_ci_and_conflict_problems_survive_until_their_sources_are_refreshed() ->
 
 
 def test_shared_branch_reports_one_problem_per_kind_to_work_owner() -> None:
-    dev = step("dev", "atm-bh-1", branch="shared", assignee="solar", status="closed")
+    dev = step("dev", "atm-bh-1", branch="shared", assignee="solar", status=SprintState.CLOSED)
     qa = step("qa", "atm-bh-1", kind="qa", branch="shared", assignee=None)
     qa_task = Task("qa", "quality-mgr", "assigned", 1, NOW, NOW, "review")
     conflict = Merge("shared", "base", MergeState.CONFLICT, ("model.py",), (), NOW)
@@ -474,9 +474,9 @@ def test_shared_branch_reports_one_problem_per_kind_to_work_owner() -> None:
 
 def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
     steps = (
-        step("dev-1", "atm-bh-1", status="closed", claimed_at=NOW - timedelta(seconds=100), closed_at=NOW - timedelta(seconds=50)),
-        step("dev-2", "atm-bh-2", status="closed", claimed_at=NOW - timedelta(seconds=75), closed_at=NOW - timedelta(seconds=25)),
-        step("atm-bh-3.group-dev", "atm-bh-3", status="in_progress", assignee="solar", claimed_at=NOW - timedelta(seconds=20)),
+        step("dev-1", "atm-bh-1", status=SprintState.CLOSED, claimed_at=NOW - timedelta(seconds=100), closed_at=NOW - timedelta(seconds=50)),
+        step("dev-2", "atm-bh-2", status=SprintState.CLOSED, claimed_at=NOW - timedelta(seconds=75), closed_at=NOW - timedelta(seconds=25)),
+        step("atm-bh-3.group-dev", "atm-bh-3", status=SprintState.IN_PROGRESS, assignee="solar", claimed_at=NOW - timedelta(seconds=20)),
         step("atm-bh-4.group-dev", "atm-bh-4", ready=True),
     )
     sprints = (sprint(1, closed=True, findings=3), sprint(2, closed=True, findings=1),
@@ -492,7 +492,7 @@ def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
     idle_value = phase(step("blocked", "atm-bh-1"))
     idle, actions, _ = tick(inputs(idle_value), replace(STATE, idle_since=NOW - timedelta(minutes=61)), NOW, render)
     assert idle.stopped == "idle" and actions == ()
-    running = phase(step("running", "atm-bh-1", status="in_progress", claimed_at=NOW - timedelta(hours=2)))
+    running = phase(step("running", "atm-bh-1", status=SprintState.IN_PROGRESS, claimed_at=NOW - timedelta(hours=2)))
     running_snapshot, _, _ = tick(inputs(running), replace(STATE, idle_since=NOW - timedelta(minutes=61)), NOW, render)
     assert running_snapshot.stopped is None
 

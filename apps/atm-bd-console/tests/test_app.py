@@ -382,7 +382,7 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
     sprints = tuple(SprintView(
         f"atm-bh-{number}", f"sprint {number}",
         SprintState.CLOSED if all_closed or number == 1 else SprintState.IN_PROGRESS, (),
-        (StepView(f"atm-bh-{number}.dev", "dev", "closed" if all_closed else "in_progress", "solar"),),
+        (StepView(f"atm-bh-{number}.dev", "dev", SprintState.CLOSED if all_closed else SprintState.IN_PROGRESS, "solar"),),
     ) for number in (1, 2, 3))
     step = FakeStep(replace(RUNNING, sprints=sprints))
 
@@ -416,9 +416,9 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
 
 @pytest.mark.parametrize("size", ((140, 40), (100, 30)))
 def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tuple[int, int]) -> None:
-    two_steps = tuple(StepView(f"atm-bh-2.dev-{number}", "dev", "closed", "solar") for number in range(2))
-    six_steps = tuple(StepView(f"atm-bh-6.dev-{number}", "dev", "open", "solar") for number in range(6))
-    overflowing_steps = tuple(StepView(f"atm-bh-7.dev-{number}", "dev", "open", "solar") for number in range(14))
+    two_steps = tuple(StepView(f"atm-bh-2.dev-{number}", "dev", SprintState.CLOSED, "solar") for number in range(2))
+    six_steps = tuple(StepView(f"atm-bh-6.dev-{number}", "dev", SprintState.OPEN, "solar") for number in range(6))
+    overflowing_steps = tuple(StepView(f"atm-bh-7.dev-{number}", "dev", SprintState.OPEN, "solar") for number in range(14))
     sprints = (
         SprintView("atm-bh-2", "bh-2: two steps", SprintState.READY, (), two_steps),
         SprintView("atm-bh-6", "bh-6: six steps", SprintState.IN_PROGRESS, (), six_steps),

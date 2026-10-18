@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, SAMPLES, SNAPSHOT, TASK
+from contract_samples import BEAD, CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, SAMPLES, SNAPSHOT, STEP, TASK
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
-from atm_bd_console.enums import CiState, MergeState, PrState
+from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.icons import icon_for
 from atm_bd_console.result import (
     CommandFailed,
@@ -44,6 +44,21 @@ def test_pre_enum_snapshot_decodes_to_typed_states() -> None:
     assert isinstance(pr.pr.ci, CiState)
     assert isinstance(pr.pr.state, PrState)
     assert pr.merge is not None and isinstance(pr.merge.state, MergeState)
+
+
+def test_legacy_bead_step_and_qa_strings_decode_to_enums() -> None:
+    import json
+
+    bead = json.loads(to_json(BEAD))
+    bead.pop("raw_status")
+    decoded_bead = from_json(types.Bead, json.dumps(bead))
+    decoded_step = from_json(types.Step, to_json(STEP))
+    agent = replace(SNAPSHOT.agents[0], qa_state=QaState.PASS)
+    decoded_agent = from_json(types.AgentView, to_json(agent))
+    assert isinstance(decoded_bead, Ok) and decoded_bead.value.status is SprintState.IN_PROGRESS
+    assert isinstance(decoded_step, Ok) and decoded_step.value.status is SprintState.IN_PROGRESS
+    assert isinstance(decoded_agent, Ok) and decoded_agent.value.qa_state is QaState.PASS
+    assert '"qa_state":"pass"' in to_json(agent)
 
 
 def test_config_round_trip_and_literal_rejection() -> None:
@@ -145,9 +160,9 @@ def test_legacy_snapshot_decodes_with_empty_agent_metadata() -> None:
 
 @pytest.mark.parametrize(
     ("qa_state", "color"),
-    (("running", "#4A5AF8"), ("pass", "#2EA043"), ("fail", "#F85149")),
+    ((QaState.RUNNING, "#4A5AF8"), (QaState.PASS, "#2EA043"), (QaState.FAIL, "#F85149")),
 )
-def test_qa_icon_color_survives_snapshot_codec_round_trip(qa_state: str, color: str) -> None:
+def test_qa_icon_color_survives_snapshot_codec_round_trip(qa_state: QaState, color: str) -> None:
     agent = replace(SNAPSHOT.agents[0], agent_type="qa", qa_state=qa_state)
     snapshot = replace(SNAPSHOT, agents=(agent,))
 

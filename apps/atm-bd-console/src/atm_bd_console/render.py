@@ -215,8 +215,7 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         lines.extend((Text(), Text(f"== Beads ({len(beads)})")))
         for step in beads:
             bead_line = Text(f" {short_id(step.bead_id, snapshot.bead_prefix):<22} ")
-            status_glyph, status_style = next((value for key, value in BEAD_STATUS_ICONS.items()
-                                              if key.value == step.status), ("", None))
+            status_glyph, status_style = BEAD_STATUS_ICONS.get(step.status, ("", None))
             if status_glyph:
                 bead_line.append(status_glyph, style=status_style)
                 bead_line.append(" ")

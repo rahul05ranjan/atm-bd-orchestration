@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from .enums import AgentIcon, CiState, MergeState, PrState, SprintState
+from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .types import AgentView, Member
 
 Icon = tuple[str, str | None]
@@ -109,7 +109,7 @@ def icon_for(member: Member | AgentView | None) -> Icon:
     agent_type = (member.agent_type or "").lower()
     if agent_type == "qa":
         qa_state = getattr(member, "qa_state", None)
-        selected = {"running": AgentIcon.QA_RUNNING, "pass": AgentIcon.QA_PASS, "fail": AgentIcon.QA_FAIL}.get(qa_state or "")
+        selected = {QaState.RUNNING: AgentIcon.QA_RUNNING, QaState.PASS: AgentIcon.QA_PASS, QaState.FAIL: AgentIcon.QA_FAIL}.get(qa_state) if qa_state else None
         return icon(selected) if selected else (icon(AgentIcon.QA_RUNNING)[0], None)
     return icon(agent_icon_of(member, agent_type))
 

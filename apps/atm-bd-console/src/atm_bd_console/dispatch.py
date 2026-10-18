@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .enums import MergeState
+from .enums import MergeState, SprintState
 from .ids import short_id
 from .prs import active_pr
 from .result import CommandFailed, Err, Error, NotFound, Timeout
@@ -56,7 +56,7 @@ def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
     tasked = {task.id for task in tasks}
     return tuple(
         step for step in phase.steps
-        if step.kind in ("sanity", "qa") and step.status == "open"
+        if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN
         and not step.anchor and not step.quick_fix and step.bead_id not in tasked
     )
 

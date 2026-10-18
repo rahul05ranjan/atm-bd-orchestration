@@ -10,6 +10,7 @@ from typing import Literal, get_args, get_origin, get_type_hints
 import pytest
 
 from atm_bd_console import result, types
+from atm_bd_console.enums import QaState, SprintState
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "atm_bd_console"
 
@@ -30,7 +31,7 @@ FIELDS: dict[str, str] = {
     "IoFailed": "kind path message fix",
     "Member": "name presence presence_since agent_type model harness",
     "Task": "id agent state position assigned_at state_since description",
-    "Bead": "id title status labels parent blocked_by assignee metadata created_at claimed_at closed_at close_reason",
+    "Bead": "id title status labels parent blocked_by assignee metadata created_at claimed_at closed_at close_reason raw_status",
     "Step": "bead_id sprint kind quick_fix anchor status ready assignee branch target worktree layer difficulty tag "
             "top_epic claimed_at closed_at title checked_bead sprint_bead qa_round carry_forward close_reason",
     "Sprint": "id title layer branch target stack depends_on closed findings status raw_status",
@@ -67,15 +68,12 @@ FIELDS: dict[str, str] = {
 }
 
 DIFFICULTY = ("hard", "normal", "fast")
-BEAD_STATUS = ("open", "in_progress", "blocked", "closed")
 GITHUB_MODE = ("graphql", "rest", "off")
 # (class, field) -> the Literal values the design names; Optional literals compare without None.
 LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Member", "presence"): ("active", "idle", "offline", "blocked", "unknown"),
     ("Task", "state"): ("assigned", "active"),
-    ("Bead", "status"): BEAD_STATUS,
     ("Step", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
-    ("Step", "status"): BEAD_STATUS,
     ("Step", "difficulty"): DIFFICULTY,
     ("GhStatus", "mode"): GITHUB_MODE,
     ("Config", "github"): GITHUB_MODE,
@@ -84,7 +82,6 @@ LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Row", "difficulty"): DIFFICULTY,
     ("Row", "marker"): ("red", "yellow"),
     ("AgentView", "status"): ("busy", "stalling", "blocked", "offline", "idle"),
-    ("AgentView", "qa_state"): ("running", "pass", "fail"),
     ("StepView", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
     ("Action", "kind"): ("assign", "send", "batch"),
     ("Snapshot", "stopped"): ("closed", "idle"),
@@ -134,6 +131,10 @@ def test_literal_arguments_match_design(name: str, field: str) -> None:
 
 
 def test_key_field_annotations() -> None:
+    assert get_type_hints(types.Bead)["status"] is SprintState
+    assert get_type_hints(types.Step)["status"] is SprintState
+    assert get_type_hints(types.StepView)["status"] is SprintState
+    assert get_type_hints(types.AgentView)["qa_state"] == QaState | None
     assert get_type_hints(types.Snapshot)["generated_at"] is datetime
     assert get_type_hints(types.Phase)["step_errors"] == tuple[tuple[str, result.Error], ...]
     assert get_type_hints(types.GhStatus)["error"] == result.Error | None

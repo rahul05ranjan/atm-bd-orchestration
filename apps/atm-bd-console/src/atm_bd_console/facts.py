@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .dispatch import sprint_of
-from .enums import AgentIcon, CiState, MergeState, PrState, SprintState
+from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .ids import short_id
 from .types import AgentView, Member, PrRow, Snapshot, Sprint, Step, Task
 
@@ -109,7 +109,7 @@ def _qa_result(steps: tuple[Step, ...]) -> AgentIcon | None:
            and step.closed_at > newest.closed_at for step in steps):
         return None
     verdict = qa_state_from_close(newest.close_reason)
-    return {"pass": AgentIcon.QA_PASS, "fail": AgentIcon.QA_FAIL}.get(verdict or "")
+    return {QaState.PASS: AgentIcon.QA_PASS, QaState.FAIL: AgentIcon.QA_FAIL}.get(verdict) if verdict else None
 
 
 def _selected_pr(sprint: Sprint, steps: tuple[Step, ...], snapshot: Snapshot) -> PrRow | None:

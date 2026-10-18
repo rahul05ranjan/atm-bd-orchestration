@@ -9,7 +9,7 @@ from typing import Literal, Self
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .dispatch import sprint_of, verification_reason
-from .enums import MergeState
+from .enums import MergeState, SprintState
 from .log import TickLog, create_console_logger
 from .result import Err, NotFound, Ok
 from .state import StateStore, load_merges, load_prs, load_snapshot
@@ -130,7 +130,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     shown_ids = atm_bd.closed_show_ids(file, ())
     shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
     phase = shown if isinstance(shown, Err) else atm_bd.phase(file, root_bead, (), (), shown.value)
-    if root_bead is not None and root_bead.status == "closed" and isinstance(phase, Ok):
+    if root_bead is not None and root_bead.status == SprintState.CLOSED and isinstance(phase, Ok):
         phase = Ok(replace(phase.value, step_errors=()))
     cached_prs = load_prs(config.repo_root, file.root_id)
     cached_merges = load_merges(config.repo_root, file.root_id)
@@ -195,7 +195,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
-    if root_bead is not None and root_bead.status == "closed":
+    if root_bead is not None and root_bead.status == SprintState.CLOSED:
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github)
     if not force_github and model.idle_stop_due(state, now):
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)

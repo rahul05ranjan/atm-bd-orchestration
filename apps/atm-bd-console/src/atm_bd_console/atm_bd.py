@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from .atm_source import sprint_state_of
+from .enums import SprintState
 from .ids import short_id
 from .result import ConfigInvalid, Err, Error, IoFailed, NotFound, Ok, ParseFailed, Result
 from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoConfig, Sprint, Step, StepKind
@@ -330,8 +330,8 @@ def _sprint(file: PhaseFile, bead: Bead, beads: tuple[Bead, ...]) -> Result[Spri
         return Err(ConfigInvalid("config_invalid", f"{bead.id}.metadata.layer", layer, "set an integer layer"))
     findings = sum(1 for item in beads if _finding_of(item, bead.id))
     return Ok(Sprint(bead.id, bead.title, meta["layer"], meta["branch"], meta["pr_target"], meta["stack"],
-                     file.depends_on.get(bead.id, ()), bead.status == "closed", findings, sprint_state_of(bead.status),
-                     bead.status))
+                     file.depends_on.get(bead.id, ()), bead.status == SprintState.CLOSED, findings, bead.status,
+                     bead.raw_status or str(bead.status)))
 
 
 def phase(
@@ -370,7 +370,7 @@ def phase(
             errors.append((bead.id, mapped_step.error))
         else:
             steps.append(replace(mapped_step.value, ready=bead.id in ready_ids))
-    closed = root.status == "closed"
+    closed = root.status == SprintState.CLOSED
     return Ok(Phase(root.id, file.label, root.title, closed, tuple(sprints), tuple(steps), tuple(errors)))
 
 

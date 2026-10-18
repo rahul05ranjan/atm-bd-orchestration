@@ -72,11 +72,12 @@ ERRORS = (COMMAND_FAILED, TIMEOUT, REJECTED, UNREACHABLE, PARSE_FAILED, NOT_FOUN
 MEMBER = Member("arch-ctm", "active", EARLIER)
 TASK = Task("atm-bh-6", "arch-ctm", "active", 1, EARLIER, PLUS_TWO, "implement tick rules")
 BEAD = Bead(
-    "atm-bh-6", "tick rules", "in_progress", ("phase:bh", "stage:dev"), "atm-phase-bh", ("atm-bh-1",), "arch-ctm",
+    "atm-bh-6", "tick rules", SprintState.IN_PROGRESS, ("phase:bh", "stage:dev"), "atm-phase-bh", ("atm-bh-1",), "arch-ctm",
     {"layer": 6, "branch": "sprint/bh-6-tick-rules", "nested": {"keys": ["a", "b"]}}, EARLIER, PLUS_TWO, NOW,
+    raw_status="in_progress",
 )
 STEP = Step(
-    "atm-bh-6.qa", "bh-6", "qa", True, True, "in_progress", True, "quality-mgr", "sprint/bh-6-tick-rules",
+    "atm-bh-6.qa", "bh-6", "qa", True, True, SprintState.IN_PROGRESS, True, "quality-mgr", "sprint/bh-6-tick-rules",
     "integrate/phase-bh", "/worktrees/sprint/bh-6-tick-rules", 6, "hard", "bh-6", "atm-phase-bh", EARLIER, NOW,
     "QA bh-6", "atm-bh-6.fix", "atm-bh-6", 2, "atm-bh-6.fix",
 )
@@ -122,7 +123,7 @@ ROW = Row("atm-bh-6", "running", "sprint_qa", "normal", "bh-6", "yellow", 420, "
 AGENT_VIEW = AgentView("arch-ctm", "busy", EARLIER, 2, (ROW,))
 SECTION_ROW = SectionRow("atm-bh-6", 420, "CI failing on the top layer", 1850)
 SECTION = Section("Blocked", (SECTION_ROW,))
-STEP_VIEW = StepView("atm-bh-6.qa", "qa", "in_progress", "quality-mgr")
+STEP_VIEW = StepView("atm-bh-6.qa", "qa", SprintState.IN_PROGRESS, "quality-mgr")
 SPRINT_VIEW = SprintView("atm-bh-6", "tick rules", SprintState.IN_PROGRESS, ("atm-bh-1",), (STEP_VIEW,))
 PROBLEM = Problem("stalled:arch-ctm", "atm-bh-6", "fenix", "arch-ctm has not started atm-bh-6", EARLIER)
 ACTION = Action(NOW, "assign", "quality-mgr", ("atm-bh-6.qa",), "QA bh-6 round 2", DISPATCH_SPEC, "sent")

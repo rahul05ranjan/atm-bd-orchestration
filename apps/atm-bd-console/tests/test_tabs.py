@@ -23,10 +23,10 @@ SPRINTS = (
     SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),
     SprintView("atm-bh-9", "runner", SprintState.NOT_READY, ("atm-bh-6",), ()),
     SprintView("atm-bh-8", "renderers", SprintState.READY, (), (
-        StepView("atm-bh-8.group-dev", "dev", "in_progress", "solar"),
-        StepView("atm-bh-8.group-sanity", "sanity", "open", None),
-        StepView("atm-bh-8.group-qa", "qa", "open", "quality-mgr"),
-        StepView("atm-bh-8.group-qa-f1", "fix", "open", TEST_ASSIGNEE),
+        StepView("atm-bh-8.group-dev", "dev", SprintState.IN_PROGRESS, "solar"),
+        StepView("atm-bh-8.group-sanity", "sanity", SprintState.OPEN, None),
+        StepView("atm-bh-8.group-qa", "qa", SprintState.OPEN, "quality-mgr"),
+        StepView("atm-bh-8.group-qa-f1", "fix", SprintState.OPEN, TEST_ASSIGNEE),
     )),
 )
 SNAPSHOT = replace(

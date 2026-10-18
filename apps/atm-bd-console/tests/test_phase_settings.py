@@ -8,7 +8,7 @@ import pytest
 from contract_samples import BEAD, MERGE, PHASE_TEMPLATES, REMOTE_REF, SPRINT, WORKTREE
 
 from atm_bd_console import atm_bd, cli, config, runner
-from atm_bd_console.enums import MergeState
+from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.result import ConfigInvalid, Err, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot
 from atm_bd_console.types import INITIAL_STATE
@@ -110,11 +110,11 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
     monkeypatch.setenv("ATM_IDENTITY", "environment-owner")
     with (phase_repo / ".claude/project/atm-bd-orchestration.yaml").open("a") as stream:
         stream.write('\nlead: "repository-owner"\n')
-    root = replace(BEAD, id="atm-phase-bh", status="open", parent=None, labels=("phase-bh",), metadata={})
-    sprint = replace(BEAD, id=SPRINT.id, status="open", parent=root.id, labels=("stage:sprint",), metadata={
+    root = replace(BEAD, id="atm-phase-bh", status=SprintState.OPEN, parent=None, labels=("phase-bh",), metadata={})
+    sprint = replace(BEAD, id=SPRINT.id, status=SprintState.OPEN, parent=root.id, labels=("stage:sprint",), metadata={
         "layer": SPRINT.layer, "branch": SPRINT.branch, "pr_target": SPRINT.target, "stack": SPRINT.stack,
     })
-    candidate = replace(BEAD, id=f"{SPRINT.id}.group-{kind}", status="open", parent=sprint.id, assignee=None,
+    candidate = replace(BEAD, id=f"{SPRINT.id}.group-{kind}", status=SprintState.OPEN, parent=sprint.id, assignee=None,
                         labels=("stage:dev-sanity" if kind == "sanity" else "stage:qa",), metadata={
         "sprint": "bh-6", "sprint_bead": sprint.id, "dev_bead": f"{sprint.id}.group-dev",
         "checked_bead": f"{sprint.id}.group-dev", "round": 1, "branch": SPRINT.branch,

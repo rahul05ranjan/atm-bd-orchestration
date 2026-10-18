@@ -20,7 +20,7 @@ def snapshot() -> Snapshot:
     sprints = (
         SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),
         SprintView("atm-bh-2", "source", SprintState.IN_PROGRESS, ("atm-bh-1",),
-                   (StepView("atm-bh-2.group-dev", "dev", "in_progress", "fenix"),)),
+                   (StepView("atm-bh-2.group-dev", "dev", SprintState.IN_PROGRESS, "fenix"),)),
         SprintView("atm-bh-3", "later", SprintState.NOT_READY, ("atm-bh-1", "atm-bh-2"), ()),
     )
     return replace(decoded.value, mermaid="graph TD\n    a --> b", sprints=sprints)
@@ -75,10 +75,10 @@ def test_fallback_is_one_row_per_sprint_in_dependency_depth_order(monkeypatch) -
     sprints = (
         SprintView("atm-bh-3", "later", SprintState.NOT_READY, ("atm-bh-2",), ()),
         SprintView("atm-bh-2", "source", SprintState.IN_PROGRESS, ("atm-bh-1",),
-                   (StepView("atm-bh-2.group-dev", "dev", "in_progress", "fenix"),)),
+                   (StepView("atm-bh-2.group-dev", "dev", SprintState.IN_PROGRESS, "fenix"),)),
         SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),
         SprintView("atm-bh-4", "other", SprintState.READY, (),
-                   (StepView("atm-bh-4.group-dev", "dev", "open", None),)),
+                   (StepView("atm-bh-4.group-dev", "dev", SprintState.OPEN, None),)),
     )
     value = replace(snapshot(), sprints=sprints)
     monkeypatch.setenv("PATH", "")

@@ -7,7 +7,7 @@ from contract_samples import PHASE_TEMPLATES
 
 from atm_bd_console.atm_bd import dispatch_spec
 from atm_bd_console.dispatch import candidates, dispatch
-from atm_bd_console.enums import CiState, MergeState, PrState
+from atm_bd_console.enums import CiState, MergeState, PrState, SprintState
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.types import (
     DispatchContext,
@@ -31,7 +31,7 @@ SPRINT = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6", "sprint/bh-1", "phas
 def step(**changes) -> Step:
     value = Step(
         bead_id="atm-bh-6.group-qa", sprint="atm-bh-6", kind="qa", quick_fix=False, anchor=False,
-        status="open", ready=True, assignee="solar", branch="sprint/bh-6", target="sprint/bh-1",
+        status=SprintState.OPEN, ready=True, assignee="solar", branch="sprint/bh-6", target="sprint/bh-1",
         worktree="/worktrees/bh-6", layer=6, difficulty="hard", tag="bh-6", top_epic="atm-phase-bh",
         claimed_at=None, closed_at=None, title="QA", checked_bead="atm-bh-6.group-dev",
         sprint_bead="atm-bh-6", qa_round=1, carry_forward=None,
@@ -75,7 +75,7 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
         step(),
         step(bead_id="anchor", anchor=True),
         step(bead_id="quick", quick_fix=True),
-        step(bead_id="closed", status="closed"),
+        step(bead_id="closed", status=SprintState.CLOSED),
         step(bead_id="tasked"),
     )
     task = Task("tasked", "quality-mgr", "assigned", 1, NOW, NOW, "queued")

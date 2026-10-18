@@ -27,6 +27,7 @@ from contract_samples import (
 )
 
 from atm_bd_console import log, runner
+from atm_bd_console.enums import QaState, SprintState
 from atm_bd_console.log import TickLog
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
@@ -144,7 +145,7 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> None:
-    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
+    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status=SprintState.CLOSED)
     shown = []
 
     def initial_read(value):
@@ -193,19 +194,19 @@ def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch
     sprint_id = "atm-bi-5"
     qa_id = f"{sprint_id}.group-qa"
     file = PhaseFile("bi", root_id, "phase:bi", (sprint_id,), {sprint_id: ()}, "lumen", {})
-    root = Bead(root_id, "Phase BI", "open", ("phase:bi",), None, (), None, {}, NOW, None, None)
+    root = Bead(root_id, "Phase BI", SprintState.OPEN, ("phase:bi",), None, (), None, {}, NOW, None, None)
     sprint = Bead(
-        sprint_id, "bi-5", "in_progress", ("phase:bi", "stage:sprint"), root_id, (), None,
+        sprint_id, "bi-5", SprintState.IN_PROGRESS, ("phase:bi", "stage:sprint"), root_id, (), None,
         {"layer": 5, "branch": "sprint/bi-5", "pr_target": "integrate/phase-bi", "stack": "phase-bi"},
         NOW, None, None,
     )
     qa_metadata = {"checked_bead": f"{sprint_id}.group-dev", "sprint_bead": sprint_id,
                    "sprint": "bi-5", "round": 1}
     active_qa = Bead(
-        qa_id, "QA round 1", "in_progress", ("phase:bi", "stage:qa"), sprint_id, (), "quality-mgr",
+        qa_id, "QA round 1", SprintState.IN_PROGRESS, ("phase:bi", "stage:qa"), sprint_id, (), "quality-mgr",
         qa_metadata, NOW, NOW, None,
     )
-    closed_qa = replace(active_qa, status="closed", closed_at=NOW, close_reason="PASS: 0 findings filed")
+    closed_qa = replace(active_qa, status=SprintState.CLOSED, closed_at=NOW, close_reason="PASS: 0 findings filed")
     phase_file = lambda *_: Ok(file)
     repo_config = lambda *_: Ok(REPO_CONFIG)
     active = [True]
@@ -250,17 +251,17 @@ def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch
     store = Store()
 
     first, _ = runner.step(config, RUNNING_STATE, False, store)
-    assert first.agents[0].qa_state == "running"
+    assert first.agents[0].qa_state is QaState.RUNNING
     active[0] = False
     second, _ = runner.step(config, RUNNING_STATE, False, store)
 
     assert seen_inputs[1].tasks == Ok(())
     assert seen_inputs[1].phase.value.steps[0].close_reason == "PASS: 0 findings filed"
-    assert second.agents[0].qa_state == "pass"
+    assert second.agents[0].qa_state is QaState.PASS
 
 
 def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypatch, tmp_path) -> None:
-    closed = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    closed = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
     config = replace(CONFIG, repo_root=str(tmp_path))
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -287,7 +288,7 @@ def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypa
 
 
 def test_closed_phase_forced_github_refresh_uses_sprint_groups(monkeypatch, tmp_path):
-    closed = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    closed = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
     config = replace(CONFIG, repo_root=str(tmp_path), github="rest", dry_run=True)
     calls = []
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
@@ -316,7 +317,7 @@ def test_runner_passes_the_configured_interval_to_inputs(github_runtime) -> None
 
 
 def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> None:
-    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="open")
+    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status=SprintState.OPEN)
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
@@ -340,7 +341,7 @@ def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> No
 
 
 def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -> None:
-    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="open")
+    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status=SprintState.OPEN)
     active = replace(PHASE, closed=False)
     calls: list[str] = []
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
@@ -379,7 +380,7 @@ def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -
 
 
 def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -> None:
-    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="open")
+    root = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status=SprintState.OPEN)
     calls: list[str] = []
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -417,7 +418,7 @@ def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -
 
 
 def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
-    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
+    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status=SprintState.CLOSED)
     writes, events = [], []
 
     class Store(StoreReads):
@@ -444,7 +445,7 @@ def test_closed_root_persists_and_logs_tick_end(monkeypatch, tmp_path) -> None:
 def test_stopped_tick_preserves_durable_state_in_dry_run(monkeypatch, tmp_path, stopped, dry_run) -> None:
     now = ACTION.at
     previous = replace(STATE, last_cycle=now - timedelta(minutes=20), idle_since=now - timedelta(minutes=61))
-    root = replace(BEAD, id=PHASE_FILE.root_id, status="closed" if stopped == "closed" else "open")
+    root = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED if stopped == "closed" else SprintState.OPEN)
     config = replace(CONFIG, repo_root=str(tmp_path), dry_run=dry_run)
 
     class Clock(datetime):
@@ -480,7 +481,7 @@ def test_stopped_tick_preserves_durable_state_in_dry_run(monkeypatch, tmp_path, 
 
 
 def test_closed_root_write_failure_is_returned_in_snapshot(monkeypatch, tmp_path) -> None:
-    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status="closed")
+    closed = replace(BEAD, id="atm-phase-bh", labels=("phase:bh",), status=SprintState.CLOSED)
     class Store(StoreReads):
         directory = tmp_path
         def write_state(self, _value): return Err(IO_FAILED)
@@ -510,7 +511,7 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
 
 def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
-    candidate = replace(PHASE.steps[0], status="open", anchor=False, quick_fix=False, ready=True)
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True)
     phase = replace(PHASE, closed=False, step_errors=(), steps=(candidate,))
     state = replace(RUNNING_STATE, last_cycle=NOW)
     assigned = Task(candidate.bead_id, "quality-mgr", "active", 0, ACTION.at, ACTION.at, "running")
@@ -710,7 +711,7 @@ def test_logging_failure_surfaces_on_early_return(github_runtime, monkeypatch, s
     monkeypatch.setattr(runner, "create_console_logger", lambda *_: Err(logging_error) if failure == "construction" else Ok(Logger()))
     state = RUNNING_STATE
     if stopped == "closed":
-        monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status="closed"),)))
+        monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status=SprintState.CLOSED),)))
     elif stopped == "idle":
         state = replace(state, idle_since=ACTION.at - timedelta(days=365))
     else:
@@ -905,7 +906,7 @@ def test_snapshot_write_failure_is_logged_and_flushed_once(github_runtime, monke
     monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
     store.write_snapshot = lambda value: writes.append(value) or Err(snapshot_error)
     if path == "closed":
-        monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status="closed"),)))
+        monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status=SprintState.CLOSED),)))
     elif path == "invalid_config":
         monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Err(TIMEOUT))
 

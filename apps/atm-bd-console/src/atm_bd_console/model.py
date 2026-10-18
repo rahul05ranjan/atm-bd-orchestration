@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Literal
 
 from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
-from .enums import CiState, MergeState, PrState, SprintState
+from .enums import CiState, MergeState, PrState, QaState, SprintState
 from .icons import SPRINT_ICONS
 from .ids import short_id
 from .prs import active_pr
@@ -112,7 +111,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     if root_closed:
         stopped = "closed"
     elif phase is not None:
-        active = any(step.ready or step.status == "in_progress" for step in phase.steps)
+        active = any(step.ready or step.status == SprintState.IN_PROGRESS for step in phase.steps)
         idle_since = None if active else (idle_since or now)
         if idle_stop_due(replace(state, idle_since=idle_since), now):
             stopped = "idle"
@@ -273,10 +272,10 @@ def _agent_views(
         qa_state = None
         if (member.agent_type or "").lower() == "qa":
             if any(row.kind in ("sprint_qa", "fix_qa") and row.state == "running" for row in rows):
-                qa_state = "running"
+                qa_state = QaState.RUNNING
             else:
                 closed = sorted(
-                    (step for step in qa_steps if step.assignee == member.name and step.status == "closed"),
+                    (step for step in qa_steps if step.assignee == member.name and step.status == SprintState.CLOSED),
                     key=lambda step: step.closed_at.timestamp() if step.closed_at else float("-inf"),
                     reverse=True,
                 )
@@ -288,14 +287,14 @@ def _agent_views(
     return tuple(views)
 
 
-def qa_state_from_close(reason: str | None) -> Literal["pass", "fail"] | None:
+def qa_state_from_close(reason: str | None) -> QaState | None:
     """Interpret the exact prefix of a closed QA step's close reason."""
     if reason is None:
         return None
     if reason.startswith("PASS"):
-        return "pass"
+        return QaState.PASS
     if reason.startswith("FAIL"):
-        return "fail"
+        return QaState.FAIL
     return None
 
 
@@ -345,14 +344,14 @@ def _sprint_views(
     for sprint in phase.sprints:
         steps = tuple(step for step in phase.steps if sprint_of(step, phase, bead_prefix) == sprint)
         state = SprintState.CLOSED if sprint.closed else (
-            SprintState.IN_PROGRESS if any(step.status == "in_progress" for step in steps) else (
+            SprintState.IN_PROGRESS if any(step.status == SprintState.IN_PROGRESS for step in steps) else (
                 SprintState.READY if any(step.ready for step in steps) else SprintState.NOT_READY
             )
         )
         views.append(SprintView(sprint.id, sprint.title, state, sprint.depends_on, tuple(
             StepView(step.bead_id, step.kind, step.status, step.assignee) for step in steps
         )))
-        current = next((step for step in steps if step.status == "in_progress"), None)
+        current = next((step for step in steps if step.status == SprintState.IN_PROGRESS), None)
         if current is None:
             current = next((step for step in steps if step.ready), None)
         glyph = SPRINT_ICONS[state][0]
@@ -377,7 +376,7 @@ def _metrics(phase: Phase | None, now: datetime) -> Metrics:
     if phase is None:
         return Metrics(0, 0, 0, 0)
     work = tuple(step for step in phase.steps if step.kind in ("dev", "fix"))
-    done = sum(step.status == "closed" for step in work)
+    done = sum(step.status == SprintState.CLOSED for step in work)
     closed = tuple(sprint.findings for sprint in phase.sprints if sprint.closed)
     average = round(sum(closed) / len(closed)) if closed else 0
     projected = sum(max(0, average - sprint.findings) for sprint in phase.sprints if not sprint.closed)
@@ -431,7 +430,7 @@ def _pr_rows(
 def _branch_owners(phase: Phase) -> dict[str, Step]:
     owners: dict[str, Step] = {}
     ordered = sorted(phase.steps, key=lambda step: (
-        step.kind not in ("dev", "fix"), step.assignee is None, step.status == "closed", step.bead_id,
+        step.kind not in ("dev", "fix"), step.assignee is None, step.status == SprintState.CLOSED, step.bead_id,
     ))
     for step in ordered:
         if step.branch:
@@ -496,7 +495,7 @@ def _problems(
         pushed = {remote.branch for remote in remotes}
         open_branches = {
             step.branch for step in phase.steps
-            if step.status != "closed" and step.kind in ("dev", "fix", "sanity", "qa")
+            if step.status != SprintState.CLOSED and step.kind in ("dev", "fix", "sanity", "qa")
         }
         for branch, step in by_branch.items():
             if branch in open_branches and branch in pushed and branch not in heads:

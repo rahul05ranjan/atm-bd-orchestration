@@ -9,7 +9,7 @@ from test_git_source import commit, git
 
 from atm_bd_console import git_source, runner
 from atm_bd_console.codec import to_json
-from atm_bd_console.enums import MergeState
+from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.result import CommandFailed, Err, Ok, Timeout
 from atm_bd_console.state import acquire_lock, load_snapshot
 from atm_bd_console.types import INITIAL_STATE, DispatchSpec, Merge, MergeFile
@@ -21,7 +21,7 @@ pytest_plugins = ("test_git_source",)
 def runtime(repo, tmp_path, monkeypatch):
     worktree = tmp_path / "clean-worktree"
     git(repo, "worktree", "add", "-q", str(worktree), "clean")
-    candidate = replace(PHASE.steps[0], status="open", ready=True, anchor=False, quick_fix=False,
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, anchor=False, quick_fix=False,
                         branch="clean", target="main", worktree=str(worktree))
     phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
     events, assigned = [], []
@@ -38,7 +38,7 @@ def runtime(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.atm_bd, "dispatch_spec", lambda context, templates: Ok(DispatchSpec(templates["qa"], {"commit": context.commit})))
-    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status="open"),)))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status=SprintState.OPEN),)))
     monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))

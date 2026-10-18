@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, TypeAlias
 
-from .enums import CiState, MergeState, PrState, SprintState
+from .enums import CiState, MergeState, PrState, QaState, SprintState
 from .result import Error, Result
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
@@ -39,7 +39,7 @@ class Task:
 class Bead:
     id: str
     title: str
-    status: Literal["open", "in_progress", "blocked", "closed"]
+    status: SprintState
     labels: tuple[str, ...]
     parent: str | None
     blocked_by: tuple[str, ...]
@@ -49,6 +49,7 @@ class Bead:
     claimed_at: datetime | None
     closed_at: datetime | None
     close_reason: str | None = None
+    raw_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,7 @@ class Step:
     kind: StepKind
     quick_fix: bool
     anchor: bool
-    status: Literal["open", "in_progress", "blocked", "closed"]
+    status: SprintState
     ready: bool
     assignee: str | None
     branch: str | None
@@ -237,7 +238,7 @@ class AgentView:
     agent_type: str | None = None
     model: str | None = None
     harness: str | None = None
-    qa_state: Literal["running", "pass", "fail"] | None = None
+    qa_state: QaState | None = None
 
 
 @dataclass(frozen=True)
@@ -258,7 +259,7 @@ class Section:
 class StepView:
     bead_id: str
     kind: StepKind
-    status: str
+    status: SprintState
     assignee: str | None
 
 

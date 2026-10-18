@@ -27,9 +27,9 @@ def _fallback(snapshot: Snapshot) -> str:
     lines: list[str] = []
     for _, sprint in ordered:
         sprint_id = short_id(sprint.id, snapshot.bead_prefix)
-        current = next((step for step in sprint.steps if step.status == "in_progress"), None)
+        current = next((step for step in sprint.steps if step.status == SprintState.IN_PROGRESS), None)
         if current is None and sprint.state == SprintState.READY:
-            current = next((step for step in sprint.steps if step.status == "open"), None)
+            current = next((step for step in sprint.steps if step.status == SprintState.OPEN), None)
         line = f"{SPRINT_ICONS[sprint.state][0]} {sprint_id}"
         if current is not None:
             member = next((agent for agent in snapshot.agents if agent.name == current.assignee), None)
