@@ -5,7 +5,7 @@ from contract_samples import BEAD, CONFIG, GH_STATUS, INPUTS, MEMBER, PHASE, PR_
 
 from atm_bd_console import runner
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
-from atm_bd_console.facts import sprint_facts
+from atm_bd_console.facts import SprintFacts, sprint_facts
 from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
 from atm_bd_console.result import Ok
@@ -42,6 +42,33 @@ def test_child_task_inherits_qa_step_role_through_parent_chain():
     snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(qa,)),
                        task_data=(replace(snapshot.task_data[0], id=child.id),), task_bead_data=(child,))
     assert rows(snapshot)[0].state == (AgentIcon.QA_RUNNING,)
+
+
+def test_sprint_facts_cover_active_queued_qa_and_pr_sources():
+    snapshot = _snapshot()
+    sprint = snapshot.phase_data.sprints[0]
+    base = SprintFacts(sprint, SprintState.IN_PROGRESS, (), None, CiState.NONE, PrState.NONE, None)
+    assert sprint_facts(snapshot) == (replace(base, agents=(AgentIcon.TERRA,)),)
+    queued = replace(snapshot, task_data=(replace(snapshot.task_data[0], state="assigned"),))
+    assert sprint_facts(queued) == (base,)
+    qa = replace(snapshot.phase_data.steps[0], kind="qa")
+    running_qa = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(qa,)))
+    assert sprint_facts(running_qa) == (replace(base, agents=(AgentIcon.QA_RUNNING,)),)
+    closed_qa = replace(qa, closed_at=NOW, close_reason="PASS")
+    fix = replace(qa, bead_id="fix", kind="fix", closed_at=NOW + timedelta(seconds=1))
+    invalidated = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(closed_qa, fix)))
+    assert sprint_facts(invalidated) == (base,)
+    pr = replace(PR_ROW.pr, state=PrState.OPEN, ci=CiState.PASS, head=sprint.branch)
+    open_row = replace(PR_ROW, pr=pr, merge=None)
+    merged_pr = replace(pr, state=PrState.MERGED, number=pr.number + 1)
+    merge = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.CONFLICT)
+    merged_row = replace(PR_ROW, pr=merged_pr, merge=merge)
+    with_prs = replace(snapshot, task_data=(), prs=(merged_row, open_row))
+    assert sprint_facts(with_prs) == (replace(base, ci=CiState.PASS, pr_state=PrState.OPEN, pr=open_row),)
+    merged_only = replace(with_prs, prs=(merged_row,))
+    assert sprint_facts(merged_only) == (replace(base, ci=CiState.PASS, pr_state=PrState.MERGED, pr=merged_row),)
+    gh_off = replace(with_prs, gh=replace(snapshot.gh, mode="off", ok=None))
+    assert sprint_facts(gh_off) == (replace(base, ci=CiState.UNKNOWN, pr_state=PrState.UNKNOWN, pr=open_row),)
 
 
 def test_latest_qa_is_invalidated_by_later_dev():
@@ -255,3 +282,11 @@ def test_twenty_spec_rows_and_rich_colours():
                "#FA8537", "#0077FF", "#2DE057", "#2EA043", "#FFA60D", "#2DE057", "#FFE066",
                "#FF8C66", "#FF784D", "#FF6533", "#FFB726", "#E551BA", "#D97757")
     assert tuple(cell.spans[0].style for cell in table.columns[1]._cells) == colours
+    ci_colours = ("#2EA043", "#58A6FF", "#F85149", "#2D81E0", "#2D81E0", "#F85149", "#2D81E0",
+                  "#2D81E0", "#58A6FF", "#2D81E0", "#2EA043", "#58A6FF", "#F85149", "#F85149",
+                  "#2D81E0", "#F85149", "#2EA043", "#2D81E0", "#2EA043", "#2D81E0")
+    pr_colours = ("#8957E5", "#2D81E0", "#2D81E0", "#FFA60D", "", "#2D81E0", "", "", "#2D81E0", "",
+                  "#2D81E0", "#2D81E0", "#2D81E0", "#F85149", "#FFA60D", "#2D81E0", "#2D81E0",
+                  "#F85149", "#8957E5", "")
+    assert tuple(cell.style for cell in table.columns[2]._cells) == ci_colours
+    assert tuple(cell.style for cell in table.columns[3]._cells) == pr_colours

@@ -107,6 +107,7 @@ def test_rest_fetches_only_selected_pr_checks_and_failure_outranks_running(monke
     calls = []
     pull_rows = copy.deepcopy(RECORDED_REST)
     selected = pull_rows[0]
+    second = pull_rows[1]
     lower = copy.deepcopy(selected)
     lower["number"] = selected["number"] - 1
     lower["head"]["sha"] = "lower-sha"
@@ -122,10 +123,13 @@ def test_rest_fetches_only_selected_pr_checks_and_failure_outranks_running(monke
         ]})))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs("rest", "/repo", ((selected["head"]["ref"],),))
+    result, status = github_source.open_prs("rest", "/repo", (
+        (selected["head"]["ref"],), (second["head"]["ref"],), ("no-pr-branch",),
+    ))
     assert isinstance(result, Ok) and status.ok
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert selected["head"]["sha"] in calls[1][-1]
+    assert second["head"]["sha"] in calls[2][-1]
     selected_result = next(pr for pr in result.value if pr.number == selected["number"])
     assert selected_result.ci == CiState.FAIL_WINDOWS
     assert selected_result.failed_checks == ("windows",)
