@@ -10,6 +10,7 @@ One file per agent, with its subagents and scripts: what it does, when, in what 
 | [planner.md](planner.md) | design to beads; `validate-plan` |
 | [team-lead.md](team-lead.md) | sequencer; swarm-master (none in the package) |
 | [parallax.md](parallax.md) | work-orchestrator teammate (optional) |
+| [console.md](console.md) | `atm-bd console` and `atm-bd cron`: identity, time, log, GitHub polling, rows |
 
 ## Who does what
 
