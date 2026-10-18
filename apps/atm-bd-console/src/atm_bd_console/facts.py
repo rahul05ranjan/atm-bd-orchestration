@@ -15,11 +15,15 @@ _MODEL_ICONS = (AgentIcon.ASTRA, AgentIcon.TERRA, AgentIcon.LUNA, AgentIcon.SOL,
                 AgentIcon.HAIKU, AgentIcon.SONNET, AgentIcon.OPUS, AgentIcon.FABLE)
 
 
+_QA_ICONS = {QaState.RUNNING: AgentIcon.QA_RUNNING, QaState.PASS: AgentIcon.QA_PASS, QaState.FAIL: AgentIcon.QA_FAIL}
+
+
 def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIcon:
+    """The one owner of agent icon selection; icons.icon_for only looks up the icon it returns."""
     if step_kind == "sanity":
         return AgentIcon.SEVERITY
     if step_kind in ("qa", "sprint_qa"):
-        return AgentIcon.QA_RUNNING
+        return _QA_ICONS.get(getattr(member, "qa_state", None), AgentIcon.QA_RUNNING)
     if member is None:
         return AgentIcon.OTHER
     model = (member.model or "").lower()

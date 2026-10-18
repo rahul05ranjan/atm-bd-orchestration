@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
+from .enums import AgentIcon, CiState, MergeState, PrState, SprintState
 from .types import AgentView, Member
 
 Icon = tuple[str, str | None]
@@ -104,13 +104,14 @@ def merge_icon(state: MergeState) -> Icon:
 
 
 def icon_for(member: Member | AgentView | None) -> Icon:
+    # Lazy on purpose: facts -> dispatch -> prs -> icons is a cycle, so this module cannot import facts at load time.
     from .facts import agent_icon_of
 
     if member is None:
         return icon(AgentIcon.OTHER)
     agent_type = (member.agent_type or "").lower()
-    if agent_type == "qa":
-        qa_state = getattr(member, "qa_state", None)
-        selected = {QaState.RUNNING: AgentIcon.QA_RUNNING, QaState.PASS: AgentIcon.QA_PASS, QaState.FAIL: AgentIcon.QA_FAIL}.get(qa_state) if qa_state else None
-        return icon(selected) if selected else (icon(AgentIcon.QA_RUNNING)[0], None)
-    return icon(agent_icon_of(member, agent_type))
+    glyph, color = icon(agent_icon_of(member, agent_type))
+    # A qa agent whose state is not known yet is drawn without a colour.
+    if agent_type == "qa" and getattr(member, "qa_state", None) is None:
+        return glyph, None
+    return glyph, color

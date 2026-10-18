@@ -40,6 +40,14 @@ def test_model_icons_are_case_insensitive_and_use_harness_fallbacks() -> None:
     assert [icon_for(member) for member, _ in cases] == [expected for _, expected in cases]
 
 
+def test_icon_for_looks_up_the_icon_facts_selects(monkeypatch) -> None:
+    from atm_bd_console import facts
+
+    qa = AgentView("qa", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), "qa", qa_state=QaState.PASS)
+    monkeypatch.setattr(facts, "agent_icon_of", lambda member, step_kind: AgentIcon.OTHER)
+    assert icon_for(qa) == icon(AgentIcon.OTHER)
+
+
 def test_qa_icon_color_tracks_state_and_sanity_icon_is_fixed() -> None:
     qa = AgentView("qa", "idle", datetime(2026, 1, 1, tzinfo=UTC), 0, (), "qa")
     assert icon_for(qa) == ("\U000f029b", None)
