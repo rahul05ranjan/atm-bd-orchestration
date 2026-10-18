@@ -1,0 +1,37 @@
+schema_version = 1
+
+[project]
+name = "atm-bd"
+archive_prefix = "atm-bd"
+description = "ATM and Beads orchestration console"
+homepage = "https://github.com/randlee/atm-bd-orchestration"
+license = "MIT"
+workspace_toml = "apps/atm-bd-console/pyproject.toml"
+
+[[release_targets]]
+target = "x86_64-unknown-linux-gnu"
+os = "ubuntu-latest"
+archive = "tar.gz"
+
+[[python_packages]]
+artifact = "atm-bd"
+package = "atm-bd"
+manifest = "apps/atm-bd-console/pyproject.toml"
+module = "atm_bd_console"
+publish = "pypi"
+
+[[python_distributions]]
+name = "atm-bd"
+source = "apps/atm-bd-console"
+# Generic PEP517 label; the real backend is hatchling in apps/atm-bd-console/pyproject.toml.
+build_system = "setuptools"
+module_path = "apps/atm-bd-console/src/atm_bd_console"
+sdist = true
+wheels = ["ubuntu-latest"]
+
+[channels.pypi]
+workflow = "pypi-publish.yml"
+dispatch_inputs = { target = "production" }
+credential_rehearsal_inputs = { target = "testpypi" }
+test_repository = "testpypi"
+production_repository = "pypi"
