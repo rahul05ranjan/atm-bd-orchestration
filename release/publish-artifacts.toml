@@ -6,7 +6,7 @@ archive_prefix = "atm-bd"
 description = "ATM and Beads orchestration console"
 homepage = "https://github.com/randlee/atm-bd-orchestration"
 license = "MIT"
-workspace_toml = "apps/atm-bd-console/pyproject.toml"
+workspace_toml = "release-version.toml"
 
 [[release_targets]]
 target = "x86_64-unknown-linux-gnu"
