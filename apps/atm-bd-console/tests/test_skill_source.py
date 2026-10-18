@@ -127,7 +127,7 @@ def test_missing_release_artifact_fails_before_yield_with_app_version(monkeypatc
     monkeypatch.setattr(skill_source, "_run_git", run)
 
     with (
-        pytest.raises(skill_source.SkillSourceError, match=r"v0\.16\.0 is not installable by atm-bd 0\.16\.1:.*manifest.yaml"),
+        pytest.raises(skill_source.SkillSourceError, match=r"v0\.16\.0 is not installable by atm-bd 0\.17\.0:.*manifest.yaml"),
         skill_source.resolve_source(version="0.16.0"),
     ):
         raise AssertionError("invalid release tree must not be yielded")
