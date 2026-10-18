@@ -14,7 +14,7 @@ from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState, SprintState
 from atm_bd_console.model import _agent_views
-from atm_bd_console.render import _age, _error_text, dashboard, status_bar
+from atm_bd_console.render import _age, _error_text, dashboard, github_quotas, status_bar
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
@@ -40,6 +40,7 @@ from atm_bd_console.types import (
     Section,
     SectionRow,
     Snapshot,
+    Step,
     Task,
 )
 
@@ -128,7 +129,7 @@ def test_dashboard_renders_every_member_from_roster_fixture(fake_bin, monkeypatc
     fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
     members = atm_source.members("atm-dev", "team-lead")
     assert isinstance(members, Ok)
-    agents = _agent_views(members.value, (), None, Ok(()), NOW)
+    agents = _agent_views(members.value, (), None, Ok(()), NOW, "atm")
     rendered = dashboard(replace(snapshot(), agents=agents, errors=(), sections=(), sent=()), 120, 40)
 
     for name, glyph, style in (
@@ -181,6 +182,8 @@ def test_long_titles_with_wide_chars_and_emoji_clip_at_80_and_120() -> None:
         assert all(cell_len(line) <= width for line in lines), width
         assert any(line.endswith("…") for line in lines), width
         assert any("\U000f051f💎 long-title" in line and "❗bh:" in line for line in lines), width
+        row = next(line for line in lines if "long-title" in line)
+        assert row.startswith(" \U000f051f💎 long-title"), width
 
     assert any("💎" in line for line in dashboard(value, 120, 40).plain.splitlines())
 
@@ -219,7 +222,7 @@ def test_dispatch_task_uses_bead_title_or_plain_first_line(known_step: bool, des
     task = Task(task_id, "arch-ctm", "active", 0, NOW, NOW, description)
     step = replace(STEP, bead_id=task_id, kind="dev", title=title, top_epic="atm-phase-bi", tag="phase-bi")
     phase = Phase("atm-phase-bi", "phase-bi", "Phase BI", False, (), (step,) if known_step else (), ())
-    agents = _agent_views((Member("arch-ctm", "active", NOW),), (task,), phase, Ok(()), NOW)
+    agents = _agent_views((Member("arch-ctm", "active", NOW),), (task,), phase, Ok(()), NOW, "atm")
     expected = title if known_step else summary
     assert agents[0].rows[0].description == expected
     value = replace(snapshot(), agents=agents, errors=(), sections=(), sent=())
@@ -239,22 +242,53 @@ def test_status_bar_formats_and_cell_width() -> None:
 
     def check() -> None:
         expected = (FIXTURES / "render" / "status-bar-ok.txt").read_text().rstrip("\n")
-        assert status_bar(value, 120).plain == expected + " | lead ·fenix"
+        assert status_bar(value, 200).plain == "gh core ?/? · graphql ?/? · reset --:-- | " + expected.replace(" | ", " | gh poll 600s / 50% | ", 1) + " | lead ·fenix"
         assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain == (
-            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+            "gh: off | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
-        assert status_bar(failed, 120).plain == (
-            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+        assert status_bar(failed, 200).plain == (
+            "gh core ?/? · graphql ?/? · reset --:-- | gh: graphql ⛔ timeout 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
-        assert status_bar(truncated_ok, 120).plain == (
-            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+        assert status_bar(truncated_ok, 200).plain == (
+            "gh core ?/? · graphql ?/? · reset --:-- | gh: graphql ✅ 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         for width in (80, 120):
             assert cell_len(status_bar(value, width).plain) <= width
             assert cell_len(status_bar(failed, width).plain) <= width
 
+    pacific_test(check)
+
+
+def test_status_bar_reports_paused_quota_and_local_reset() -> None:
+    def check() -> None:
+        reset = datetime(2026, 10, 14, 15, 14, tzinfo=UTC)
+        gh = replace(GhStatus("graphql", False, None, NOW, False), paused=True,
+                     quota_remaining=2450, quota_limit=5000, quota_reset=reset,
+                     poll_interval_s=120, quota_threshold=50)
+        text = status_bar(replace(snapshot(), gh=gh), 160).plain
+        assert "GitHub paused: 2450/5000 graphql remaining, below 50 percent, resets 08:14" in text
+        assert "gh poll 120s / 50%" in text
+        assert "graphql 2450/5000 ⏸ · reset 08:14" in status_bar(replace(snapshot(), gh=gh), 80).plain
+    pacific_test(check)
+
+
+def test_both_quotas_local_earliest_reset_threshold_and_staleness() -> None:
+    def check() -> None:
+        gh = replace(GhStatus("rest", True, None, NOW, False),
+                     core_remaining=4999, core_limit=5000, core_reset=NOW + timedelta(hours=2),
+                     graphql_remaining=2310, graphql_limit=5000, graphql_reset=NOW + timedelta(hours=1),
+                     quota_at=NOW, poll_interval_s=600)
+        expected = "gh core 4999/5000 · graphql 2310/5000 ⏸ · reset 15:04"
+        assert github_quotas(gh, NOW + timedelta(seconds=600)) == expected
+        assert github_quotas(gh, NOW + timedelta(seconds=601)) == expected + " · age 10m"
+        assert status_bar(replace(snapshot(), gh=gh), 80).plain.startswith(expected)
+        assert "3/9" in status_bar(replace(snapshot(), gh=gh, metrics=Metrics(3, 9, 33, 0)), 120).plain
+        limited = replace(gh, graphql_remaining=4000, paused=True, rate_limited=True)
+        assert "core 4999/5000 ⏸ · graphql 4000/5000" in github_quotas(limited, NOW)
+        equal = replace(gh, graphql_remaining=2500)
+        assert "⏸" not in github_quotas(equal, NOW)
     pacific_test(check)
 
 
@@ -342,3 +376,48 @@ def test_stopped_snapshot_renders_unknown_bead_status_icon() -> None:
 
     assert "bh-6.qa" in rendered
     assert "? unknown" in rendered
+
+
+def _single_row_dashboard(step_value: Step, width: int) -> list[str]:
+    task = Task(step_value.bead_id, "cipher", "active", 0, NOW, NOW, "desc")
+    phase = Phase(step_value.top_epic or "", "phase-bi", "Phase BI", False, (), (step_value,), ())
+    agents = _agent_views((Member("cipher", "active", NOW),), (task,), phase, Ok(()), NOW, "atm")
+    value = replace(snapshot(), agents=agents, errors=(), sections=(), sent=())
+    return dashboard(value, width, 40).plain.splitlines()
+
+
+@pytest.mark.parametrize("width", (60, 100, 160))
+def test_agent_row_cuts_only_the_title_to_pane_width(width: int) -> None:
+    title = ("fit the title " * 30)[:300]
+    step = replace(STEP, bead_id="atm-bi-6.group-dev", kind="dev", sprint="bi-6", title=title, tag="phase-bi",
+                   top_epic="atm-phase-bi", carry_forward=None)
+    row = next(line for line in _single_row_dashboard(step, width) if "bi-6.group-dev" in line)
+
+    assert cell_len(row) <= width
+    assert row.endswith("…")
+    assert "0s bi-6: fit the title" in row
+    assert row.startswith(" \U000f051f💎 bi-6.group-dev"), width
+
+
+def test_agent_row_that_fits_is_unchanged_by_pane_width() -> None:
+    step = replace(STEP, bead_id="atm-bi-6.group-dev", kind="dev", sprint="bi-6", title="Fix the row prefix",
+                   tag="phase-bi", top_epic="atm-phase-bi", carry_forward=None)
+    narrow = next(line for line in _single_row_dashboard(step, 100) if "bi-6.group-dev" in line)
+    wide = next(line for line in _single_row_dashboard(step, 240) if "bi-6.group-dev" in line)
+
+    assert narrow == wide
+    assert narrow.endswith("bi-6: Fix the row prefix")
+
+
+def test_agent_row_prefix_for_a_fix_step_is_its_bead_short_id_not_the_phase_tag() -> None:
+    fix = replace(STEP, bead_id="atm-phase-bi.10", kind="fix", sprint=None, sprint_bead=None, carry_forward=None,
+                  title="Fix the row prefix", tag="phase-bi", top_epic="atm-phase-bi")
+    phase = Phase("atm-phase-bi", "phase-bi", "Phase BI", False, (), (fix,), ())
+    task = Task("atm-phase-bi.10", "cipher", "active", 0, NOW, NOW, "desc")
+    agents = _agent_views((Member("cipher", "active", NOW),), (task,), phase, Ok(()), NOW, "atm")
+    value = replace(snapshot(), agents=agents, errors=(), sections=(), sent=())
+
+    assert agents[0].rows[0].tag == "phase-bi.10"
+    text = dashboard(value, 160, 40).plain
+    assert "phase-bi.10: Fix the row prefix" in text
+    assert "phase-bi: " not in text

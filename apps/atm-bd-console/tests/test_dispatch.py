@@ -96,6 +96,17 @@ def test_each_hold_is_flat_and_does_not_assign() -> None:
         assert reason in outcome.held[0].reason
 
 
+def test_a_step_already_tasked_or_in_progress_is_never_a_hold() -> None:
+    worktrees = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),)
+    remotes = (RemoteRef("sprint/bh-6", "abc123"),)
+    active = Task("atm-bh-6.group-qa", "solar", "active", 1, NOW, NOW, "qa")
+    tasked = dispatch(phase(step(ready=False)), (active,), worktrees, remotes, (), (), REPO, "fenix", NOW, dispatch_spec)
+    in_progress = dispatch(phase(step(status=SprintState.IN_PROGRESS, ready=False)), (), worktrees, remotes, (), (), REPO,
+                           "fenix", NOW, dispatch_spec)
+    assert tasked.held == () and tasked.actions == ()
+    assert in_progress.held == () and in_progress.actions == ()
+
+
 def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
     pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "abc123", CiState.FAIL_BUG, ("test",))
     seen: list[DispatchContext] = []
