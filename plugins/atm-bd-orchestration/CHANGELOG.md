@@ -4,6 +4,7 @@
 
 ### Changed
 - The command is now `atm-bd`: use `atm-bd console` for the dashboard and `atm-bd cron` for one tick. Existing users should run `uv tool uninstall atm-bd-console` before installing the new tool; the old executable is not an alias.
+- Runtime state, locks, snapshots, and logs start fresh under `.atm-bd/atm-bd/`; old state and logs are not migrated or read. After stopping the old console, `.atm-bd/atm-bd-console/` can be deleted if its contents are no longer needed.
 
 ## [0.16.0] - 2026-10-16
 
