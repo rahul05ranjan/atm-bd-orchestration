@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -101,11 +102,12 @@ def make_consumer(path: Path, installer, pkg_dir: Path = PLUGIN) -> Path:
 
 
 def consumer_files(root: Path) -> dict[str, bytes]:
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file() and ".git" not in path.relative_to(root).parts
-    }
+    files = {}
+    for path in root.rglob("*"):
+        if path.is_file() and ".git" not in path.relative_to(root).parts:
+            key = path.relative_to(root).as_posix()
+            files[re.sub(r"^\.backup/[^/]+/", ".backup/<run>/", key)] = path.read_bytes()
+    return files
 
 
 @pytest.fixture
@@ -189,8 +191,13 @@ def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path:
     assert any(call[0] == "plan_install" and call[1] == remote for call in fake.calls)
 
 
+@pytest.mark.parametrize(("flags", "subdir", "conflict"), [
+    ((), ".claude", False),
+    (("--codex",), ".codex", False),
+    (("--overwrite",), ".claude", True),
+], ids=["default", "codex", "overwrite"])
 def test_bundled_skill_matches_install_py_file_for_file_offline_with_legacy_owned_file(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, flags: tuple[str, ...], subdir: str, conflict: bool,
 ) -> None:
     module = load_bundled_installer()
     pkg_dir = tmp_path / "plugin"
@@ -201,12 +208,17 @@ def test_bundled_skill_matches_install_py_file_for_file_offline_with_legacy_owne
     legacy_file.write_text(json.dumps(legacy), encoding="utf-8")
     direct = make_consumer(tmp_path / "direct", module, pkg_dir)
     through_skill = make_consumer(tmp_path / "through-skill", module, pkg_dir)
+    if conflict:  # a modified shipped file: refused without --overwrite, backed up with it
+        for consumer in (direct, through_skill):
+            shipped = consumer / ".claude/agents/ceremony-qa.md"
+            shipped.parent.mkdir(parents=True, exist_ok=True)
+            shipped.write_bytes(b"locally modified\n")
     monkeypatch.setattr(skill, "_installer", lambda: module)
     monkeypatch.setattr(skill.skill_source, "bundled_directory", lambda: pkg_dir)
     monkeypatch.setattr(skill.skill_source, "_run_git", lambda *_: (_ for _ in ()).throw(AssertionError("network")))
 
-    assert module.main(["--dest", str(direct / ".claude")], pkg_dir=pkg_dir) == 0
-    assert skill.run(["--dest", str(through_skill)]) == 0
+    assert module.main(["--dest", str(direct / subdir), *flags], pkg_dir=pkg_dir) == 0
+    assert skill.run(["--dest", str(through_skill), *flags]) == 0
 
     assert consumer_files(through_skill) == consumer_files(direct)
 
