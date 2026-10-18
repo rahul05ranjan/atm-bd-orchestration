@@ -1,0 +1,200 @@
+name: Publish atm-bd
+
+on:
+  push:
+    branches: [fix/bi-4-publish-workflow]
+  workflow_dispatch:
+    inputs:
+      production:
+        description: Publish the previously rehearsed files to PyPI
+        type: boolean
+        default: false
+      rehearsal_run_id:
+        description: Successful rehearsal run ID (production only)
+        type: string
+      go_ahead_comment_id:
+        description: PR 276 comment ID containing Rand's verbatim go-ahead (production only)
+        type: string
+      go_ahead_text:
+        description: Exact verbatim go-ahead in that comment (production only)
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    if: github.event_name == 'push' || !inputs.production
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v5
+      - name: Build and inspect both distributions
+        run: |
+          set -euo pipefail
+          uv build apps/atm-bd-console --out-dir "$RUNNER_TEMP/dist"
+          uvx twine check "$RUNNER_TEMP"/dist/*
+          python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+          import tarfile
+          import zipfile
+
+          path = pathlib.Path(sys.argv[1])
+          wheels = list(path.glob('*.whl'))
+          sdists = list(path.glob('*.tar.gz'))
+          assert len(wheels) == len(sdists) == 1
+          with zipfile.ZipFile(wheels[0]) as archive:
+              assert any('atm_bd_console/_skills/install.py' in name for name in archive.namelist())
+          with tarfile.open(sdists[0]) as archive:
+              assert any('atm_bd_console/_skills/install.py' in name for name in archive.getnames())
+          for item in wheels + sdists:
+              print(f'{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/dist/*
+          if-no-files-found: error
+          retention-days: 90
+
+  testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/dist
+      - name: Check production project availability before rehearsal
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' https://pypi.org/pypi/atm-bd/json)"
+          test "$status" = 404
+      - name: Publish rehearsal
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: uv publish --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ "$RUNNER_TEMP"/dist/*
+      - name: Verify published rehearsal files
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import tomllib
+          import urllib.request
+
+          with open('apps/atm-bd-console/pyproject.toml', 'rb') as source:
+              version = tomllib.load(source)['project']['version']
+          files = list(pathlib.Path(sys.argv[1]).iterdir())
+          with urllib.request.urlopen(f'https://test.pypi.org/pypi/atm-bd/{version}/json') as response:
+              uploaded = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
+          assert len(files) == 2
+          assert {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files} == uploaded
+          PY
+      - name: Install from TestPyPI and exercise entry points
+        env:
+          UV_TOOL_DIR: ${{ github.workspace }}/../rehearsal-tools
+          UV_TOOL_BIN_DIR: ${{ github.workspace }}/../rehearsal-bin
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("apps/atm-bd-console/pyproject.toml", "rb"))["project"]["version"])')"
+          uv tool install --default-index https://pypi.org/simple --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match "atm-bd==$version"
+          "$UV_TOOL_BIN_DIR/atm-bd" --help
+          "$UV_TOOL_BIN_DIR/atm-bd" console --help
+          "$UV_TOOL_BIN_DIR/atm-bd" skill --help
+          "$UV_TOOL_BIN_DIR/atm-bd" cron --help
+          test ! -e "$UV_TOOL_BIN_DIR/atm-bd-console"
+          ATM_BD_CONSOLE_BIN="$UV_TOOL_BIN_DIR/atm-bd" uv run --frozen --project apps/atm-bd-console pytest -q apps/atm-bd-console/tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick
+      - name: Install bundled skill without network
+        env:
+          UV_TOOL_BIN_DIR: ${{ github.workspace }}/../rehearsal-bin
+        run: |
+          set -euo pipefail
+          python3 -m pip install pydantic pyyaml 'sc-compose==1.7.0'
+          asset=sc-compose_1.7.0_x86_64-unknown-linux-gnu.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$asset" "https://github.com/randlee/sc-compose/releases/download/v1.7.0/$asset"
+          echo "5e2ffeb47072b26c47a44bfcc0d7068d0dfb8d5742feecc309fc535dab2e1c84  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/sc-compose" "$RUNNER_TEMP/skill-target"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/sc-compose"
+          bin="$(find "$RUNNER_TEMP/sc-compose" -type f -name sc-compose | head -n 1)"
+          test -n "$bin"
+          install -m 0755 "$bin" "$UV_TOOL_BIN_DIR/sc-compose"
+          git -C "$RUNNER_TEMP/skill-target" init -q
+          sudo unshare --net --setgid "$(id -g)" --setuid "$(id -u)" env PATH="$UV_TOOL_BIN_DIR:$PATH" HOME="$HOME" "$UV_TOOL_BIN_DIR/atm-bd" skill --dest "$RUNNER_TEMP/skill-target" | tee "$RUNNER_TEMP/skill-output"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("apps/atm-bd-console/pyproject.toml", "rb"))["project"]["version"])')"
+          grep -F "bundled @ $GITHUB_SHA (atm-bd $version)" "$RUNNER_TEMP/skill-output"
+          test -f "$RUNNER_TEMP/skill-target/.claude/skills/atm-bd-orchestration/SKILL.md"
+
+  pypi:
+    # Dispatch only after the lead confirms readiness following sanity and QA.
+    # Rand's conditional verbatim go-ahead must be present on PR 276.
+    # The pypi environment has no required reviewer as of 2026-10-18.
+    if: github.event_name == 'workflow_dispatch' && inputs.production
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - name: Verify rehearsal and recorded authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REHEARSAL_RUN: ${{ inputs.rehearsal_run_id }}
+          COMMENT_ID: ${{ inputs.go_ahead_comment_id }}
+          GO_AHEAD: ${{ inputs.go_ahead_text }}
+        run: |
+          set -euo pipefail
+          [[ "$REHEARSAL_RUN" =~ ^[0-9]+$ && "$COMMENT_ID" =~ ^[0-9]+$ ]]
+          test "$GO_AHEAD" = 'if testpypi works, you are free to publish to pypi'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REHEARSAL_RUN" | jq -e '.path == ".github/workflows/publish.yml" and .event == "push" and .head_branch == "fix/bi-4-publish-workflow" and .conclusion == "success"' >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/issues/276/comments?per_page=100" --paginate | jq -se --arg id "$COMMENT_ID" --arg text "$GO_AHEAD" 'any(.[][]; (.id | tostring) == $id and .user.login == "randlee" and (.body | contains($text)))' >/dev/null
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: atm-bd-distributions
+          path: ${{ runner.temp }}/dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.rehearsal_run_id }}
+      - name: Verify rehearsed file hashes and production name availability
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/dist" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          files = sorted(pathlib.Path(sys.argv[1]).iterdir())
+          assert len(files) == 2
+          version = next(f.name.removeprefix('atm_bd-').split('-')[0] for f in files if f.suffix == '.whl')
+          with urllib.request.urlopen(f'https://test.pypi.org/pypi/atm-bd/{version}/json') as response:
+              rehearsed = {item['filename']: item['digests']['sha256'] for item in json.load(response)['urls']}
+          assert {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files} == rehearsed
+          try:
+              urllib.request.urlopen('https://pypi.org/pypi/atm-bd/json')
+          except urllib.error.HTTPError as error:
+              assert error.code == 404
+          else:
+              raise SystemExit('PyPI project already exists; stop for review')
+          PY
+      - name: Publish the exact rehearsed files
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish "$RUNNER_TEMP"/dist/*
