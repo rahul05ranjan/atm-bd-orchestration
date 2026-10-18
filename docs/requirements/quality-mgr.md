@@ -8,7 +8,7 @@ Sources: `skills/atm-bd-orchestration/`: `roles/quality-mgr.md`, `SKILL.md`, tem
 
 1. Stay long-running; the role wins over the repo's `.claude/agents/quality-mgr.md` where they differ.
 2. Treat every open task assigned to you as live and run them all at once, each with its own background reviewers: one active ATM task, the others claimed, worked and closed without starting; close each when its verdict is ready, in any order. The task close is the report; it returns to the task assigner.
-3. Cannot run: reuse a workflow class bead for the failure signature (append task, head, command, evidence), else report the signature to the task assigner; no per-task bead; return the bead open, unassigned, and close the task `refused`.
+3. Cannot run: refuse with the failure in `reason_md` (task, head, command, evidence), else report the signature to the task assigner; no per-task bead; return the bead open, unassigned, and close the task `refused`.
 
 ### QA round (`qa-template`)
 
