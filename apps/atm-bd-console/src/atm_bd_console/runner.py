@@ -10,7 +10,7 @@ from typing import Literal, Self
 from . import atm_bd, atm_source, beads_source, git_source, github_source, model
 from .dispatch import sprint_of, verification_reason
 from .enums import MergeState, SprintState
-from .log import TickLog, create_console_logger
+from .log import TickLog, create_console_logger, error_message
 from .result import Err, NotFound, Ok
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
@@ -58,9 +58,14 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore,
                 reported.append(replace(action, outcome=f"failed {result.error.kind}"))
             else:
                 reported.append(replace(action, outcome="sent"))
+        if isinstance(result, Err):
+            logger.mark_reported(result.error)
         logger.event(
             "action", effect=action.kind, recipient=action.to, task_ids=list(action.bead_ids),
-            outcome=reported[-1].outcome, error=asdict(result.error) if isinstance(result, Err) else None,
+            outcome=reported[-1].outcome,
+            level="error" if isinstance(result, Err) else "info",
+            message=error_message(asdict(result.error)) if isinstance(result, Err) else None,
+            error=asdict(result.error) if isinstance(result, Err) else None,
         )
     return tuple(reported), tuple(errors)
 
@@ -116,7 +121,7 @@ def _write_snapshot(store: StateStore, snapshot: Snapshot, logger: TickLog) -> S
     if isinstance(written, Ok):
         return snapshot
     previous_errors = len(logger.errors)
-    logger.event("error", source="snapshot.write", error=asdict(written.error))
+    logger.error(written.error, source="snapshot.write")
     logger.flush()
     return replace(snapshot, errors=(*snapshot.errors, written.error, *logger.errors[previous_errors:]))
 
@@ -184,7 +189,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     history_errors = () if isinstance(history, Ok) or isinstance(history.error, NotFound) else (history.error,)
     errors = (*snapshot.errors, *history_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
     for error in errors:
-        logger.event("error", error=asdict(error))
+        logger.error(error)
     logger.finish(actions=0)
     persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
@@ -206,7 +211,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         state_written = store.write_state(state)
         if isinstance(state_written, Err): snapshot = replace(snapshot, errors=(*snapshot.errors, state_written.error))
         for error in snapshot.errors:
-            logger.event("error", error=asdict(error))
+            logger.error(error)
         logger.finish(actions=0)
         persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
@@ -286,6 +291,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     attempted_at = cached_prs.attempted_at if cached_prs is not None else None
     github_due = (attempted_at is None or cached_prs is None or cached_prs.gh.mode != config.github
                   or now - attempted_at >= timedelta(seconds=config.github_poll_interval_s))
+    refresh_errors = []
     if config.github != "off" and (force_github or (due and github_due)):
         branch_groups = _branch_groups(phase.value, repo.value) if config.github == "rest" and isinstance(phase, Ok) else ()
         refreshed_prs, gh = _refresh_github(config, now, gh, branch_groups)
@@ -296,6 +302,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             prs_read_at = now
         elif cached_prs is None:
             prs_input = refreshed_prs
+        else:
+            refresh_errors.append(refreshed_prs.error)
         logger.event(
             "github_read", forced=force_github, outcome="paused" if gh.paused else "failed" if isinstance(refreshed_prs, Err) else "ok",
             error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None,
@@ -313,13 +321,13 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 )
     def persist(store: StateStore):
             reported, action_errors = _run_actions(config, actions, store, now, logger)
-            errors = [*store.load_errors, *action_errors]
+            errors = [*store.load_errors, *action_errors, *refresh_errors]
             durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
             reported_sent = (*state.sent, *reported)[-5:]
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs), attempted_at=attempted_at)), store.write_state(durable)):
                 if isinstance(written, Err): errors.append(written.error)
             for error in (*snapshot.errors, *errors):
-                logger.event("error", error=asdict(error))
+                logger.error(error)
             logger.finish(actions=len(actions))
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
