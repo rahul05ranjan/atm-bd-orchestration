@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from datetime import UTC, datetime
@@ -10,8 +11,10 @@ from .enums import SprintState
 from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeout, Unreachable
 from .types import DispatchSpec, Member, Task
 
-# Team resolution: every command passes `--team` from Config.team, so no command reads
-# the team from the ambient shell. `atm send` and `atm task assign` both accept `--team`.
+# Team and identity resolution: every command passes `--team` from Config.team and runs as
+# Config.lead (`ATM_IDENTITY` in the subprocess environment, `--as` where the subcommand takes
+# it), so no command reads either from the launching shell. `atm members` has no `--as`, and
+# a shell without `ATM_IDENTITY` made every roster read fail with "identity is not configured".
 TIMEOUT_S = 20
 TASK_KEYS = frozenset({"task_id", "assignee", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
@@ -26,16 +29,17 @@ def sprint_state_of(raw: str) -> SprintState:
 
 
 # Own runner: ATM sends stdin text and maps missing binaries or undecodable output to Unreachable.
-def _run(argv: list[str], stdin: str | None = None, timeout_s: int | None = None) -> Result[str]:
+def _run(argv: list[str], as_: str, stdin: str | None = None, timeout_s: int | None = None) -> Result[str]:
     timeout_s = TIMEOUT_S if timeout_s is None else timeout_s
+    env = {**os.environ, "ATM_IDENTITY": as_}
     try:
-        done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False, timeout=timeout_s)
+        done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False, timeout=timeout_s, env=env)
     except subprocess.TimeoutExpired:
         return Err(Timeout("timeout", tuple(argv), timeout_s, f"rerun `{' '.join(argv)}`, or pass a larger timeout"))
     except (OSError, UnicodeDecodeError) as error:
         return Err(Unreachable("unreachable", tuple(argv), str(error), f"install the atm CLI and put it on PATH, then rerun `{' '.join(argv)}`"))
     if done.returncode:
-        return Err(CommandFailed("command_failed", tuple(argv), done.returncode, done.stderr, f"run `{' '.join(argv)}` by hand and read its stderr"))
+        return Err(CommandFailed("command_failed", tuple(argv), done.returncode, done.stderr, f"run `ATM_IDENTITY={as_} {' '.join(argv)}` by hand and read its stderr"))
     return Ok(done.stdout)
 
 
@@ -64,8 +68,8 @@ def _task(index: int, item: dict, assigned: datetime, updated: datetime) -> Task
     return Task(item["task_id"], item["assignee"], item["state"], index, assigned, updated, item["description"])
 
 
-def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, ...]]:
-    result = _run(["atm", "members", "--team", team, "--json"], timeout_s=timeout_s)
+def members(team: str, as_: str, *, timeout_s: int | None = None) -> Result[tuple[Member, ...]]:
+    result = _run(["atm", "members", "--team", team, "--json"], as_, timeout_s=timeout_s)
     if isinstance(result, Err):
         return result
     fix = f"rerun `atm members --team {team} --json` and check it prints a JSON object with a members list"
@@ -83,11 +87,11 @@ def members(team: str, *, timeout_s: int | None = None) -> Result[tuple[Member, 
         return Err(ParseFailed("parse_failed", "atm members", str(error), fix))
 
 
-def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]]:
-    result = _run(["atm", "task", "list", "--all", "--json", "--team", team], timeout_s=timeout_s)
+def tasks(team: str, as_: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]]:
+    result = _run(["atm", "task", "list", "--all", "--json", "--team", team, "--as", as_], as_, timeout_s=timeout_s)
     if isinstance(result, Err):
         return result
-    fix = f"rerun `atm task list --all --json --team {team}` and check it prints a JSON list of task objects"
+    fix = f"rerun `atm task list --all --json --team {team} --as {as_}` and check it prints a JSON list of task objects"
     try:
         items = json.loads(result.value)
         if not isinstance(items, list):
@@ -107,7 +111,7 @@ def tasks(team: str, *, timeout_s: int | None = None) -> Result[tuple[Task, ...]
 
 
 def send(to: str, text: str, as_: str, team: str, *, timeout_s: int | None = None) -> Result[None]:
-    result = _run(["atm", "send", to, "--as", as_, "--team", team, "--stdin"], text, timeout_s)
+    result = _run(["atm", "send", to, "--as", as_, "--team", team, "--stdin"], as_, text, timeout_s)
     return result if isinstance(result, Err) else Ok(None)
 
 
@@ -117,7 +121,7 @@ def assign(agent: str, task_id: str, spec: DispatchSpec, as_: str, team: str, *,
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
             vars_file = Path(handle.name)
             json.dump(spec.vars, handle)
-        result = _run(["atm", "task", "assign", agent, "--as", as_, "--team", team, "--task-id", task_id, "--template", spec.template, "--vars", str(vars_file)], timeout_s=timeout_s)
+        result = _run(["atm", "task", "assign", agent, "--as", as_, "--team", team, "--task-id", task_id, "--template", spec.template, "--vars", str(vars_file)], as_, timeout_s=timeout_s)
         return result if isinstance(result, Err) else Ok(None)
     except (TypeError, ValueError) as error:
         return Err(ParseFailed("parse_failed", "dispatch vars", str(error), "use JSON-serializable template variables"))
