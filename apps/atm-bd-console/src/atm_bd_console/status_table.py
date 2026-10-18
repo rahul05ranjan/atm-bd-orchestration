@@ -9,7 +9,7 @@ from rich.text import Text
 
 from .enums import AgentIcon, CiState, PrState, SprintState
 from .facts import SprintFacts, sprint_facts
-from .icons import icon
+from .icons import RenderTarget, icon
 from .types import Snapshot
 
 StateCell = tuple[AgentIcon | SprintState, ...]
@@ -80,9 +80,9 @@ def markdown(values: tuple[StatusRow, ...]) -> str:
     result = ["| sprint | state | ci | pr |", "|---|:-:|:-:|---|"]
     for row in values:
         sprint = row.sprint.replace("\\", "\\\\").replace("|", "\\|")
-        state = "".join(icon(value)[0] for value in row.state)
-        ci = icon(row.ci)[0]
-        pr = icon(row.pr_state)[0]
+        state = "".join(icon(value, RenderTarget.MARKDOWN)[0] for value in row.state)
+        ci = icon(row.ci, RenderTarget.MARKDOWN)[0]
+        pr = icon(row.pr_state, RenderTarget.MARKDOWN)[0]
         if row.pr_number is not None and row.pr_state != PrState.UNKNOWN:
             label = f"#{row.pr_number}"
             pr += f" [{label}]({row.pr_url})" if row.pr_url else f" {label}"

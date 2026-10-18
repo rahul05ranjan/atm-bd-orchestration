@@ -12,6 +12,7 @@ from atm_bd_console.icons import (
     CI_ICONS,
     PR_ICONS,
     SPRINT_ICONS,
+    RenderTarget,
     icon,
     icon_for,
     merge_icon,
@@ -87,7 +88,7 @@ def test_qa_and_sanity_icons_override_harness_and_model(
 
 def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     tables = (SPRINT_ICONS, PR_ICONS, CI_ICONS)
-    glyphs = [glyph for table in tables for glyph, _ in table.values()]
+    glyphs = [entry.tui for table in tables for entry in table.values()]
     model_members = tuple(
         Member(f"claude-{model}", "active", None, "dev", model, "claude-code")
         for model in ("haiku", "sonnet", "opus", "fable", "unknown")
@@ -148,8 +149,10 @@ def test_enum_icon_tables_are_complete_and_exact():
     for enum, table, expected in ((AgentIcon, AGENT_ICONS, expected_agents), (SprintState, SPRINT_ICONS, expected_sprints),
                                   (CiState, CI_ICONS, expected_ci), (PrState, PR_ICONS, expected_prs)):
         assert set(table) == set(enum)
-        assert table == expected
+        assert {key: (entry.tui, entry.colour) for key, entry in table.items()} == expected
+        assert all(entry.markdown and entry.markdown == entry.tui for entry in table.values())
         assert all(icon(member) == expected[member] for member in enum)
+        assert all(icon(member, RenderTarget.MARKDOWN) == expected[member] for member in enum)
 
 
 @pytest.mark.parametrize(
