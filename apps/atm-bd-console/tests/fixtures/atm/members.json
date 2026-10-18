@@ -1,9 +1,9 @@
 {
   "members": [
-  {"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z"},
-  {"name": "boris", "state": "idle", "state_changed_at": "2026-10-15T09:01:00Z"},
-  {"name": "cy", "state": "offline", "state_changed_at": "2026-10-15T09:02:00Z"},
-  {"name": "dara", "state": "blocked", "state_changed_at": "2026-10-15T09:03:00Z"},
-  {"name": "eli", "state": "unexpected", "state_changed_at": "2026-10-15T09:04:00Z"}
+  {"name": "aria", "state": "active", "state_changed_at": "2026-10-15T09:00:00Z", "agent_type": "dev", "model": "GPT-5.6-Sol", "harness": "codex-cli"},
+  {"name": "boris", "state": "idle", "state_changed_at": "2026-10-15T09:01:00Z", "agent_type": "dev", "model": "Claude-Opus-5-5", "harness": "claude-code"},
+  {"name": "cy", "state": "offline", "state_changed_at": "2026-10-15T09:02:00Z", "agent_type": "sanity", "model": "", "harness": ""},
+  {"name": "dara", "state": "blocked", "state_changed_at": "2026-10-15T09:03:00Z", "agent_type": "qa", "model": "", "harness": ""},
+  {"name": "eli", "state": "unexpected", "state_changed_at": "2026-10-15T09:04:00Z", "agent_type": "dev", "model": "GPT-5.6-Terra", "harness": "codex-cli"}
   ]
 }

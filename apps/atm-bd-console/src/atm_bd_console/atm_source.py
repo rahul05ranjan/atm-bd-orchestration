@@ -44,7 +44,12 @@ def _time(value: object) -> datetime | None:
 
 def _member(item: dict, time: datetime | None) -> Member:
     state = item.get("state")
-    return Member(item["name"], state if state in MEMBER_STATES else "unknown", time)
+    return Member(
+        item["name"],
+        state if state in MEMBER_STATES else "unknown",
+        time,
+        *(item.get(field) if isinstance(item.get(field), str) else None for field in ("agent_type", "model", "harness")),
+    )
 
 
 def _task(index: int, item: dict, assigned: datetime, updated: datetime) -> Task:

@@ -72,6 +72,7 @@ def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path, dir
     checkout = tmp_path / "checkout"
     copied = checkout / "apps" / "atm-bd-console"
     copytree(CONSOLE, copied, ignore=ignore_patterns(".venv", "__pycache__", "_build_identity.py"))
+    copytree(CONSOLE.parents[1] / "plugins" / "atm-bd-orchestration", checkout / "plugins" / "atm-bd-orchestration")
     (checkout / ".gitignore").write_text("__pycache__/\n")
     git(checkout, "init")
     git(checkout, "config", "user.email", "test@example.com")

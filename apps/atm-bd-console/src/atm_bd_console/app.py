@@ -24,36 +24,47 @@ from textual.widgets.option_list import Option
 
 from . import prs, render, status
 from .build import display_identity, identity
+from .icons import SPRINT_STATE_ICONS
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
-from .types import INITIAL_STATE, Config, Snapshot, SprintView, State, StepFn
+from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 
 
-def status_header(snapshot: Snapshot) -> str:
-    """sprints N/M · ✅ x · 🌀 y · ⏳ z; ⏳ counts every sprint neither closed nor in progress."""
+def status_header(snapshot: Snapshot) -> Text:
+    """Show sprint counts using the same status icons as the DAG."""
     states = [sprint.state for sprint in snapshot.sprints]
     closed, running = states.count("closed"), states.count("in_progress")
     waiting = len(states) - closed - running
-    return f"sprints {closed}/{len(states)} · ✅ {closed} · 🌀 {running} · ⏳ {waiting}"
+    result = Text(f"sprints {closed}/{len(states)} · ")
+    for index, (state, count) in enumerate((("closed", closed), ("in_progress", running), ("not_ready", waiting))):
+        if index:
+            result.append(" · ")
+        glyph, style = SPRINT_STATE_ICONS[state]
+        result.append(glyph, style=style)
+        result.append(f" {count}")
+    return result
 
 
-def sprint_steps(sprint: SprintView) -> Text:
+def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text:
     lines = [Text(f"{sprint.id}  {sprint.title}", no_wrap=True)]
     for step in sprint.steps:
         if step.kind in STEP_KINDS:
-            lines.append(Text(f"  {step.kind:<6} {step.bead_id}  {step.status}  {step.assignee or 'unassigned'}",
-                              no_wrap=True))
+            line = Text(f"  {step.kind:<6} {step.bead_id}  {step.status}  ")
+            member = next((agent for agent in agents if agent.name == step.assignee), None)
+            line.append_text(render.render_agent(step.assignee, member))
+            line.no_wrap = True
+            lines.append(line)
     return Text("\n").join(lines)
 
 
 def _lock_message(error: Error) -> str:
     if error.kind == "lock_held":
         age = "no snapshot" if error.snapshot_age_s is None else f"snapshot age {error.snapshot_age_s}s"
-        return f"atm-bd-console: lock held by a running console ({age}); {error.fix}"
-    return f"atm-bd-console: {error.kind}: {error.path}: {error.message}; {error.fix}"
+        return f"atm-bd console: lock held by a running console ({age}); {error.fix}"
+    return f"atm-bd console: {error.kind}: {error.path}: {error.message}; {error.fix}"
 
 
 class GraphText(Static):
@@ -166,7 +177,7 @@ class ConsoleApp(App[int]):
 
     @property
     def build_line(self) -> str:
-        return f"atm-bd-console {display_identity()}"
+        return f"atm-bd console {display_identity()}"
 
     def _place_build_line(self) -> None:
         """Right-justify the build line on the tab-header row; hide it when it would cover a tab label."""
@@ -322,7 +333,14 @@ class ConsoleApp(App[int]):
         sprints = self.query_one("#sprints", OptionList)
         highlighted = sprints.highlighted
         sprints.clear_options()
-        sprints.add_options([Option(f"{sprint.id}  {sprint.title}", id=sprint.id) for sprint in snapshot.sprints])
+        options = []
+        for sprint in snapshot.sprints:
+            glyph, style = SPRINT_STATE_ICONS[sprint.state]
+            label = Text()
+            label.append(glyph, style=style)
+            label.append(f" {sprint.id}  {sprint.title}")
+            options.append(Option(label, id=sprint.id))
+        sprints.add_options(options)
         if highlighted is not None and highlighted < len(snapshot.sprints):
             sprints.highlighted = highlighted
         elif snapshot.sprints:
@@ -341,7 +359,9 @@ class ConsoleApp(App[int]):
         if self.snapshot is None:
             return
         sprint = next((value for value in self.snapshot.sprints if value.id == sprint_id), None)
-        self.query_one("#sprint-steps-text", Static).update(sprint_steps(sprint) if sprint else "")
+        self.query_one("#sprint-steps-text", Static).update(
+            sprint_steps(sprint, self.snapshot.agents) if sprint else ""
+        )
 
     def on_resize(self) -> None:
         self.call_after_refresh(self._place_build_line)
@@ -378,7 +398,9 @@ class ConsoleApp(App[int]):
             self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
             self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
             self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
-            header = Text(status_header(snapshot), no_wrap=True, overflow="ellipsis")
+            header = status_header(snapshot)
+            header.no_wrap = True
+            header.overflow = "ellipsis"
             if self.status_error is not None:
                 header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
             header.truncate(width, overflow="ellipsis")
@@ -391,8 +413,12 @@ class ConsoleApp(App[int]):
             self.query_one("#status-header", Static).update(header)
         log_path = str(self.diagnostics_path)
         details = "\n".join(self.diagnostics[-20:]) or "No errors recorded."
+        agent_details = []
+        if self.snapshot is not None:
+            agent_details = [render.render_agent(agent.name, agent).plain for agent in self.snapshot.agents]
+        agents = "Agents: " + ", ".join(agent_details) if agent_details else "Agents: none"
         self.query_one("#diagnostics-text", Static).update(
-            f"Build: {identity()}\nLog: {log_path}\nInput trace: {self.input_log_path}\n\n{details}")
+            f"Build: {identity()}\nLog: {log_path}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]

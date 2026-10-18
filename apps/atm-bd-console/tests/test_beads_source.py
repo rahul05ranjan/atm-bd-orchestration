@@ -40,6 +40,8 @@ def beads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                             ("atm-bh-6", "atm-phase-bh")):
         raw = {"id": bead_id, "title": bead_id, "status": "closed", "labels": ["phase-bh"],
                "created_at": "2026-10-14T20:00:00-07:00", "closed_at": "2026-10-15T01:00:00Z"}
+        if bead_id == "atm-bh-4":
+            raw["close_reason"] = "PASS all checks"
         if parent:
             raw["parent"] = parent
         (store / f"{bead_id}.json").write_text(json.dumps(raw))
@@ -56,6 +58,7 @@ def test_three_level_chain_is_three_shows(fake_bin, beads: Path) -> None:
     assert set(found) == {*(step.id for step in steps), "atm-bh-4.group", "atm-bh-4", "atm-phase-bh"}
     assert (found["atm-bh-4"].parent, found["atm-bh-4"].status) == ("atm-phase-bh", "closed")
     assert found["atm-bh-4"].closed_at == datetime(2026, 10, 15, 1, 0, tzinfo=UTC)
+    assert found["atm-bh-4"].close_reason == "PASS all checks"
     calls = fake_bin.argv()
     # One show per level; the two steps' shared parent is shown once.
     assert calls == [

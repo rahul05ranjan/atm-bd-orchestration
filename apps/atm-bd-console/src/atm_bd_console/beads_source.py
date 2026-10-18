@@ -13,7 +13,13 @@ def _bead(raw: dict[str, Any]) -> Bead:
     def when(name: str) -> datetime | None:
         value = raw.get(name)
         return datetime.fromisoformat(value).astimezone(UTC) if value else None
-    return Bead(raw["id"], raw["title"], raw["status"], tuple(raw.get("labels", ()),), raw.get("parent"), tuple(raw.get("blocked_by", ())), raw.get("assignee"), raw.get("metadata", {}), when("created_at") or datetime.now(UTC), when("claimed_at"), when("closed_at"))
+    close_reason = raw.get("close_reason")
+    return Bead(
+        raw["id"], raw["title"], raw["status"], tuple(raw.get("labels", ())), raw.get("parent"),
+        tuple(raw.get("blocked_by", ())), raw.get("assignee"), raw.get("metadata", {}),
+        when("created_at") or datetime.now(UTC), when("claimed_at"), when("closed_at"),
+        close_reason if isinstance(close_reason, str) else None,
+    )
 
 
 def _run(argv: list[str]) -> Result[tuple[Bead, ...]]:
@@ -23,7 +29,7 @@ def _run(argv: list[str]) -> Result[tuple[Bead, ...]]:
     try:
         raw = json.loads(completed.value.stdout)
         return Ok(tuple(_bead(item) for item in raw))
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
 
 

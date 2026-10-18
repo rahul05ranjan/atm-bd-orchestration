@@ -473,6 +473,8 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     qa = _bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.group-dev", "round": 1, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
     got = step(qa, {}).value
     assert (got.kind, got.checked_bead, got.qa_round, got.sprint_bead, got.carry_forward) == ("qa", "atm-bh-4.group-dev", 1, "atm-bh-4", None)
+    closed_qa = replace(qa, close_reason="PASS: 0 findings filed")
+    assert step(closed_qa, {}).value.close_reason == "PASS: 0 findings filed"
     fix_qa = _bead("atm-bh-4.f1-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.f1", "round": 2, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
     fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",), {"round": 1})
     fixed = step(fix_qa, {fix.id: fix}).value
