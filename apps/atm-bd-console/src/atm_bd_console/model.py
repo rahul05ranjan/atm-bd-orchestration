@@ -148,7 +148,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         remotes=remotes,
         batch_due=batch_due,
     )
-    agents = _agent_views(members, tasks, phase, inputs.task_beads, now)
+    agents = _agent_views(members, tasks, phase, inputs.task_beads, now, inputs.repo.bead_prefix)
     sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix, agents)
     sections = (Section("Held", held),) if held else ()
     snapshot = Snapshot(
@@ -221,9 +221,18 @@ def _task_summary(description: str) -> str:
     return next((" ".join(line.split()) for line in text.splitlines() if line.strip()), "")
 
 
+def _row_prefix(step: Step, bead_prefix: str) -> str:
+    """The agent row's prefix: the fix bead's short id for a fix or fix-QA step, else its sprint's short id. Never the phase tag."""
+    if step.kind == "fix":
+        return short_id(step.bead_id, bead_prefix)
+    if step.kind == "qa" and step.carry_forward:
+        return short_id(step.carry_forward, bead_prefix)
+    return short_id(step.sprint or step.sprint_bead or "", bead_prefix)
+
+
 def _agent_views(
     members, tasks: tuple[Task, ...], phase: Phase | None,
-    task_beads: Result[tuple[Bead, ...]], now: datetime,
+    task_beads: Result[tuple[Bead, ...]], now: datetime, bead_prefix: str,
 ) -> tuple[AgentView, ...]:
     steps = {step.bead_id: step for step in phase.steps} if phase else {}
     root_id = phase.root_id if phase else None
@@ -261,7 +270,7 @@ def _agent_views(
                 state="running" if task.state == "active" else "queued",
                 kind=kind,
                 difficulty=step.difficulty if step else None,
-                tag=step.tag if step else "",
+                tag=_row_prefix(step, bead_prefix) if step else "",
                 marker=marker,
                 age_s=max(0, int((now - task.state_since).total_seconds())),
                 description=step.title if step else _task_summary(task.description),
