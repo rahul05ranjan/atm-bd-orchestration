@@ -110,7 +110,7 @@ CONSOLE_INSTALL = (
 )
 TOOL_INSTALLS = {
     "atm": "brew install randlee/tap/atm",
-    "atm-bd-console": CONSOLE_INSTALL,
+    "atm-bd": CONSOLE_INSTALL,
     "bd": "brew install beads",
     "git": "brew install git",
     "jq": "brew install jq",
@@ -453,7 +453,7 @@ def check_tools() -> None:
         raise InstallError(f"sc-compose is not on PATH; install {sc_compose_upgrade()} and rerun")
     cli = subprocess.run(["sc-compose", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     cli_version = (cli.stdout.split() or [""])[-1]
-    if not sc_compose_supported(cli_version):
+    if cli.returncode != 0 or not sc_compose_supported(cli_version):
         raise InstallError(f"sc-compose CLI is {cli.stdout.strip() or cli.stderr.strip()}, {needs}; "
                            f"install {sc_compose_upgrade()} and rerun")
     # validate-plan runs scripts/bead_schema.py (pydantic) and the scripts render with the
@@ -471,6 +471,16 @@ def check_tools() -> None:
     if wheel_version != cli_version:
         raise InstallError(f"the sc-compose CLI is {cli_version} and the python3 wheel is {wheel_version}; they must "
                            f"be the same version; install {sc_compose_upgrade()} and rerun")
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        import sc_compose  # noqa: F401
+        interpreter_version = version("sc-compose")
+    except (ImportError, PackageNotFoundError) as exc:
+        raise InstallError(f"the installer interpreter {sys.executable} cannot load sc-compose; "
+                           f"upgrade the app or install sc-compose=={cli_version} in the host interpreter") from exc
+    if interpreter_version != cli_version:
+        raise InstallError(f"the sc-compose CLI is {cli_version} but the installer interpreter wheel is "
+                           f"{interpreter_version}; upgrade the app or host to sc-compose=={cli_version} and rerun")
     for name, floor in declared_tool_requirements():
         _check_required_tool(name, floor, TOOL_INSTALLS[name])
 

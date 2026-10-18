@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import threading
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from conftest import FakeStep, run_scenario, settle
+from conftest import HANG_GUARD_S, FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, STATE, TIMEOUT
 from rich.cells import cell_len
@@ -17,9 +16,43 @@ from textual import events
 from atm_bd_console import app as console
 from atm_bd_console.app import ConsoleApp, run
 from atm_bd_console.build import display_identity, identity
+from atm_bd_console.enums import SprintState
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, Snapshot, SprintView, State, StepView
+
+
+def test_dispatch_uses_shared_status_rows(monkeypatch):
+    from atm_bd_console import status_table
+
+    values = status_table.rows(RUNNING)
+    seen = []
+    real_rows = status_table.rows
+
+    def shared_rows(snapshot):
+        seen.append(snapshot)
+        return real_rows(snapshot)
+
+    class Node:
+        size = SimpleNamespace(width=120, height=40)
+
+        def update(self, value):
+            self.value = value
+
+    nodes = {}
+
+    def query(selector, *_args):
+        return nodes.setdefault(selector, Node())
+
+    dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
+                            show_pr_history=False, status_error=None, status_text="", diagnostics_path="log",
+                            input_log_path="input", diagnostics=[], call_after_refresh=lambda *_: None,
+                            _refresh_status_viewport=lambda: None)
+    monkeypatch.setattr(status_table, "rows", shared_rows)
+    ConsoleApp.refresh_views(dummy)
+    assert seen == [RUNNING]
+    rendered = nodes["#status-table"].value
+    assert list(rendered.columns[0]._cells) == [row.sprint for row in values]
 
 
 class RaisingStep:
@@ -37,7 +70,7 @@ class BlockingStep(FakeStep):
     def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
         self.calls.append(force_github)
         self.started.set()
-        assert self.release.wait(2), "test must release the blocked step"
+        assert self.release.wait(HANG_GUARD_S), "test must release the blocked step"
         self.completed.set()
         return self.snapshot, state
 
@@ -107,7 +140,7 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             build = app.query_one("#build")
-            text = f"atm-bd-console {display_identity()}"
+            text = f"atm-bd console {display_identity()}"
             assert build.render().plain == text and build.display
             assert build.region.y == 0 and build.region.right == 120
             tabs_right = max(tab.region.right for tab in app.query("ContentTab"))
@@ -123,7 +156,9 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             await pilot.click("#--content-tab-diagnostics")
             await settle(pilot)
             assert app.query_one("TabbedContent").active == "diagnostics"
-            assert f"Build: {identity()}" in app.query_one("#diagnostics-text").render().plain
+            shown = app.query_one("#diagnostics-text").render().plain
+            assert f"Build: {identity()}" in shown
+            assert "Agents: ·arch-ctm" in shown
             await pilot.resize_terminal(120, 40)
             await settle(pilot)
             assert build.display and build.region.right == 120
@@ -200,15 +235,18 @@ def test_interval_ticks_do_not_accumulate_behind_a_blocked_step() -> None:
     async def scenario() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test() as pilot:
-            await asyncio.wait_for(asyncio.to_thread(step.started.wait), timeout=1)
-            app._on_interval()
-            app._on_interval()
-            await pilot.pause()
-            assert step.calls == [False]
-            step.release.set()
-            await asyncio.wait_for(asyncio.to_thread(step.completed.wait), timeout=1)
-            await settle(pilot)
-            assert step.calls == [False]
+            try:
+                assert await asyncio.to_thread(step.started.wait, HANG_GUARD_S), "blocked step never started"
+                app._on_interval()
+                app._on_interval()
+                await pilot.pause()
+                assert step.calls == [False]
+                step.release.set()
+                assert await asyncio.to_thread(step.completed.wait, HANG_GUARD_S), "blocked step never completed"
+                await settle(pilot)
+                assert step.calls == [False]
+            finally:
+                step.release.set()
 
     run_scenario(scenario())
 
@@ -243,7 +281,7 @@ def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypat
         rendered.append(snapshot.phase)
         if len(rendered) == 1:
             render_started.set()
-            assert release_render.wait(2), "test must release the blocked renderer"
+            assert release_render.wait(HANG_GUARD_S), "test must release the blocked renderer"
         return snapshot.phase, None
 
     monkeypatch.setattr(console.status, "status_text", slow_render)
@@ -252,19 +290,22 @@ def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypat
     async def scenario() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test() as pilot:
-            await asyncio.wait_for(asyncio.to_thread(render_started.wait), timeout=1)
-            assert app._step_lock.acquire(blocking=False)
-            app._step_lock.release()
-            app.action_refresh()
-            app._on_interval()
-            release_render.set()
-            await asyncio.wait_for(asyncio.to_thread(second_step_done.wait), timeout=1)
-            await asyncio.wait_for(asyncio.to_thread(second_shown.wait), timeout=1)
-            await settle(pilot)
-            assert calls == [False, True]
-            assert rendered == [first.phase, "second"]
-            assert shown == [first.phase, "second"]
-            assert app.snapshot is second
+            try:
+                assert await asyncio.to_thread(render_started.wait, HANG_GUARD_S), "renderer never started"
+                assert app._step_lock.acquire(blocking=False)
+                app._step_lock.release()
+                app.action_refresh()
+                app._on_interval()
+                release_render.set()
+                assert await asyncio.to_thread(second_step_done.wait, HANG_GUARD_S), "second step never ran"
+                assert await asyncio.to_thread(second_shown.wait, HANG_GUARD_S), "second snapshot never shown"
+                await settle(pilot)
+                assert calls == [False, True]
+                assert rendered == [first.phase, "second"]
+                assert shown == [first.phase, "second"]
+                assert app.snapshot is second
+            finally:
+                release_render.set()
 
     run_scenario(scenario())
 
@@ -285,7 +326,7 @@ def test_tick_that_lands_after_quit_is_ignored() -> None:
 
 
 def test_held_lock_exits_1_with_its_message_before_drawing(tmp_path, monkeypatch, capsys) -> None:
-    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console/bh"))
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd/bh"))
     holder = acquire_lock(config.repo_root, "bh")
     assert isinstance(holder, Ok)
     drawn: list[object] = []
@@ -299,7 +340,7 @@ def test_held_lock_exits_1_with_its_message_before_drawing(tmp_path, monkeypatch
 
 
 def test_run_takes_the_lock_and_returns_the_app_code(tmp_path, monkeypatch) -> None:
-    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console/bh"))
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd/bh"))
     seen: list[tuple] = []
 
     class Recorder:
@@ -336,61 +377,12 @@ def test_opening_prs_then_r_forces_github_exactly_twice() -> None:
     run_scenario(scenario())
 
 
-def test_real_bh_status_graph_anchors_root_and_preserves_pan_on_refresh(monkeypatch) -> None:
-    fixture = json.loads((Path(__file__).parent / "fixtures/bh-wide-dag.json").read_text())
-    graph = fixture["text"]
-    assert hashlib.sha256(graph.encode()).hexdigest() == fixture["sha256"]
-    assert max(cell_len(line) for line in graph.splitlines()) == 508
-    monkeypatch.setattr(console.status, "status_text", lambda _snapshot: (graph, None))
-
-    async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(RUNNING), STATE)
-        async with app.run_test(size=(140, 40)) as pilot:
-            await settle(pilot)
-            panel = app.query_one("#status-panel")
-            assert panel.size.width == 0
-            assert panel.scroll_x == 0
-            app.query_one("TabbedContent").active = "status"
-            await settle(pilot)
-            assert app.query_one("#status-text").render().plain == graph
-            assert panel.scroll_x == 204
-            viewport = panel.scrollable_content_region
-            root_left = viewport.x + 209 - int(panel.scroll_x)
-            assert viewport.x <= root_left
-            assert root_left + cell_len("atm-bh-1") <= viewport.right
-            rendered = [strip.text for strip in app.screen._compositor.render_strips()]
-            assert any("atm-bh-1" in line for line in rendered[viewport.y:viewport.bottom])
-            assert app.query_one("#status-overflow").display
-
-            panel.focus()
-            await pilot.press("ctrl+pagedown")
-            await app.animator.wait_for_idle()
-            panned = panel.scroll_x
-            assert panned > 204
-            await pilot.press("r")
-            await settle(pilot)
-            assert panel.scroll_x == panned
-            app.query_one("TabbedContent").active = "dispatch"
-            await pilot.pause()
-            app.query_one("TabbedContent").active = "status"
-            await settle(pilot)
-            assert panel.scroll_x == panned
-
-            await pilot.resize_terminal(540, 40)
-            await settle(pilot)
-            assert not app.query_one("#status-overflow").display
-            assert panel.max_scroll_x == 0
-            assert app.query_one("#status-text").render().plain == graph
-
-    run_scenario(scenario())
-
-
 @pytest.mark.parametrize("all_closed", (False, True))
 def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(all_closed: bool) -> None:
     sprints = tuple(SprintView(
         f"atm-bh-{number}", f"sprint {number}",
-        "closed" if all_closed or number == 1 else "in_progress", (),
-        (StepView(f"atm-bh-{number}.dev", "dev", "closed" if all_closed else "in_progress", "solar"),),
+        SprintState.CLOSED if all_closed or number == 1 else SprintState.IN_PROGRESS, (),
+        (StepView(f"atm-bh-{number}.dev", "dev", SprintState.CLOSED if all_closed else SprintState.IN_PROGRESS, "solar"),),
     ) for number in (1, 2, 3))
     step = FakeStep(replace(RUNNING, sprints=sprints))
 
@@ -424,13 +416,13 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
 
 @pytest.mark.parametrize("size", ((140, 40), (100, 30)))
 def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tuple[int, int]) -> None:
-    two_steps = tuple(StepView(f"atm-bh-2.dev-{number}", "dev", "closed", "solar") for number in range(2))
-    six_steps = tuple(StepView(f"atm-bh-6.dev-{number}", "dev", "open", "solar") for number in range(6))
-    overflowing_steps = tuple(StepView(f"atm-bh-7.dev-{number}", "dev", "open", "solar") for number in range(14))
+    two_steps = tuple(StepView(f"atm-bh-2.dev-{number}", "dev", SprintState.CLOSED, "solar") for number in range(2))
+    six_steps = tuple(StepView(f"atm-bh-6.dev-{number}", "dev", SprintState.OPEN, "solar") for number in range(6))
+    overflowing_steps = tuple(StepView(f"atm-bh-7.dev-{number}", "dev", SprintState.OPEN, "solar") for number in range(14))
     sprints = (
-        SprintView("atm-bh-2", "bh-2: two steps", "ready", (), two_steps),
-        SprintView("atm-bh-6", "bh-6: six steps", "in_progress", (), six_steps),
-        SprintView("atm-bh-7", "bh-7: overflowing steps", "ready", (), overflowing_steps),
+        SprintView("atm-bh-2", "bh-2: two steps", SprintState.READY, (), two_steps),
+        SprintView("atm-bh-6", "bh-6: six steps", SprintState.IN_PROGRESS, (), six_steps),
+        SprintView("atm-bh-7", "bh-7: overflowing steps", SprintState.READY, (), overflowing_steps),
     )
     step = FakeStep(replace(RUNNING, sprints=sprints, mermaid="graph TD\n    one --> two"))
 

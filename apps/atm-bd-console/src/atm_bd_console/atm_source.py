@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Timeout, Unreachable
+from . import command
+from .enums import SprintState
+from .result import CommandFailed, Err, IoFailed, Ok, ParseFailed, Result, Unreachable
 from .types import DispatchSpec, Member, Task
 
 # Team and identity resolution: every command passes `--team` from Config.team and runs as
@@ -20,19 +21,27 @@ TASK_STATES = frozenset({"assigned", "active"})
 MEMBER_STATES = frozenset({"active", "idle", "offline", "blocked"})
 
 
-# Own runner: ATM sends stdin text and maps missing binaries or undecodable output to Unreachable.
+def sprint_state_of(raw: str) -> SprintState:
+    try:
+        return SprintState(raw)
+    except ValueError:
+        return SprintState.UNKNOWN
+
+
+# ATM runs through command.run as ATM_IDENTITY=<as_>; a missing atm binary is the one failure this
+# module names differently (Unreachable with the install fix), every other failure keeps command.run's shape.
 def _run(argv: list[str], as_: str, stdin: str | None = None, timeout_s: int | None = None) -> Result[str]:
     timeout_s = TIMEOUT_S if timeout_s is None else timeout_s
-    env = {**os.environ, "ATM_IDENTITY": as_}
-    try:
-        done = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False, timeout=timeout_s, env=env)
-    except subprocess.TimeoutExpired:
-        return Err(Timeout("timeout", tuple(argv), timeout_s, f"rerun `{' '.join(argv)}`, or pass a larger timeout"))
-    except (OSError, UnicodeDecodeError) as error:
-        return Err(Unreachable("unreachable", tuple(argv), str(error), f"install the atm CLI and put it on PATH, then rerun `{' '.join(argv)}`"))
-    if done.returncode:
-        return Err(CommandFailed("command_failed", tuple(argv), done.returncode, done.stderr, f"run `ATM_IDENTITY={as_} {' '.join(argv)}` by hand and read its stderr"))
-    return Ok(done.stdout)
+    command_line = " ".join(argv)
+    result = command.run(
+        argv, f"rerun `{command_line}` as ATM_IDENTITY={as_} and read its stderr, or pass a larger timeout",
+        timeout_s=timeout_s, stdin=stdin, env={**os.environ, "ATM_IDENTITY": as_},
+    )
+    if isinstance(result, Err) and isinstance(result.error, CommandFailed) and result.error.code == command.MISSING_PROGRAM_CODE:
+        return Err(Unreachable("unreachable", tuple(argv), result.error.stderr, f"install the atm CLI and put it on PATH, then rerun `{command_line}`"))
+    if isinstance(result, Err):
+        return result
+    return Ok(result.value.stdout)
 
 
 def _time(value: object) -> datetime | None:
@@ -48,7 +57,12 @@ def _time(value: object) -> datetime | None:
 
 def _member(item: dict, time: datetime | None) -> Member:
     state = item.get("state")
-    return Member(item["name"], state if state in MEMBER_STATES else "unknown", time)
+    return Member(
+        item["name"],
+        state if state in MEMBER_STATES else "unknown",
+        time,
+        *(item.get(field) if isinstance(item.get(field), str) else None for field in ("agent_type", "model", "harness")),
+    )
 
 
 def _task(index: int, item: dict, assigned: datetime, updated: datetime) -> Task:
@@ -90,7 +104,9 @@ def tasks(team: str, as_: str, *, timeout_s: int | None = None) -> Result[tuple[
         times = tuple((_time(item["assigned_at"]), _time(item["updated_at"])) for item in items)
         if any(None in pair for pair in times):
             return Err(ParseFailed("parse_failed", "atm task list", "atm task timestamps must be ISO-8601 with a UTC offset", fix))
-        return Ok(tuple(_task(index, item, *pair) for index, (item, pair) in enumerate(zip(items, times))))
+        return Ok(tuple(_task(index, item, assigned, updated)
+                        for index, (item, (assigned, updated)) in enumerate(zip(items, times))
+                        if assigned is not None and updated is not None))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "atm task list", str(error), fix))
 

@@ -8,6 +8,7 @@ import pytest
 from contract_samples import BEAD, MERGE, PHASE_TEMPLATES, REMOTE_REF, SPRINT, WORKTREE
 
 from atm_bd_console import atm_bd, cli, config, runner
+from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.result import ConfigInvalid, Err, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot
 from atm_bd_console.types import INITIAL_STATE
@@ -42,9 +43,9 @@ def test_invalid_phase_setting_fails_launch_before_effects(phase_repo, monkeypat
     for source, name in ((cli, "acquire_lock"), (cli.runner, "step"), (runner.atm_source, "assign"),
                          (runner.atm_source, "send"), (cli.shutil, "which")):
         monkeypatch.setattr(source, name, forbidden)
-    assert cli.main(["--headless", "--phase", "bh"]) == 3
+    assert cli.main(["cron", "--phase", "bh"]) == 3
     assert expected in capsys.readouterr().out
-    assert not (phase_repo / ".atm-bd/atm-bd-console").exists()
+    assert not (phase_repo / ".atm-bd/atm-bd").exists()
 
 
 @pytest.mark.parametrize("purpose", tuple(PHASE_TEMPLATES))
@@ -77,9 +78,9 @@ def test_template_paths_must_name_existing_installed_files(phase_repo, tmp_path,
     monkeypatch.setattr(cli.config_source, "repo_root", lambda: phase_repo)
     for source, name in ((cli, "acquire_lock"), (runner.atm_source, "assign"), (runner.atm_source, "send")):
         monkeypatch.setattr(source, name, forbidden)
-    assert cli.main(["--headless", "--phase", "bh"]) == 3
+    assert cli.main(["cron", "--phase", "bh"]) == 3
     assert f"templates.{purpose}" in capsys.readouterr().out
-    assert not (phase_repo / ".atm-bd/atm-bd-console").exists()
+    assert not (phase_repo / ".atm-bd/atm-bd").exists()
 
 
 @pytest.mark.parametrize("purpose", ("dev_assign", "sanity_assign", "qa_assign", "fix_review", "unknown"))
@@ -109,11 +110,11 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
     monkeypatch.setenv("ATM_IDENTITY", "environment-owner")
     with (phase_repo / ".claude/project/atm-bd-orchestration.yaml").open("a") as stream:
         stream.write('\nlead: "repository-owner"\n')
-    root = replace(BEAD, id="atm-phase-bh", status="open", parent=None, labels=("phase-bh",), metadata={})
-    sprint = replace(BEAD, id=SPRINT.id, status="open", parent=root.id, labels=("stage:sprint",), metadata={
+    root = replace(BEAD, id="atm-phase-bh", status=SprintState.OPEN, parent=None, labels=("phase-bh",), metadata={})
+    sprint = replace(BEAD, id=SPRINT.id, status=SprintState.OPEN, parent=root.id, labels=("stage:sprint",), metadata={
         "layer": SPRINT.layer, "branch": SPRINT.branch, "pr_target": SPRINT.target, "stack": SPRINT.stack,
     })
-    candidate = replace(BEAD, id=f"{SPRINT.id}.group-{kind}", status="open", parent=sprint.id, assignee=None,
+    candidate = replace(BEAD, id=f"{SPRINT.id}.group-{kind}", status=SprintState.OPEN, parent=sprint.id, assignee=None,
                         labels=("stage:dev-sanity" if kind == "sanity" else "stage:qa",), metadata={
         "sprint": "bh-6", "sprint_bead": sprint.id, "dev_bead": f"{sprint.id}.group-dev",
         "checked_bead": f"{sprint.id}.group-dev", "round": 1, "branch": SPRINT.branch,
@@ -128,7 +129,7 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok((WORKTREE,)))
     monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
     monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok((REMOTE_REF,)))
-    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Ok(replace(MERGE, state="clean", files=(), messages=())))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Ok(replace(MERGE, state=MergeState.CLEAN, files=(), messages=())))
     fake_bin.make("bd", "exit 97\n")
     fake_bin.make("git", "exit 97\n")
     fake_bin.make("atm", '''case "$1:$2" in
@@ -138,7 +139,7 @@ task:assign) exit 0;;
 *) exit 97;;
 esac
 ''')
-    assert cli.main(["--phase", "bh", "--github", "off", "--headless"]) == 0
+    assert cli.main(["cron", "--phase", "bh", "--github", "off"]) == 0
     snapshot = load_snapshot(phase_repo, root.id)
     assert isinstance(snapshot, Ok) and snapshot.value.errors == ()
     assigned = [argv for argv in fake_bin.argv() if argv[1:3] == ("task", "assign")]

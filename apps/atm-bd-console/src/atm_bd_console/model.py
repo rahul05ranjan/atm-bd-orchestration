@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 
 from rich.cells import cell_len
 
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
+from .enums import FAILING_CI, CiState, MergeState, PrState, QaState, SprintState
+from .icons import SPRINT_ICONS
 from .ids import short_id
 from .prs import active_pr
+from .render import render_agent
 from .result import Err, Error, Ok, Result
 from .types import (
     Action,
@@ -92,7 +96,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
             if step.branch and (target := _target(step, phase, inputs.repo.bead_prefix))
             and (step.branch, target) not in checked_pairs
         }
-        merges += tuple(Merge(branch, target, "error", (), tuple(
+        merges += tuple(Merge(branch, target, MergeState.ERROR, (), tuple(
             verification_reason(error) for error in merge_errors
         ), now) for branch, target in sorted(unavailable))
     prs = inputs.prs.value if isinstance(inputs.prs, Ok) else ()
@@ -107,7 +111,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     if root_closed:
         stopped = "closed"
     elif phase is not None:
-        active = any(step.ready or step.status == "in_progress" for step in phase.steps)
+        active = any(step.ready or step.status == SprintState.IN_PROGRESS for step in phase.steps)
         idle_since = None if active else (idle_since or now)
         if idle_stop_due(replace(state, idle_since=idle_since), now):
             stopped = "idle"
@@ -144,7 +148,8 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         remotes=remotes,
         batch_due=batch_due,
     )
-    sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix)
+    agents = _agent_views(members, tasks, phase, inputs.task_beads, now)
+    sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix, agents)
     sections = (Section("Held", held),) if held else ()
     snapshot = Snapshot(
         schema=1,
@@ -152,7 +157,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         phase=phase.label.removeprefix("phase-") if phase else "",
         root_closed=root_closed,
         stopped=stopped,
-        agents=_agent_views(members, tasks, phase, inputs.task_beads, now),
+        agents=agents,
         sections=sections,
         problems=problems,
         errors=tuple(errors),
@@ -168,7 +173,38 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         sent=sent,
         prs=pr_rows,
         files={},
+        phase_data=phase,
+        task_data=tasks,
+        member_data=members,
+        task_bead_data=inputs.task_beads.value if isinstance(inputs.task_beads, Ok) else (),
+        worktree_data=worktrees,
     )
+    from .collision import collisions
+
+    collision_rows = collisions(snapshot) if stopped is None else ()
+    collision_problems = tuple(Problem(f"collision:{key}", sprint_id, inputs.lead, message, now)
+                               for key, sprint_id, message in collision_rows)
+    unknown_problems = tuple(Problem(f"unknown_sprint_state:{sprint.id}", sprint.id, inputs.lead,
+                                     f"unknown sprint state {sprint.raw_status!r} for {sprint.id}", now)
+                             for sprint in phase.sprints if sprint.status == SprintState.UNKNOWN) if phase else ()
+    unknown_problems += tuple(Problem(f"unknown_pr_state:{pr.number}", None, inputs.lead,
+                                      f"unknown PR state {pr.raw_state!r} for #{pr.number}", now)
+                              for pr in prs if pr.state == PrState.UNKNOWN)
+    unknown_problems += tuple(Problem(f"unknown_ci_state:{pr.number}", None, inputs.lead,
+                                      f"unknown CI state {pr.raw_ci!r} for #{pr.number}", now)
+                              for pr in prs if pr.ci == CiState.UNKNOWN)
+    github_problems = ()
+    if inputs.gh.mode == "off" or inputs.gh.ok is not True or inputs.gh.truncated:
+        cause = "off" if inputs.gh.mode == "off" else "truncated" if inputs.gh.truncated else (
+            inputs.gh.error.kind if inputs.gh.error else "unavailable"
+        )
+        github_problems = (Problem("github_unavailable", None, inputs.lead, f"GitHub data {cause}", now),)
+    collision_actions = tuple(Action(now, "send", inputs.lead, (sprint_id,), message, None)
+                              for key, sprint_id, message in collision_rows if key not in state.collision_notices)
+    snapshot = replace(snapshot, problems=(*snapshot.problems, *collision_problems, *unknown_problems, *github_problems))
+    actions = (*actions, *collision_actions)
+    new_state = replace(new_state, collision_notices=(*state.collision_notices,
+                        *(key for key, _, _ in collision_rows if key not in state.collision_notices)))
     return snapshot, actions, new_state
 
 
@@ -182,6 +218,11 @@ def _read_errors(inputs: Inputs) -> list[Error]:
     return errors
 
 
+def _task_summary(description: str) -> str:
+    text = re.sub(r"<[^>]*>", "", description.replace("<![CDATA[", "").replace("]]>", ""))
+    return next((" ".join(line.split()) for line in text.splitlines() if line.strip()), "")
+
+
 def _agent_views(
     members, tasks: tuple[Task, ...], phase: Phase | None,
     task_beads: Result[tuple[Bead, ...]], now: datetime,
@@ -190,6 +231,7 @@ def _agent_views(
     root_id = phase.root_id if phase else None
     known_beads = {bead.id for bead in task_beads.value} if isinstance(task_beads, Ok) else None
     views: list[AgentView] = []
+    qa_steps = tuple(step for step in phase.steps if step.kind == "qa") if phase else ()
     for member in members:
         mine = sorted((task for task in tasks if task.agent == member.name), key=lambda task: (task.state != "active", task.position))
         if member.presence == "blocked":
@@ -224,11 +266,36 @@ def _agent_views(
                 tag=step.tag if step else "",
                 marker=marker,
                 age_s=max(0, int((now - task.state_since).total_seconds())),
-                description=task.description,
+                description=step.title if step else _task_summary(task.description),
             ))
         active = next((task for task in mine if task.state == "active"), None)
-        views.append(AgentView(member.name, status, active.state_since if active else member.presence_since or now, len(mine), tuple(rows)))
+        qa_state = None
+        if (member.agent_type or "").lower() == "qa":
+            if any(row.kind in ("sprint_qa", "fix_qa") and row.state == "running" for row in rows):
+                qa_state = QaState.RUNNING
+            else:
+                closed = sorted(
+                    (step for step in qa_steps if step.assignee == member.name and step.status == SprintState.CLOSED),
+                    key=lambda step: step.closed_at.timestamp() if step.closed_at else float("-inf"),
+                    reverse=True,
+                )
+                qa_state = qa_state_from_close(closed[0].close_reason) if closed else None
+        views.append(AgentView(
+            member.name, status, active.state_since if active else member.presence_since or now,
+            len(mine), tuple(rows), member.agent_type, member.model, member.harness, qa_state,
+        ))
     return tuple(views)
+
+
+def qa_state_from_close(reason: str | None) -> QaState | None:
+    """Interpret the exact prefix of a closed QA step's close reason."""
+    if reason is None:
+        return None
+    if reason.startswith("PASS"):
+        return QaState.PASS
+    if reason.startswith("FAIL"):
+        return QaState.FAIL
+    return None
 
 
 def _label_truncate(text: str, width: int) -> str:
@@ -266,28 +333,33 @@ def _label_title_lines(title: str, sprint_id: str, bead_prefix: str) -> tuple[st
     return tuple(_label_truncate(line, 28) for line in lines[:2])
 
 
-def _sprint_views(phase: Phase | None, bead_prefix: str) -> tuple[tuple[SprintView, ...], str]:
+def _sprint_views(
+    phase: Phase | None, bead_prefix: str, agents: tuple[AgentView, ...] = (),
+) -> tuple[tuple[SprintView, ...], str]:
     if phase is None:
         return (), "graph TD"
     views: list[SprintView] = []
     lines = ["graph TD"]
-    icons = {"closed": "✅", "in_progress": "🌀", "ready": "📥", "not_ready": "⏳"}
+    by_name = {agent.name: agent for agent in agents}
     for sprint in phase.sprints:
         steps = tuple(step for step in phase.steps if sprint_of(step, phase, bead_prefix) == sprint)
-        state = "closed" if sprint.closed else (
-            "in_progress" if any(step.status == "in_progress" for step in steps) else (
-                "ready" if any(step.ready for step in steps) else "not_ready"
+        state = SprintState.CLOSED if sprint.closed else (
+            SprintState.IN_PROGRESS if any(step.status == SprintState.IN_PROGRESS for step in steps) else (
+                SprintState.READY if any(step.ready for step in steps) else SprintState.NOT_READY
             )
         )
         views.append(SprintView(sprint.id, sprint.title, state, sprint.depends_on, tuple(
             StepView(step.bead_id, step.kind, step.status, step.assignee) for step in steps
         )))
-        current = next((step for step in steps if step.status == "in_progress"), None)
+        current = next((step for step in steps if step.status == SprintState.IN_PROGRESS), None)
         if current is None:
             current = next((step for step in steps if step.ready), None)
-        label = f"{icons[state]} {short_id(sprint.id, bead_prefix)}"
+        glyph = SPRINT_ICONS[state][0]
+        label = f"{glyph} {short_id(sprint.id, bead_prefix)}"
         if current:
-            label += f" {current.kind}:{current.assignee or 'unassigned'}"
+            assignee = current.assignee or "unassigned"
+            rendered = render_agent(assignee, by_name.get(current.assignee)).plain if current.assignee else assignee
+            label += f" {current.kind}:{rendered}"
         label = _label_truncate(label, 30)
         description = _label_title_lines(sprint.title, sprint.id, bead_prefix)
         if description:
@@ -304,7 +376,7 @@ def _metrics(phase: Phase | None, now: datetime) -> Metrics:
     if phase is None:
         return Metrics(0, 0, 0, 0)
     work = tuple(step for step in phase.steps if step.kind in ("dev", "fix"))
-    done = sum(step.status == "closed" for step in work)
+    done = sum(step.status == SprintState.CLOSED for step in work)
     closed = tuple(sprint.findings for sprint in phase.sprints if sprint.closed)
     average = round(sum(closed) / len(closed)) if closed else 0
     projected = sum(max(0, average - sprint.findings) for sprint in phase.sprints if not sprint.closed)
@@ -321,7 +393,8 @@ def _metrics(phase: Phase | None, now: datetime) -> Metrics:
         elif current_end is not None and start <= current_end:
             current_end = max(current_end, end)
         else:
-            active_s += max(0, int((current_end - current_start).total_seconds()))
+            if current_end is not None:
+                active_s += max(0, int((current_end - current_start).total_seconds()))
             current_start, current_end = start, end
     if current_start is not None and current_end is not None:
         active_s += max(0, int((current_end - current_start).total_seconds()))
@@ -333,7 +406,7 @@ def _pr_rows(
 ) -> tuple[tuple[PrRow, ...], PullRequest | None]:
     if phase is None:
         return (), None
-    by_branch = _branch_owners(phase)
+    by_branch: dict[str, Step | None] = dict(_branch_owners(phase))
     by_branch.update({sprint.branch: None for sprint in phase.sprints if sprint.branch not in by_branch})
     relevant = tuple(pr for pr in prs if pr.head in by_branch)
     bases = {pr.base for pr in relevant}
@@ -341,14 +414,15 @@ def _pr_rows(
     merge_by_branch = {merge.branch: merge for merge in merges}
     rows = tuple(PrRow(
         pr=pr,
-        layer=by_branch[pr.head].layer if by_branch[pr.head] else next(
+        layer=owner.layer if (owner := by_branch[pr.head]) else next(
             (sprint.layer for sprint in phase.sprints if sprint.branch == pr.head), None
         ),
-        bead_id=by_branch[pr.head].bead_id if by_branch[pr.head] else next(
+        bead_id=owner.bead_id if owner else next(
             (sprint.id for sprint in phase.sprints if sprint.branch == pr.head), None
         ),
         top=pr == top,
         merge=merge_by_branch.get(pr.head),
+        assignee=owner.assignee if owner else None,
     ) for pr in relevant)
     return tuple(sorted(rows, key=lambda row: (row.layer if row.layer is not None else -1, row.pr.number))), top
 
@@ -356,7 +430,7 @@ def _pr_rows(
 def _branch_owners(phase: Phase) -> dict[str, Step]:
     owners: dict[str, Step] = {}
     ordered = sorted(phase.steps, key=lambda step: (
-        step.kind not in ("dev", "fix"), step.assignee is None, step.status == "closed", step.bead_id,
+        step.kind not in ("dev", "fix"), step.assignee is None, step.status == SprintState.CLOSED, step.bead_id,
     ))
     for step in ordered:
         if step.branch:
@@ -387,7 +461,7 @@ def _problems(
             f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
         )
         for merge in merges
-        if merge.state == "conflict" and (step := by_branch.get(merge.branch)) is not None
+        if merge.state == MergeState.CONFLICT and (step := by_branch.get(merge.branch)) is not None
     }
     problems: list[Problem] = []
     not_ready = {row.bead_id for row in held if row.reason == "not ready"}
@@ -407,6 +481,11 @@ def _problems(
             continue
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
     problems.extend(conflicts.values())
+    problems.extend(
+        Problem(f"merge_error:{merge.branch}:{merge.target}", None, inputs.lead,
+                f"merge check failed for {merge.branch} against {merge.target}", now)
+        for merge in merges if merge.state == MergeState.ERROR
+    )
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
@@ -416,7 +495,7 @@ def _problems(
         pushed = {remote.branch for remote in remotes}
         open_branches = {
             step.branch for step in phase.steps
-            if step.status != "closed" and step.kind in ("dev", "fix", "sanity", "qa")
+            if step.status != SprintState.CLOSED and step.kind in ("dev", "fix", "sanity", "qa")
         }
         for branch, step in by_branch.items():
             if branch in open_branches and branch in pushed and branch not in heads:
@@ -424,14 +503,14 @@ def _problems(
                     f"missing_pr:{branch}", step.bead_id, step.assignee or inputs.lead,
                     f"pushed branch {branch} has no open PR", now,
                 ))
-    if fresh_github and top_pr is not None and top_pr.ci == "failure":
+    if fresh_github and top_pr is not None and top_pr.ci in FAILING_CI:
         checks = ", ".join(top_pr.failed_checks)
         problems.append(Problem(
-            f"top_ci:{top_pr.head_sha}", by_branch.get(top_pr.head).bead_id if by_branch.get(top_pr.head) else None,
+            f"top_ci:{top_pr.head_sha}", owner.bead_id if (owner := by_branch.get(top_pr.head)) else None,
             inputs.lead, f"top PR #{top_pr.number} CI failed: {checks}", now,
         ))
     current_keys = {problem.key for problem in problems}
-    refreshed_merges = {merge.branch for merge in merges if merge.state != "error"}
+    refreshed_merges = {merge.branch for merge in merges if merge.state != MergeState.ERROR}
     for previous in state.problems:
         if previous.key in current_keys:
             continue

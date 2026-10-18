@@ -9,6 +9,7 @@ from test_git_source import commit, git
 
 from atm_bd_console import git_source, runner
 from atm_bd_console.codec import to_json
+from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.result import CommandFailed, Err, Ok, Timeout
 from atm_bd_console.state import acquire_lock, load_snapshot
 from atm_bd_console.types import INITIAL_STATE, DispatchSpec, Merge, MergeFile
@@ -20,7 +21,7 @@ pytest_plugins = ("test_git_source",)
 def runtime(repo, tmp_path, monkeypatch):
     worktree = tmp_path / "clean-worktree"
     git(repo, "worktree", "add", "-q", str(worktree), "clean")
-    candidate = replace(PHASE.steps[0], status="open", ready=True, anchor=False, quick_fix=False,
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, anchor=False, quick_fix=False,
                         branch="clean", target="main", worktree=str(worktree))
     phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
     events, assigned = [], []
@@ -37,7 +38,7 @@ def runtime(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.atm_bd, "dispatch_spec", lambda context, templates: Ok(DispatchSpec(templates["qa"], {"commit": context.commit})))
-    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status="open"),)))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status=SprintState.OPEN),)))
     monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -47,7 +48,7 @@ def runtime(repo, tmp_path, monkeypatch):
     config = replace(CONFIG, repo_root=str(repo), github="off", dry_run=False, no_fetch=False)
     state = replace(INITIAL_STATE, remotes=git_source.remote_refs(repo).value, last_cycle=datetime.now(UTC))
     with acquire_lock(repo, PHASE_FILE.root_id).value as store:
-        clean = Merge("clean", "main", "clean", (), (), datetime.now(UTC))
+        clean = Merge("clean", "main", MergeState.CLEAN, (), (), datetime.now(UTC))
         assert store.write_merges(MergeFile(clean.checked_at, {"clean": clean})) == Ok(None)
         yield config, state, store, events, assigned
 
@@ -76,7 +77,7 @@ def test_failed_refresh_rejects_cached_pin_and_recovers_fresh_commit(runtime, re
     assert any("origin verification unavailable" in problem.text for problem in snapshot.problems)
     assert snapshot.errors
     assert to_json(load_snapshot(repo, PHASE_FILE.root_id).value) == to_json(snapshot)
-    assert store.load_merges().value.merges["clean"].state == "error"
+    assert store.load_merges().value.merges["clean"].state == MergeState.ERROR
     assert any(fields.get("source") == f"git.{failure}" and fields.get("outcome") == "failed" for _, fields in events)
     assert not any(fields.get("source") == "git.merge" for _, fields in events)
     if failure == "fetch":
@@ -87,8 +88,9 @@ def test_failed_refresh_rejects_cached_pin_and_recovers_fresh_commit(runtime, re
     recovered, _ = runner.step(config, held_state, False, store)
 
     assert len(assigned) == 1 and assigned[0][2].vars["commit"] == fresh_sha
-    assert recovered.sections == () and recovered.problems == () and recovered.errors == ()
-    assert store.load_merges().value.merges["clean"].state == "clean"
+    assert recovered.sections == () and recovered.errors == ()
+    assert [problem.key for problem in recovered.problems] == ["github_unavailable"]
+    assert store.load_merges().value.merges["clean"].state == MergeState.CLEAN
 
 
 @pytest.mark.parametrize("failure", ("missing", "timeout", "unsupported"))
@@ -110,7 +112,7 @@ def test_failed_merge_overwrites_cached_clean_and_recovery_resumes(runtime, repo
     assert "merge verification unavailable" in snapshot.problems[0].text
     assert snapshot.errors
     cached = store.load_merges().value.merges["clean"]
-    assert cached.state == "error" and cached.messages
+    assert cached.state == MergeState.ERROR and cached.messages
     assert any(action == "hold" and "unavailable" in fields["reason"] for action, fields in events)
     assert any(fields.get("source") == "git.merge" and fields.get("error") == asdict(snapshot.errors[0]) for _, fields in events)
     monkeypatch.setattr(git_source, "_run", original_run)
@@ -119,8 +121,9 @@ def test_failed_merge_overwrites_cached_clean_and_recovery_resumes(runtime, repo
     recovered, _ = runner.step(config, held_state, False, store)
 
     assert len(assigned) == 1
-    assert recovered.problems == () and recovered.errors == ()
-    assert store.load_merges().value.merges["clean"].state == "clean"
+    assert recovered.errors == ()
+    assert [problem.key for problem in recovered.problems] == ["github_unavailable"]
+    assert store.load_merges().value.merges["clean"].state == MergeState.CLEAN
 
 
 def test_no_fetch_explicitly_allows_cached_refs_but_still_probes_merge(runtime, repo, tmp_path):

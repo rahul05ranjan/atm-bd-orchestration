@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 
+from atm_bd_console.enums import CiState, MergeState, SprintState
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
@@ -71,17 +72,18 @@ ERRORS = (COMMAND_FAILED, TIMEOUT, REJECTED, UNREACHABLE, PARSE_FAILED, NOT_FOUN
 MEMBER = Member("arch-ctm", "active", EARLIER)
 TASK = Task("atm-bh-6", "arch-ctm", "active", 1, EARLIER, PLUS_TWO, "implement tick rules")
 BEAD = Bead(
-    "atm-bh-6", "tick rules", "in_progress", ("phase:bh", "stage:dev"), "atm-phase-bh", ("atm-bh-1",), "arch-ctm",
+    "atm-bh-6", "tick rules", SprintState.IN_PROGRESS, ("phase:bh", "stage:dev"), "atm-phase-bh", ("atm-bh-1",), "arch-ctm",
     {"layer": 6, "branch": "sprint/bh-6-tick-rules", "nested": {"keys": ["a", "b"]}}, EARLIER, PLUS_TWO, NOW,
+    raw_status="in_progress",
 )
 STEP = Step(
-    "atm-bh-6.qa", "bh-6", "qa", True, True, "in_progress", True, "quality-mgr", "sprint/bh-6-tick-rules",
+    "atm-bh-6.qa", "bh-6", "qa", True, True, SprintState.IN_PROGRESS, True, "quality-mgr", "sprint/bh-6-tick-rules",
     "integrate/phase-bh", "/worktrees/sprint/bh-6-tick-rules", 6, "hard", "bh-6", "atm-phase-bh", EARLIER, NOW,
     "QA bh-6", "atm-bh-6.fix", "atm-bh-6", 2, "atm-bh-6.fix",
 )
 SPRINT = Sprint(
     "atm-bh-6", "tick rules", 6, "sprint/bh-6-tick-rules", "integrate/phase-bh", "phase-bh", ("atm-bh-1", "atm-bh-4"),
-    True, 3,
+    True, 3, SprintState.CLOSED, "closed",
 )
 PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (STEP,), (("atm-bh-7.qa", NOT_FOUND),))
 PHASE_TEMPLATES = {
@@ -95,13 +97,13 @@ PHASE_TEMPLATES = {
 DISPATCH_SPEC = DispatchSpec(PHASE_TEMPLATES["qa"], {"round": 2, "reviewers_round1": ["req-qa"], "stack": "phase-bh"})
 REMOTE_REF = RemoteRef("sprint/bh-6-tick-rules", "0123456789abcdef0123456789abcdef01234567")
 MERGE = Merge(
-    "sprint/bh-6-tick-rules", "integrate/phase-bh", "conflict", ("src/atm_bd_console/types.py",),
+    "sprint/bh-6-tick-rules", "integrate/phase-bh", MergeState.CONFLICT, ("src/atm_bd_console/types.py",),
     ("CONFLICT (content): Merge conflict in src/atm_bd_console/types.py",), NOW,
 )
 WORKTREE = Worktree("/worktrees/sprint/bh-6-tick-rules", "sprint/bh-6-tick-rules", "0123456789abcdef")
 PULL_REQUEST = PullRequest(
     1850, "https://github.com/randlee/atm-core/pull/1850", "sprint/bh-6-tick-rules", "integrate/phase-bh",
-    "0123456789abcdef", "failure", ("pytest", "ruff"),
+    "0123456789abcdef", CiState.FAIL_BUG, ("pytest", "ruff"), raw_ci="FAILURE", raw_state="OPEN",
 )
 GH_STATUS = GhStatus("graphql", False, REJECTED, PLUS_TWO, True)
 REPO_CONFIG = RepoConfig(
@@ -121,8 +123,8 @@ ROW = Row("atm-bh-6", "running", "sprint_qa", "normal", "bh-6", "yellow", 420, "
 AGENT_VIEW = AgentView("arch-ctm", "busy", EARLIER, 2, (ROW,))
 SECTION_ROW = SectionRow("atm-bh-6", 420, "CI failing on the top layer", 1850)
 SECTION = Section("Blocked", (SECTION_ROW,))
-STEP_VIEW = StepView("atm-bh-6.qa", "qa", "in_progress", "quality-mgr")
-SPRINT_VIEW = SprintView("atm-bh-6", "tick rules", "in_progress", ("atm-bh-1",), (STEP_VIEW,))
+STEP_VIEW = StepView("atm-bh-6.qa", "qa", SprintState.IN_PROGRESS, "quality-mgr")
+SPRINT_VIEW = SprintView("atm-bh-6", "tick rules", SprintState.IN_PROGRESS, ("atm-bh-1",), (STEP_VIEW,))
 PROBLEM = Problem("stalled:arch-ctm", "atm-bh-6", "fenix", "arch-ctm has not started atm-bh-6", EARLIER)
 ACTION = Action(NOW, "assign", "quality-mgr", ("atm-bh-6.qa",), "QA bh-6 round 2", DISPATCH_SPEC, "sent")
 PR_ROW = PrRow(PULL_REQUEST, 6, "atm-bh-6", True, MERGE)
@@ -130,11 +132,13 @@ METRICS = Metrics(5, 11, 45, 3600)
 DUE = Due(True, (("sprint/bh-6-tick-rules", "integrate/phase-bh"),), True)
 SNAPSHOT = Snapshot(
     1, NOW, "bh", True, "closed", (AGENT_VIEW,), (SECTION,), (PROBLEM,), (COMMAND_FAILED, LOCK_HELD), METRICS,
-    GH_STATUS, 1850, "failure", "graph TD\n  atm-bh-1 --> atm-bh-6", (SPRINT_VIEW,), 60, "fenix", "atm", (ACTION,),
+    GH_STATUS, 1850, CiState.FAIL_BUG, "graph TD\n  atm-bh-1 --> atm-bh-6", (SPRINT_VIEW,), 60, "fenix", "atm", (ACTION,),
     (PR_ROW,), {"prs": ".atm-bd/atm-bd-console/atm-phase-bh/prs.json"},
+    PHASE, (TASK,), (MEMBER,), (BEAD,), (WORKTREE,),
 )
 STATE = State(
     (PROBLEM,), EARLIER, EARLIER, NOW, PLUS_TWO, (ACTION,), (REMOTE_REF,), {"quality-mgr": NOW, "arch-ctm": PLUS_TWO},
+    ("collision-key",),
 )
 PHASE_FILE = PhaseFile("bh", "atm-phase-bh", "phase:bh", ("atm-bh-1", "atm-bh-6"), {"atm-bh-6": ("atm-bh-1",)}, lead="fenix", templates=PHASE_TEMPLATES)
 MERGE_FILE = MergeFile(NOW, {"sprint/bh-6-tick-rules": MERGE})

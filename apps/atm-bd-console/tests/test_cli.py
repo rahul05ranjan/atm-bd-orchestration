@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import run_scenario
+from conftest import HANG_GUARD_S, run_scenario
 from contract_samples import (
     ACTION,
     BEAD,
     CONFIG,
     IO_FAILED,
     MERGE,
+    PHASE,
     PHASE_FILE,
     REMOTE_REF,
     REPO_CONFIG,
@@ -26,20 +27,24 @@ from contract_samples import (
     TIMEOUT,
     WORKTREE,
 )
+from process_helpers import run_process
 from rich.text import Text
 
 from atm_bd_console import app, cli, runner
 from atm_bd_console.build import identity
+from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.result import Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
-from atm_bd_console.types import INITIAL_STATE
+from atm_bd_console.status_table import markdown, rows
+from atm_bd_console.types import INITIAL_STATE, Due
 
 PKG = Path(__file__).resolve().parents[1]
+FIXED_NOW = datetime(2026, 10, 15, tzinfo=UTC)
 
 
 @pytest.fixture
 def cli_runtime(monkeypatch, tmp_path):
-    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd-console" / PHASE_FILE.root_id))
+    config = replace(CONFIG, repo_root=str(tmp_path), state_dir=str(tmp_path / ".atm-bd/atm-bd" / PHASE_FILE.root_id))
     monkeypatch.setattr(cli.config_source, "repo_root", lambda: tmp_path)
 
     def load_config(_root, _phase, **options):
@@ -49,35 +54,88 @@ def cli_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
-    monkeypatch.setattr(cli, "now", lambda: datetime(2026, 10, 15, tzinfo=UTC))
+    monkeypatch.setattr(cli, "now", lambda: FIXED_NOW)
     return config
+
+
+def test_cron_markdown_uses_shared_rows_and_dry_run(cli_runtime, monkeypatch, capsys):
+    snapshot = replace(SNAPSHOT, errors=(), gh=replace(SNAPSHOT.gh, ok=True, error=None, truncated=False))
+    calls = []
+
+    def step(config, state, force, store):
+        calls.append((config.dry_run, force))
+        return runner.StepResult(snapshot, state)
+
+    monkeypatch.setattr(cli.runner, "step", step)
+    monkeypatch.setattr(runner.atm_source, "send", lambda *args: pytest.fail("unexpected send"))
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *args: pytest.fail("unexpected assignment"))
+    assert cli.main(["cron", "--phase", "x", "--md-table"]) == 0
+    output = capsys.readouterr()
+    assert output.out == markdown(rows(snapshot)) + "\n"
+    assert output.err == ""
+    assert calls == [(True, True)]
+
+
+def test_cron_markdown_rejects_partial_snapshot(cli_runtime, monkeypatch, capsys):
+    snapshot = replace(SNAPSHOT, errors=(TIMEOUT,))
+    monkeypatch.setattr(cli.runner, "step", lambda config, state, force, store: runner.StepResult(snapshot, state))
+    assert cli.main(["cron", "--phase", "x", "--md-table"]) != 0
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "timeout" in output.err
+
+
+def test_cron_markdown_rejects_truncated_github_snapshot(cli_runtime, monkeypatch, capsys):
+    snapshot = replace(SNAPSHOT, errors=(), gh=replace(SNAPSHOT.gh, ok=True, error=None, truncated=True))
+    monkeypatch.setattr(cli.runner, "step", lambda config, state, force, store: runner.StepResult(snapshot, state))
+    assert cli.main(["cron", "--phase", "x", "--md-table"]) != 0
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "partial_snapshot" in output.err and "truncated" in output.err
 
 
 def test_as_is_not_a_console_option(capsys) -> None:
     with pytest.raises(SystemExit) as rejected:
-        cli.main(["--phase", "bh", "--as=fenix"])
+        cli.main(["console", "--phase", "bh", "--as=fenix"])
     assert rejected.value.code == 2
     assert "unrecognized arguments: --as=fenix" in capsys.readouterr().err
 
 
 def test_missing_phase_is_a_launch_check(capsys) -> None:
-    assert cli.main([]) == 3
+    assert cli.main(["console"]) == 3
     assert "--phase <phase> is required" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("command", ("console", "cron", "show", "snapshot"))
+def test_subcommand_help(command, capsys) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main([command, "--help"])
+    assert exited.value.code == 0
+    assert "--phase" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", ("console", "cron"))
+def test_headless_option_is_rejected(command, capsys) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main([command, "--headless"])
+    assert exited.value.code == 2
+    assert "--headless" in capsys.readouterr().err
+
+
 def test_headless_and_show_do_not_load_textual(tmp_path) -> None:
-    check = subprocess.run(
+    check = run_process(
+        "headless imports",
         [
             sys.executable,
             "-c",
             (
                 "import sys; from atm_bd_console.cli import main; "
-                "main(['--phase', 'x', '--headless']); "
+                "main(['cron', '--phase', 'x']); "
                 "main(['show', '--phase', 'x']); "
                 "assert 'textual' not in sys.modules"
             ),
         ],
-        capture_output=True, text=True, check=False, cwd=tmp_path,
+        check=False, cwd=tmp_path,
     )
     assert check.returncode == 0, check.stderr
 
@@ -122,22 +180,24 @@ def test_installed_cron_command_runs_one_headless_tick(tmp_path) -> None:
     else:
         uv = shutil.which("uv")
         assert uv is not None, "uv is required to run the console entry point"
-        command = [uv, "run", "--frozen", "--project", str(PKG), "atm-bd-console"]
+        command = [uv, "run", "--frozen", "--project", str(PKG), "atm-bd"]
 
-    help_result = subprocess.run(
+    help_result = run_process(
+        "installed command help",
         [*command, "--help"],
-        capture_output=True, text=True, check=False, cwd=repo, env=environment,
+        check=False, cwd=repo, env=environment,
     )
     assert help_result.returncode == 0, help_result.stderr
     assert "run one tick and exit" in help_result.stdout
 
-    check = subprocess.run(
-        [*command, "--headless", "--phase", "bh", "--dry-run"],
-        capture_output=True, text=True, check=False, cwd=repo, env=environment,
+    check = run_process(
+        "installed cron command",
+        [*command, "cron", "--phase", "bh", "--dry-run"],
+        check=False, cwd=repo, env=environment,
     )
     assert check.returncode == 0, check.stderr + check.stdout
     assert check.stdout == ""
-    saved = json.loads((repo / ".atm-bd/atm-bd-console/atm-phase-bh/snapshot.json").read_text())
+    saved = json.loads((repo / ".atm-bd/atm-bd/atm-phase-bh/snapshot.json").read_text())
     assert saved["phase"] == "bh" and saved["stopped"] is None
     assert saved["errors"] == [] and len(saved["sprints"]) == 1
     assert saved["sprints"][0]["id"] == "atm-bh-1"
@@ -150,7 +210,7 @@ def test_ci_covers_minimum_latest_and_installed_cron_smoke() -> None:
     assert "uv tool install --python '${{ steps.python.outputs.python-path }}' ./apps/atm-bd-console" in console
     assert "pytest -q\n" in console
     assert '"$ATM_BD_CONSOLE_BIN" --help' in console
-    assert "ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd-console" in console
+    assert "ATM_BD_CONSOLE_BIN: ${{ env.UV_TOOL_BIN_DIR }}/atm-bd" in console
     assert "tests/test_cli.py::test_installed_cron_command_runs_one_headless_tick" in console
 
 
@@ -215,7 +275,7 @@ def test_version_and_non_headless_dispatch(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr("atm_bd_console.app.run", lambda config, step, state, startup_error, **_kwargs: 17)
-    assert cli.main(["--phase", "bh"]) == 17
+    assert cli.main(["console", "--phase", "bh"]) == 17
 
 
 @pytest.mark.parametrize("failure", ("config", "repo", "bd", "atm", "git"))
@@ -229,10 +289,10 @@ def test_launch_checks_fail_before_running(monkeypatch, capsys, failure) -> None
     monkeypatch.setattr(cli.shutil, "which", lambda command: None if command == failure else "/fixture/bin")
     monkeypatch.setattr(cli, "acquire_lock", forbidden)
     monkeypatch.setattr(cli.runner, "step", forbidden)
-    assert cli.main(["--headless", "--phase", "bh"]) == 3
+    assert cli.main(["cron", "--phase", "bh"]) == 3
     output = capsys.readouterr().out
     if failure in ("bd", "atm", "git"):
-        assert output == f"atm-bd-console: not_found: install {failure} and retry\n"
+        assert output == f"atm-bd cron: not_found: install {failure} and retry\n"
     else:
         assert "timeout" in output
 
@@ -277,29 +337,30 @@ def test_headless_stopped_snapshot_and_errors(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="idle", errors=()), None))
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped="idle", errors=()), INITIAL_STATE))
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     assert capsys.readouterr().out == ""
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed", errors=()), None))
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped="closed", errors=()), INITIAL_STATE))
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     assert capsys.readouterr().out == ""
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), None))
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped=None, errors=(TIMEOUT,)), INITIAL_STATE))
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped="closed", errors=(TIMEOUT,)), None))
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped="closed", errors=(TIMEOUT,)), INITIAL_STATE))
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
     for stopped in ("idle", "closed"):
         logging_error = replace(IO_FAILED, path="logs", fix="inspect the console log directory")
         failed_snapshot = replace(SNAPSHOT, stopped=stopped, errors=(logging_error,))
-        monkeypatch.setattr(cli.runner, "step", lambda *_, value=failed_snapshot: (value, None))
-        assert cli.main(["--headless", "--phase", "bh"]) == 0
+        monkeypatch.setattr(cli.runner, "step", lambda *_, value=failed_snapshot: runner.StepResult(value, INITIAL_STATE))
+        assert cli.main(["cron", "--phase", "bh"]) == 0
         output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
         assert len(output) == 1
         assert output[0]["kind"] == "error" and "inspect the console log directory" in output[0]["text"]
 
 
-def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("outcome", [None, "", "sent", "dry_run", "failed command_failed"])
+def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys, outcome) -> None:
     class Lock:
         def __enter__(self): return self
         def __exit__(self, *_): return None
@@ -310,15 +371,64 @@ def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Ok(Lock()))
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (replace(SNAPSHOT, stopped=None, errors=(), sent=(replace(ACTION, outcome="failed command_failed"),)), INITIAL_STATE))
+    reported_action = replace(ACTION, outcome=outcome)
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(replace(SNAPSHOT, stopped=None, errors=(), sent=(reported_action,)), INITIAL_STATE, (reported_action,)))
 
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
-    assert json.loads(capsys.readouterr().out)["outcome"] == "failed command_failed"
+    assert cli.main(["cron", "--phase", "bh"]) == 0
+    assert json.loads(capsys.readouterr().out)["outcome"] == outcome
 
 
+@pytest.mark.parametrize("count", (0, 3, 6))
+def test_cron_reports_all_and_only_actions_from_this_tick(cli_runtime, monkeypatch, capsys, count) -> None:
+    clock = datetime(2026, 10, 15, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock if tz else clock.replace(tzinfo=None)
+
+    class Logger:
+        def event(self, *_args, **_kwargs): return Ok(None)
+        def flush(self): return Ok(None)
+
+    previous = replace(ACTION, at=clock, text="previous tick")
+    old_state = replace(INITIAL_STATE, sent=(previous,))
+    locked = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
+    assert isinstance(locked, Ok)
+    with locked.value as store:
+        assert store.write_state(old_state) == Ok(None)
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
+    monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, steps=())))
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(False, (), False))
+
+    def tick(inputs, state, *_args):
+        actions = tuple(replace(ACTION, at=inputs.now, text=f"action-{index}") for index in range(count))
+        snapshot = replace(SNAPSHOT, generated_at=inputs.now, root_closed=False, stopped=None, errors=(), sent=())
+        return snapshot, actions, state
+
+    monkeypatch.setattr(runner.model, "tick", tick)
+    assert cli.main(["cron", "--phase", "bh", "--dry-run", "--github", "off"]) == 0
+
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [line["text"] for line in output] == [f"action-{index}" for index in range(count)]
+    assert all(line["outcome"] == "dry_run" for line in output)
+    stored = load_snapshot(cli_runtime.repo_root, PHASE_FILE.root_id)
+    assert isinstance(stored, Ok)
+    assert [action.text for action in stored.value.sent] == (["previous tick"] + [f"action-{index}" for index in range(count)])[-5:]
+
+
+@pytest.mark.parametrize("command", ("cron", "snapshot"))
 @pytest.mark.parametrize("stale", (False, True))
-def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monkeypatch, capsys, stale) -> None:
-    generated_at = cli.now() - timedelta(seconds=2 * cli_runtime.interval_s + 1 if stale else 0)
+def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monkeypatch, capsys, stale, command) -> None:
+    generated_at = FIXED_NOW - timedelta(seconds=2 * cli_runtime.interval_s + 1 if stale else 0)
     snapshot = replace(SNAPSHOT, generated_at=generated_at, root_closed=False, stopped=None, errors=())
     acquired = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
     assert isinstance(acquired, Ok)
@@ -336,16 +446,16 @@ def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monk
         monkeypatch.setattr(source, name, forbidden)
     with acquired.value as store:
         assert store.write_snapshot(snapshot) == Ok(None)
-        assert cli.main(["--headless", "--phase", "bh"]) == 0
+        assert cli.main([command, "--phase", "bh"]) == 0
 
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert len(output) == (2 if stale else 1)
-    assert output[0]["kind"] == "error" and "lock_held" in output[0]["text"]
+    assert output[0]["kind"] == "error" and output[0]["text"].startswith(f"atm-bd {command}: lock_held:")
     if stale:
         last_tick = generated_at.astimezone().strftime("%H:%M")
         assert output[1] == {
-            "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
-            "text": f"atm-bd-console stopped updating (last tick {last_tick})",
+            "at": "2026-10-15T00:00:00Z", "kind": "error",
+            "text": f"atm-bd {command}: console stopped updating (last tick {last_tick})",
         }
 
 
@@ -358,7 +468,7 @@ def test_snapshot_subcommand_runs_one_dry_tick_without_actions(cli_runtime, monk
     def step(config, state, force, store):
         calls.append((config.dry_run, state, force, store))
         assert config.dry_run
-        return replace(SNAPSHOT, generated_at=cli.now(), root_closed=False, stopped=None, errors=(), sent=(ACTION,)), state
+        return runner.StepResult(replace(SNAPSHOT, generated_at=cli.now(), root_closed=False, stopped=None, errors=(), sent=(ACTION,)), state)
 
     monkeypatch.setattr(cli.runner, "step", step)
     monkeypatch.setattr(runner.atm_source, "send", forbidden)
@@ -370,17 +480,16 @@ def test_snapshot_subcommand_runs_one_dry_tick_without_actions(cli_runtime, monk
     assert capsys.readouterr().out == ""
 
 
-def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, capsys, tmp_path) -> None:
-    ready = tmp_path / "holder-ready"
+def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, capsys) -> None:
     code = (
-        "import sys; from pathlib import Path; from atm_bd_console.state import acquire_lock; "
+        "import sys; from atm_bd_console.state import acquire_lock; "
         "from atm_bd_console.result import Ok; "
         "held = acquire_lock(sys.argv[1], sys.argv[2]); assert isinstance(held, Ok); "
-        "Path(sys.argv[3]).write_text('ready'); sys.stdin.read()"
+        "print('ready', flush=True); sys.stdin.read()"
     )
     child = subprocess.Popen(
-        [sys.executable, "-c", code, cli_runtime.repo_root, PHASE_FILE.root_id, str(ready)],
-        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        [sys.executable, "-c", code, cli_runtime.repo_root, PHASE_FILE.root_id],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     calls = []
 
@@ -388,37 +497,36 @@ def test_headless_runs_after_the_holder_is_killed(cli_runtime, monkeypatch, caps
         locked = acquire_lock(config.repo_root, PHASE_FILE.root_id)
         assert isinstance(locked, Err) and isinstance(locked.error, LockHeld)
         calls.append((config.repo_root, state, force, store.directory))
-        return replace(SNAPSHOT, root_closed=False, stopped=None, errors=(), sent=()), state
+        return runner.StepResult(replace(SNAPSHOT, root_closed=False, stopped=None, errors=(), sent=()), state)
 
     monkeypatch.setattr(cli.runner, "step", step)
     try:
-        deadline = time.monotonic() + 5
-        while not ready.exists():
-            assert child.poll() is None, "lock holder exited before signaling readiness"
-            assert time.monotonic() < deadline, "lock holder was not ready within 5 seconds"
-            time.sleep(0.01)
+        assert child.stdout is not None
+        ready, _, _ = select.select([child.stdout], [], [], HANG_GUARD_S)
+        assert ready, f"lock holder did not signal readiness within {HANG_GUARD_S} seconds"
+        assert child.stdout.readline().strip() == "ready", "lock holder exited before signaling readiness"
         locked = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
         assert isinstance(locked, Err) and isinstance(locked.error, LockHeld)
         child.kill()
-        child.wait(timeout=5)
+        child.wait(timeout=HANG_GUARD_S)
         assert child.returncode is not None and child.returncode < 0
 
-        assert cli.main(["--headless", "--phase", "bh"]) == 0
+        assert cli.main(["cron", "--phase", "bh"]) == 0
         assert calls == [(cli_runtime.repo_root, INITIAL_STATE, False, Path(cli_runtime.state_dir))]
         assert capsys.readouterr().out == ""
     finally:
         if child.poll() is None:
             child.kill()
-        child.communicate(timeout=5)
+        child.communicate(timeout=HANG_GUARD_S)
 
 
 def test_headless_prints_only_actions_from_the_current_tick(cli_runtime, monkeypatch, capsys) -> None:
     current = replace(ACTION, at=cli.now(), text="current action")
     previous = replace(ACTION, at=cli.now() - timedelta(seconds=cli_runtime.interval_s), text="old action")
     snapshot = replace(SNAPSHOT, generated_at=cli.now(), root_closed=False, stopped=None, errors=(), sent=(previous, current))
-    monkeypatch.setattr(cli.runner, "step", lambda *_: (snapshot, INITIAL_STATE))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(snapshot, INITIAL_STATE, (current,)))
 
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert len(output) == 1 and output[0]["text"] == "current action"
 
@@ -437,15 +545,30 @@ def test_headless_io_failures_keep_path_message_and_fix(cli_runtime, monkeypatch
             failed = store.write_snapshot(SNAPSHOT)
         assert isinstance(failed, Err)
         snapshot = replace(SNAPSHOT, root_closed=False, stopped=None, errors=(failed.error,), sent=())
-        monkeypatch.setattr(cli.runner, "step", lambda *_: (snapshot, INITIAL_STATE))
+        monkeypatch.setattr(cli.runner, "step", lambda *_: runner.StepResult(snapshot, INITIAL_STATE))
     assert isinstance(failed, Err) and isinstance(failed.error, IoFailed)
 
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert output == [{
-        "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
-        "text": f"io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
+        "at": "2026-10-15T00:00:00Z", "kind": "error",
+        "text": f"atm-bd cron: io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
     }]
+
+
+@pytest.mark.parametrize("command", ("cron", "snapshot"))
+@pytest.mark.parametrize("error", (TIMEOUT, IO_FAILED))
+def test_lock_failure_reports_full_invocation_and_error(cli_runtime, monkeypatch, capsys, command, error) -> None:
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(error))
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run")))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: pytest.fail("lock failure must not run a tick"))
+
+    assert cli.main([command, "--phase", "bh"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "at": "2026-10-15T00:00:00Z", "kind": "error",
+        "text": f"atm-bd {command}: {cli._error_text(error)}",
+    }
 
 
 def test_headless_lock_failure_is_a_json_error(monkeypatch, capsys) -> None:
@@ -455,7 +578,7 @@ def test_headless_lock_failure_is_a_json_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(TIMEOUT))
     monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run")))
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
 
 
@@ -468,7 +591,7 @@ def test_headless_real_lock_held_is_a_json_error(monkeypatch, capsys, tmp_path) 
     held = acquire_lock(tmp_path, "atm-phase-bh")
     assert isinstance(held, Ok)
     with held.value:
-        assert cli.main(["--headless", "--phase", "bh"]) == 0
+        assert cli.main(["cron", "--phase", "bh"]) == 0
     assert '"kind": "error"' in capsys.readouterr().out
 
 
@@ -481,7 +604,7 @@ def test_interactive_launch_defers_state_loading_to_the_locked_app(monkeypatch) 
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/fixture/bin")
     monkeypatch.setattr(app, "run", lambda *args, **values: seen.append(args) or kwargs.append(values) or 0)
 
-    assert cli.main(["--phase", "bh"]) == 0
+    assert cli.main(["console", "--phase", "bh"]) == 0
     assert seen == [(CONFIG, None, INITIAL_STATE, None)]
     assert kwargs == [{"runner_step": cli.runner.step}]
 
@@ -517,7 +640,7 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
 def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch, tmp_path, capsys):
     config = replace(CONFIG, repo_root=str(tmp_path))
     phase_file = replace(PHASE_FILE, sprints=(), depends_on={})
-    root = replace(BEAD, id=PHASE_FILE.root_id, status="closed")
+    root = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
     monkeypatch.setattr(cli.config_source, "load_config", lambda *_args, **_kwargs: Ok(config))
     monkeypatch.setattr(cli.atm_bd, "phase_file", lambda *_: Ok(phase_file))
     monkeypatch.setattr(cli.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -525,11 +648,11 @@ def test_corrupt_state_is_reported_and_persisted_for_a_closed_phase(monkeypatch,
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
     logging_error = replace(IO_FAILED, path="logs", fix="inspect the console log directory")
     monkeypatch.setattr(runner, "create_console_logger", lambda *_: Err(logging_error))
-    directory = tmp_path / ".atm-bd/atm-bd-console" / PHASE_FILE.root_id
+    directory = tmp_path / ".atm-bd/atm-bd" / PHASE_FILE.root_id
     directory.mkdir(parents=True)
     (directory / "state.json").write_text("{}")
 
-    assert cli.main(["--headless", "--phase", "bh"]) == 0
+    assert cli.main(["cron", "--phase", "bh"]) == 0
 
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert len(output) == 2 and all(line["kind"] == "error" for line in output)
@@ -562,13 +685,13 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
             return fixed_now if tz else fixed_now.replace(tzinfo=None)
 
     phase_file = replace(PHASE_FILE, sprints=(SPRINT.id,), depends_on={SPRINT.id: ()})
-    root = replace(BEAD, id=phase_file.root_id, title="phase", status="open", labels=(phase_file.label,), parent=None, metadata={})
+    root = replace(BEAD, id=phase_file.root_id, title="phase", status=SprintState.OPEN, labels=(phase_file.label,), parent=None, metadata={})
     sprint = replace(
-        BEAD, id=SPRINT.id, title=SPRINT.title, status="open", labels=("stage:sprint",), parent=root.id,
+        BEAD, id=SPRINT.id, title=SPRINT.title, status=SprintState.OPEN, labels=("stage:sprint",), parent=root.id,
         metadata={"layer": SPRINT.layer, "branch": SPRINT.branch, "pr_target": SPRINT.target, "stack": SPRINT.stack},
     )
     sanity = replace(
-        BEAD, id="atm-bh-6.group-sanity", title="sanity", status="open", labels=("stage:dev-sanity",),
+        BEAD, id="atm-bh-6.group-sanity", title="sanity", status=SprintState.OPEN, labels=("stage:dev-sanity",),
         parent=sprint.id, assignee=None,
         metadata={
             "dev_bead": "atm-bh-6.group-dev", "sprint": "bh-6", "sprint_bead": sprint.id,
@@ -577,12 +700,12 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
         },
     )
     beads = {root.id: root, sprint.id: sprint, sanity.id: sanity}
-    merge = replace(MERGE, branch=SPRINT.branch, target=SPRINT.target, state="clean", files=(), messages=())
+    merge = replace(MERGE, branch=SPRINT.branch, target=SPRINT.target, state=MergeState.CLEAN, files=(), messages=())
     repo = tmp_path / "repo"
     repo.mkdir()
     config = replace(
         CONFIG, github="off", dry_run=False, no_fetch=False, repo_root=str(repo),
-        state_dir=str(repo / ".atm-bd/atm-bd-console/atm-phase-bh"),
+        state_dir=str(repo / ".atm-bd/atm-bd/atm-phase-bh"),
     )
     actions = []
 
@@ -637,7 +760,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
             assert (Path(config.state_dir) / name).read_bytes() != payload
 
     damage_runtime()
-    assert cli.main(["--phase", "bh", "--headless"]) == 0
+    assert cli.main(["cron", "--phase", "bh"]) == 0
     headless_output = capsys.readouterr().out
     headless_snapshot = load_snapshot(repo, phase_file.root_id)
     headless_state = load_state(repo, phase_file.root_id)
@@ -666,7 +789,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
         return 0
 
     monkeypatch.setattr(app.ConsoleApp, "run", run_in_pilot)
-    assert cli.main(["--phase", "bh"]) == 0
+    assert cli.main(["console", "--phase", "bh"]) == 0
     assert len(app_result) == 1 and app_result[0][0] is not None
     app_snapshot, app_state = app_result[0]
     assert actions == ["assign", "assign"]

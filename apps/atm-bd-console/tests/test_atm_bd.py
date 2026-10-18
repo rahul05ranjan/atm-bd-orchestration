@@ -28,6 +28,7 @@ from typing import get_args
 
 import pytest
 from contract_samples import PHASE_TEMPLATES
+from process_helpers import run_process
 
 from atm_bd_console import beads_source
 from atm_bd_console.atm_bd import (
@@ -44,6 +45,7 @@ from atm_bd_console.atm_bd import (
     repo_config,
     step,
 )
+from atm_bd_console.enums import CiState, SprintState
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.types import (
     Bead,
@@ -312,7 +314,7 @@ def test_closed_ids_are_derived_from_the_plan_and_shown_in_one_batched_call(fake
     ]
     # The recording was made with the ids in sorted order; bd returns them in request order.
     assert sorted(bead.id for bead in shown) == sorted(CLOSED_IDS)
-    assert {bead.status for bead in shown} == {"closed"}
+    assert {bead.status for bead in shown} == {SprintState.CLOSED}
 
 
 def test_closed_ids_cover_every_container_and_group_when_nothing_is_open() -> None:
@@ -321,6 +323,18 @@ def test_closed_ids_cover_every_container_and_group_when_nothing_is_open() -> No
     assert len(ids) == 40
     assert ids[:4] == ("atm-bh-1", "atm-bh-1.group-dev", "atm-bh-1.group-sanity", "atm-bh-1.group-qa")
     assert group_ids("atm-bh-10") == ("atm-bh-10.group-dev", "atm-bh-10.group-sanity", "atm-bh-10.group-qa")
+
+
+def test_unknown_bead_status_survives_into_sprint_problem_evidence(fake_bin) -> None:
+    open_beads, ready, shown = _read(fake_bin)
+    updated = tuple(replace(bead, status=SprintState.UNKNOWN, raw_status="wat") if bead.id == "atm-bh-1" else bead
+                    for bead in open_beads)
+    updated_ready = tuple(replace(bead, status=SprintState.UNKNOWN, raw_status="wat") if bead.id == "atm-bh-1" else bead
+                          for bead in ready)
+    result = _phase(updated, updated_ready, shown)
+    sprint = next(item for item in result.sprints if item.id == "atm-bh-1")
+    assert sprint.status is SprintState.UNKNOWN
+    assert sprint.raw_status == "wat"
 
 
 def test_phase_bh_yields_ten_sprints_from_their_bead_metadata_and_the_plan(fake_bin) -> None:
@@ -352,7 +366,7 @@ def test_shown_closed_groups_are_steps_and_ready_marks_steps(fake_bin) -> None:
     result = _phase(*_read(fake_bin))
     steps = {step.bead_id: step for step in result.steps}
     for bead_id in CLOSED_IDS:
-        assert steps[bead_id].status == "closed"
+        assert steps[bead_id].status is SprintState.CLOSED
     assert steps["atm-bh-1.group-qa"].kind == "qa"
     assert steps["atm-bh-8.group-dev"].ready is True
     assert steps["atm-bh-4.group-qa"].ready is False
@@ -383,7 +397,7 @@ def test_planted_closed_sprint_comes_from_the_batched_show(fake_bin) -> None:
     open_beads = tuple(bead for bead in open_beads if bead.id != "atm-bh-2")
     ready = tuple(bead for bead in ready if bead.id != "atm-bh-2")
     assert "atm-bh-2" in closed_show_ids(_ok(PLAN_FILE), open_beads + ready)
-    result = _phase(open_beads, ready, (*shown, replace(bh2, status="closed")))
+    result = _phase(open_beads, ready, (*shown, replace(bh2, status=SprintState.CLOSED)))
     bh2_sprint = next(sprint for sprint in result.sprints if sprint.id == "atm-bh-2")
     assert bh2_sprint.closed is True
     assert bh2_sprint.layer == 2
@@ -423,7 +437,7 @@ def test_unusable_root_is_err(fake_bin) -> None:
 def _bead(bead_id: str, parent: str | None, labels: tuple[str, ...] = (), metadata: dict | None = None) -> Bead:
     from datetime import UTC, datetime
 
-    return Bead(bead_id, bead_id, "open", labels, parent, (), None, metadata or {}, datetime(2026, 10, 15, tzinfo=UTC), None, None)
+    return Bead(bead_id, bead_id, SprintState.OPEN, labels, parent, (), None, metadata or {}, datetime(2026, 10, 15, tzinfo=UTC), None, None)
 
 
 def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
@@ -473,6 +487,8 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     qa = _bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.group-dev", "round": 1, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
     got = step(qa, {}).value
     assert (got.kind, got.checked_bead, got.qa_round, got.sprint_bead, got.carry_forward) == ("qa", "atm-bh-4.group-dev", 1, "atm-bh-4", None)
+    closed_qa = replace(qa, close_reason="PASS: 0 findings filed")
+    assert step(closed_qa, {}).value.close_reason == "PASS: 0 findings filed"
     fix_qa = _bead("atm-bh-4.f1-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.f1", "round": 2, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
     fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",), {"round": 1})
     fixed = step(fix_qa, {fix.id: fix}).value
@@ -493,18 +509,18 @@ DISPATCH_REPO = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktr
 SPRINT = Sprint("atm-bh-5", "git and GitHub sources", 5, "sprint/bh-5-git-github-source", "sprint/bh-1-contract",
                 "phase-bh", ("atm-bh-1",), False, 2)
 PR = PullRequest(148, "https://github.com/randlee/atm-bd-orchestration/pull/148", "fix/bh-5-qa-r1",
-                 "sprint/bh-10-textual-tabs", "77543fe", "pending", ())
+                 "sprint/bh-10-textual-tabs", "77543fe", CiState.RUNNING, ())
 LAYER_PRS = (PullRequest(140, "https://github.com/randlee/atm-bd-orchestration/pull/140",
-                          "sprint/bh-5-git-github-source", "fix/bh-1-qa-r1", "235f3a7", "success", ()),)
+                          "sprint/bh-5-git-github-source", "fix/bh-1-qa-r1", "235f3a7", CiState.PASS, ()),)
 COMMIT = "77543fe41def472179cfe4554e7ca27d64eff481"
 
 
 def bead(bead_id: str, stage: str, parent: str, **metadata) -> Bead:
-    return Bead(bead_id, bead_id, "open", ("phase-bh", f"stage:{stage}"), parent, (), None, metadata, NOW, None, None)
+    return Bead(bead_id, bead_id, SprintState.OPEN, ("phase-bh", f"stage:{stage}"), parent, (), None, metadata, NOW, None, None)
 
 
 # Planted after the real atm-bh-5 beads: the sprint container, its poured group and a poured finding group.
-ROOT = Bead("atm-phase-bh", "phase-bh", "open", ("phase-bh",), None, (), None, {}, NOW, None, None)
+ROOT = Bead("atm-phase-bh", "phase-bh", SprintState.OPEN, ("phase-bh",), None, (), None, {}, NOW, None, None)
 CONTAINER = bead("atm-bh-5", "sprint", "atm-phase-bh", layer=5, branch=SPRINT.branch, pr_target=SPRINT.target,
                  stack="phase-bh")
 DEV = bead("atm-bh-5.group-dev", "dev", "atm-bh-5", sprint="bh-5", sprint_bead="atm-bh-5", layer=5)
@@ -562,10 +578,11 @@ def render(template: str, values: dict, tmp_path: Path) -> subprocess.CompletedP
     assert binary, "sc-compose is required for the D5 render check: install sc-compose >= 1.7.0"
     var_file = tmp_path / "vars.json"
     var_file.write_text(json.dumps(values))
-    return subprocess.run(
+    return run_process(
+        "strict template render",
         (binary, "render", "--strict", "--root", str(TEMPLATES), "--file", str(TEMPLATES / template),
          "--var-file", str(var_file)),
-        capture_output=True, text=True, check=False,
+        check=False,
     )
 
 

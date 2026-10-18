@@ -1,21 +1,55 @@
 from __future__ import annotations
 
 import os
+import site
 import subprocess
 import sys
 from pathlib import Path
 from shutil import copytree, ignore_patterns, which
 
 import pytest
+from process_helpers import PROCESS_TIMEOUT, build_command
+from process_helpers import run_process as run
 
 from atm_bd_console import __version__, build
 from atm_bd_console.build import display_identity, identity
 
 CONSOLE = Path(__file__).resolve().parents[1]
+UV = which("uv")
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exit"])
+def test_run_reports_stage_and_captured_diagnostics(monkeypatch, failure: str) -> None:
+    calls = []
+
+    def failed_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, PROCESS_TIMEOUT, output=b"partial output", stderr=b"build stalled")
+        return subprocess.CompletedProcess(argv, 7, stdout="partial output", stderr="build stalled")
+
+    monkeypatch.setattr(subprocess, "run", failed_run)
+    with pytest.raises(pytest.fail.Exception, match="wheel build:.*partial output.*build stalled"):
+        run("wheel build", ["uv", "build"])
+    assert len(calls) == 1
+    assert calls[0][1]["timeout"] == PROCESS_TIMEOUT
+    assert calls[0][1]["capture_output"] and calls[0][1]["text"]
+
+
+def test_run_can_return_an_expected_command_failure(monkeypatch) -> None:
+    result = subprocess.CompletedProcess(["uv", "build"], 1, stdout="", stderr="expected refusal")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: result)
+    assert run("rejected build", ["uv", "build"], check=False) is result
+
+
+def test_build_command_is_offline_and_uses_provisioned_interpreter() -> None:
+    argv = build_command("--wheel")
+    assert "--offline" in argv and "--no-python-downloads" in argv and "--no-build-isolation" in argv
+    assert argv[argv.index("--python") + 1] == sys.executable
 
 
 def git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    run(f"git {' '.join(args)}", ["git", "-C", str(repo), *args])
 
 
 def test_identity_changes_per_commit_and_marks_dirty_checkouts(tmp_path: Path) -> None:
@@ -72,6 +106,7 @@ def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path, dir
     checkout = tmp_path / "checkout"
     copied = checkout / "apps" / "atm-bd-console"
     copytree(CONSOLE, copied, ignore=ignore_patterns(".venv", "__pycache__", "_build_identity.py"))
+    copytree(CONSOLE.parents[1] / "plugins" / "atm-bd-orchestration", checkout / "plugins" / "atm-bd-orchestration")
     (checkout / ".gitignore").write_text("__pycache__/\n")
     git(checkout, "init")
     git(checkout, "config", "user.email", "test@example.com")
@@ -87,16 +122,24 @@ def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path, dir
     if not dirty:
         assert not expected.endswith("-dirty")
     dist = tmp_path / "dist"
-    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=copied, check=True)
+    run("wheel build", build_command("--wheel", "--out-dir", str(dist)), cwd=copied)
     venv = tmp_path / "outside" / "venv"
-    subprocess.run(["uv", "venv", str(venv)], check=True)
+    run("create install environment", [UV, "venv", "--offline", "--no-python-downloads", "--python",
+                                       sys.executable, str(venv)])
     python = venv / "bin" / "python"
-    subprocess.run(["uv", "pip", "install", "--python", str(python), str(next(dist.glob("*.whl")))], check=True)
-    assert subprocess.check_output([venv / "bin" / "atm-bd-console", "--version"], text=True).strip() == expected
-    subprocess.run(["uv", "build", "--sdist", "--out-dir", str(dist)], cwd=copied, check=True)
-    subprocess.run(["uv", "pip", "install", "--reinstall", "--no-cache", "--python", str(python),
-                    str(next(dist.glob("*.tar.gz")))], check=True)
-    assert subprocess.check_output([venv / "bin" / "atm-bd-console", "--version"], text=True).strip() == expected
+    purelib = Path(run("locate install environment", [str(python), "-c",
+                        "import sysconfig; print(sysconfig.get_path('purelib'))"]).stdout.strip())
+    (purelib / "test-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n")
+    install = [UV, "pip", "install", "--offline", "--no-python-downloads", "--no-build-isolation",
+               "--no-deps", "--python", str(python)]
+    run("wheel install", [*install, str(next(dist.glob("*.whl")))])
+    installed = Path(run("locate installed package", [str(python), "-c",
+                         "import atm_bd_console; print(atm_bd_console.__file__)"]).stdout.strip())
+    assert installed.is_relative_to(purelib)
+    assert run("wheel version", [str(venv / "bin" / "atm-bd"), "--version"]).stdout.strip() == expected
+    run("sdist build", build_command("--sdist", "--out-dir", str(dist)), cwd=copied)
+    run("sdist install", [*install, "--reinstall", str(next(dist.glob("*.tar.gz")))])
+    assert run("sdist version", [str(venv / "bin" / "atm-bd"), "--version"]).stdout.strip() == expected
 
 
 def test_checkout_identity_takes_precedence_over_embedded_identity(tmp_path: Path) -> None:
@@ -112,8 +155,8 @@ def test_checkout_identity_takes_precedence_over_embedded_identity(tmp_path: Pat
     (copied / "src" / "atm_bd_console" / "_build_identity.py").write_text("IDENTITY = 'bogus'\n")
     expected = identity(checkout)
     env = {**os.environ, "PYTHONPATH": str(copied / "src")}
-    result = subprocess.check_output([sys.executable, "-c", "from atm_bd_console.build import identity; print(identity())"],
-                                     env=env, cwd=tmp_path, text=True).strip()
+    result = run("checkout identity", [sys.executable, "-c",
+                 "from atm_bd_console.build import identity; print(identity())"], env=env, cwd=tmp_path).stdout.strip()
     assert result == expected and result != "bogus" and not result.endswith("-dirty")
 
 
@@ -132,16 +175,15 @@ def test_build_rejects_sources_without_reliable_git_identity(tmp_path: Path, fai
         git(checkout, "commit", "-m", "one")
     if failure == "shallow":
         clone = tmp_path / "shallow"
-        subprocess.run(["git", "clone", "--depth", "1", checkout.as_uri(), str(clone)], check=True, capture_output=True)
+        run("shallow clone", ["git", "clone", "--depth", "1", checkout.as_uri(), str(clone)])
         copied = clone / "apps" / "atm-bd-console"
     if failure == "missing_git":
         (copied / "src" / "atm_bd_console" / "_build_identity.py").write_text("IDENTITY = 'stale'\n")
     env = dict(os.environ)
     if failure == "missing_git":
         env["PATH"] = str(tmp_path / "no-git")
-    result = subprocess.run([which("uv"), "build", "--wheel", "--python", sys.executable,
-                             "--out-dir", str(tmp_path / "dist")], cwd=copied, env=env,
-                            capture_output=True, text=True, check=False)
+    result = run(f"rejected {failure} build", build_command("--wheel", "--out-dir", str(tmp_path / "dist")),
+                 cwd=copied, env=env, check=False)
     assert result.returncode != 0
     message = {"export": "source is not a console checkout", "missing_git": "git executable is missing",
                "shallow": "checkout is shallow"}[failure]

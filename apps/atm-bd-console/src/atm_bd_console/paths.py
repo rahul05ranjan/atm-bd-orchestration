@@ -6,7 +6,7 @@ from pathlib import Path
 from .atm_bd import PHASE_DIR
 
 # The console's directory name under .atm-bd, and the service name its log file is named after.
-CONSOLE_NAME = "atm-bd-console"
+CONSOLE_NAME = "atm-bd"
 
 
 def console_config_path(repo_root: str | Path) -> Path:

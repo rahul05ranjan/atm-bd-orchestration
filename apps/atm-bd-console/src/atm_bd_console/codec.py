@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import MISSING, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
@@ -104,6 +105,11 @@ def _decode(cls: Any, value: Any, path: str) -> Any:
     if cls is Any:
         return value
     origin, args = get_origin(cls), get_args(cls)
+    if isinstance(cls, type) and issubclass(cls, StrEnum):
+        try:
+            return cls(value)
+        except (ValueError, TypeError):
+            raise _DecodeError(path, f"unknown {cls.__name__} value {value!r}") from None
     if cls is datetime:
         if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
             raise _DecodeError(path, "expected UTC datetime YYYY-MM-DDTHH:MM:SSZ")
@@ -171,7 +177,11 @@ def _decode_dataclass(cls: type[Any], value: Any, path: str) -> Any:
                 decoded[name] = field.default_factory()
                 continue
             raise _DecodeError(f"{path}.{name}", "missing field")
-        decoded[name] = _decode(hints[name], value[name], f"{path}.{name}")
+        raw = value[name]
+        migrate = field.metadata.get("json_migration")
+        if migrate is not None:
+            raw = migrate(raw, value, field.metadata)
+        decoded[name] = _decode(hints[name], raw, f"{path}.{name}")
     return cls(**decoded)
 
 

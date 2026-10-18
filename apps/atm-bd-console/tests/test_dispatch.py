@@ -7,6 +7,7 @@ from contract_samples import PHASE_TEMPLATES
 
 from atm_bd_console.atm_bd import dispatch_spec
 from atm_bd_console.dispatch import candidates, dispatch
+from atm_bd_console.enums import CiState, MergeState, PrState, SprintState
 from atm_bd_console.result import Err, NotFound, Ok
 from atm_bd_console.types import (
     DispatchContext,
@@ -30,7 +31,7 @@ SPRINT = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6", "sprint/bh-1", "phas
 def step(**changes) -> Step:
     value = Step(
         bead_id="atm-bh-6.group-qa", sprint="atm-bh-6", kind="qa", quick_fix=False, anchor=False,
-        status="open", ready=True, assignee="solar", branch="sprint/bh-6", target="sprint/bh-1",
+        status=SprintState.OPEN, ready=True, assignee="solar", branch="sprint/bh-6", target="sprint/bh-1",
         worktree="/worktrees/bh-6", layer=6, difficulty="hard", tag="bh-6", top_epic="atm-phase-bh",
         claimed_at=None, closed_at=None, title="QA", checked_bead="atm-bh-6.group-dev",
         sprint_bead="atm-bh-6", qa_round=1, carry_forward=None,
@@ -47,13 +48,13 @@ def run(value: Step, *, remotes=None, worktrees=None, merges=None, prs=(), spec=
     worktree_values = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),) if worktrees is None else worktrees
     renderer = spec or (lambda context: Ok(DispatchSpec("qa", {"checked_bead": context.step.checked_bead})))
     if merges is None:
-        merges = (Merge("sprint/bh-6", "sprint/bh-1", "clean", (), (), NOW),)
+        merges = (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),)
     return dispatch(phase(value), (), worktree_values, remote_values, merges, prs, REPO, "fenix", NOW, renderer)
 
 
 def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
-    unavailable = Merge("sprint/bh-6", "sprint/bh-1", "error", (), ("timeout; retry the merge check",), NOW)
-    wrong_target = replace(unavailable, target="other", state="clean")
+    unavailable = Merge("sprint/bh-6", "sprint/bh-1", MergeState.ERROR, (), ("timeout; retry the merge check",), NOW)
+    wrong_target = replace(unavailable, target="other", state=MergeState.CLEAN)
     for merges in ((), (unavailable,), (wrong_target,)):
         outcome = run(step(), merges=merges)
         assert outcome.actions == ()
@@ -74,7 +75,7 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
         step(),
         step(bead_id="anchor", anchor=True),
         step(bead_id="quick", quick_fix=True),
-        step(bead_id="closed", status="closed"),
+        step(bead_id="closed", status=SprintState.CLOSED),
         step(bead_id="tasked"),
     )
     task = Task("tasked", "quality-mgr", "assigned", 1, NOW, NOW, "queued")
@@ -82,7 +83,7 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
 
 
 def test_each_hold_is_flat_and_does_not_assign() -> None:
-    conflict = Merge("sprint/bh-6", "sprint/bh-1", "conflict", ("model.py",), (), NOW)
+    conflict = Merge("sprint/bh-6", "sprint/bh-1", MergeState.CONFLICT, ("model.py",), (), NOW)
     cases = (
         (run(step(ready=False)), "not ready"),
         (run(step(), remotes=()), "branch not on origin"),
@@ -96,7 +97,7 @@ def test_each_hold_is_flat_and_does_not_assign() -> None:
 
 
 def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
-    pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "abc123", "failure", ("test",))
+    pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "abc123", CiState.FAIL_BUG, ("test",))
     seen: list[DispatchContext] = []
 
     def render(context: DispatchContext):
@@ -116,15 +117,15 @@ def test_pr_ci_never_hold_and_dispatch_context_uses_contract_sources() -> None:
 
 
 def test_closed_pr_cannot_replace_an_open_dispatch_context() -> None:
-    open_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "open", "success", ())
-    closed_pr = replace(open_pr, number=133, head_sha="closed", state="closed")
+    open_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "open", CiState.PASS, ())
+    closed_pr = replace(open_pr, number=133, head_sha="closed", state=PrState.CLOSED)
     seen: list[DispatchContext] = []
     outcome = run(step(), prs=(open_pr, closed_pr), spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
     assert outcome.actions and seen[0].pr == open_pr and seen[0].layer_prs == (open_pr,)
 
 
 def test_draft_pr_remains_in_the_dispatch_context() -> None:
-    draft_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "draft", "success", (), "draft")
+    draft_pr = PullRequest(132, "https://example/pr/132", "sprint/bh-6", "sprint/bh-1", "draft", CiState.PASS, (), PrState.DRAFT)
     seen: list[DispatchContext] = []
     outcome = run(step(), prs=(draft_pr,), spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
     assert outcome.actions and seen[0].pr == draft_pr and seen[0].layer_prs == (draft_pr,)
@@ -146,12 +147,12 @@ def test_missing_sprint_is_an_error_not_a_silent_drop() -> None:
 
 def _context() -> DispatchContext:
     step = Step(
-        "atm-bh-6.qa", "bh-6", "qa", False, False, "open", True, None, "sprint/bh-6-tick", "integrate/phase-bh",
+        "atm-bh-6.qa", "bh-6", "qa", False, False, SprintState.OPEN, True, None, "sprint/bh-6-tick", "integrate/phase-bh",
         "/worktrees/bh-6", 6, "normal", "bh-6", "atm-bh-6", None, None, "QA bh-6", "atm-bh-6.dev", "atm-bh-6", 1, None,
     )
     sprint = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6-tick", "integrate/phase-bh", "phase-bh", (), False, 0)
     repo = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", ("req-qa",), "/plans")
-    pr = PullRequest(12, "https://example.invalid/pull/12", "sprint/bh-6-tick", "integrate/phase-bh", "abc123", "success", ())
+    pr = PullRequest(12, "https://example.invalid/pull/12", "sprint/bh-6-tick", "integrate/phase-bh", "abc123", CiState.PASS, ())
     return DispatchContext(step, sprint, "bh", "console", "fenix", "abc123", "integrate/phase-bh", "/worktrees/bh-6", pr, (pr,), repo)
 
 

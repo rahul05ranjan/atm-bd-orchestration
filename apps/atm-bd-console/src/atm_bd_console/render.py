@@ -3,6 +3,20 @@ from __future__ import annotations
 from rich.cells import cell_len
 from rich.text import Text
 
+from .enums import SprintState
+from .icons import (
+    MARKER_FAST,
+    MARKER_FIX_QA,
+    MARKER_HARD,
+    MARKER_QA,
+    MARKER_RED,
+    MARKER_YELLOW,
+    SPRINT_ICONS,
+    STATUS_FAIL,
+    STATUS_OK,
+    icon,
+    icon_for,
+)
 from .ids import short_id
 from .result import (
     CommandFailed,
@@ -16,7 +30,7 @@ from .result import (
     Timeout,
     Unreachable,
 )
-from .types import Action, AgentView, Row, Snapshot
+from .types import Action, AgentView, Member, Row, Snapshot
 
 _STATUSES = {
     "busy": ("●", "green"),
@@ -50,7 +64,7 @@ def _fit(line: Text, width: int) -> Text:
 
 def tick_error(error: Error, width: int) -> tuple[Text, Text]:
     """Render a tick error as single-line, width-fitted dashboard and header text."""
-    message = " ".join(error.message.split())
+    message = " ".join(getattr(error, "message", error.kind).split())
     dashboard = Text("\n").join((
         _fit(Text("== Errors (1)", style="red"), width),
         _fit(Text(f" {error.kind}: {message}", style="red"), width),
@@ -62,23 +76,41 @@ def tick_error(error: Error, width: int) -> tuple[Text, Text]:
 def _tag(row: Row) -> Text:
     result = Text()
     if row.marker == "red":
-        result.append("❗", style="red")
+        result.append(MARKER_RED, style="red")
     elif row.marker == "yellow":
-        result.append("⚠️", style="yellow")
+        result.append(MARKER_YELLOW, style="yellow")
     result.append(row.tag)
     return result
 
 
-def _icon(row: Row) -> str:
-    if row.state == "running":
-        return "🌀"
+def render_agent(name: str | None, member: Member | AgentView | None) -> Text:
+    """Render one agent name with its roster icon immediately before the name."""
+    if not name:
+        return Text("unassigned")
+    glyph, style = icon_for(member)
+    result = Text()
+    result.append(glyph, style=style)
+    result.append(name, style="bold")
+    return result
+
+
+def _task_marker(row: Row) -> str | None:
     if row.kind == "sprint_qa":
-        return "🔍"
+        return MARKER_QA
     if row.kind == "fix_qa":
-        return "🛠️"
+        return MARKER_FIX_QA
     if row.kind in ("dev", "fix"):
-        return {"hard": "💎", "normal": "📥", "fast": "⚡"}.get(row.difficulty, "📥")
-    return "📥"
+        return {"hard": MARKER_HARD, "fast": MARKER_FAST}.get(row.difficulty or "")
+    return None
+
+
+def _icon(row: Row) -> Text:
+    status, style = SPRINT_ICONS[SprintState.IN_PROGRESS if row.state == "running" else SprintState.READY]
+    result = Text(status, style=style or "")
+    marker = _task_marker(row)
+    if marker:
+        result.append(marker)
+    return result
 
 
 def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
@@ -86,19 +118,21 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     heading = Text()
     heading.append(glyph, style=color)
     heading.append(" ")
-    heading.append(agent.name, style="bold")
+    heading.append_text(render_agent(agent.name, agent))
     heading.append(f"  {agent.depth}")
     red = sum(row.marker == "red" for row in agent.rows)
     yellow = sum(row.marker == "yellow" for row in agent.rows)
     if red:
-        heading.append(f"  ❗{red}", style="red")
+        heading.append(f"  {MARKER_RED}{red}", style="red")
     if yellow:
-        heading.append(f" ⚠️{yellow}", style="yellow")
+        heading.append(f" {MARKER_YELLOW}{yellow}", style="yellow")
     lines = [heading]
     rows = sorted(agent.rows, key=lambda row: row.state != "running")
     for row in rows[:3]:
         bead_id = short_id(row.task_id, prefix)
-        line = Text(f" {_icon(row)} {bead_id}")
+        line = Text(" ")
+        line.append_text(_icon(row))
+        line.append(f" {bead_id}")
         line.append(" " * max(1, 22 - cell_len(bead_id)))
         line.append(f"{_age(row.age_s):>4} ")
         tag = _tag(row)
@@ -145,7 +179,9 @@ def _pr_link(line: Text, number: int, snapshot: Snapshot) -> None:
 
 def _sent_line(action: Action, snapshot: Snapshot) -> Text:
     beads = ", ".join(short_id(bead_id, snapshot.bead_prefix) for bead_id in action.bead_ids)
-    line = Text(f" {_clock(action.at)} {beads} → {action.to}")
+    line = Text(f" {_clock(action.at)} {beads} → ")
+    recipient = next((agent for agent in snapshot.agents if agent.name == action.to), None)
+    line.append_text(render_agent(action.to, recipient))
     matching = next((row for row in snapshot.prs if row.bead_id in action.bead_ids), None)
     if matching:
         _pr_link(line, matching.pr.number, snapshot)
@@ -178,9 +214,12 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         beads = tuple(step for sprint in snapshot.sprints for step in sprint.steps)
         lines.extend((Text(), Text(f"== Beads ({len(beads)})")))
         for step in beads:
-            lines.append(Text(
-                f" {short_id(step.bead_id, snapshot.bead_prefix):<22} {step.status:<12} {step.kind}"
-            ))
+            bead_line = Text(f" {short_id(step.bead_id, snapshot.bead_prefix):<22} ")
+            status_glyph, status_style = icon(step.status)
+            bead_line.append(status_glyph, style=status_style or "")
+            bead_line.append(" ")
+            bead_line.append(f"{step.status:<12} {step.kind}")
+            lines.append(bead_line)
     if snapshot.stopped is not None and snapshot.prs:
         lines.extend((Text(), Text(f"== PRs ({len(snapshot.prs)})")))
         for row in snapshot.prs:
@@ -206,9 +245,9 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
         read_at = _clock(gh.at) if gh.at else "--:--"
         if gh.error is not None or gh.ok is False:
             kind = gh.error.kind if gh.error is not None else "unavailable"
-            segment = f"gh: {gh.mode} ⛔ {kind} {read_at}"
+            segment = f"gh: {gh.mode} {STATUS_FAIL} {kind} {read_at}"
         else:
-            segment = f"gh: {gh.mode} ✅ {read_at}"
+            segment = f"gh: {gh.mode} {STATUS_OK} {read_at}"
     if gh.truncated:
         segment += " 100+"
     metrics = snapshot.metrics
@@ -216,4 +255,8 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"
     hours, minutes = divmod(max(0, metrics.active_s) // 60, 60)
     line = Text(f"{segment} | {progress} | active {hours}h{minutes:02d}m | tick {_clock(snapshot.generated_at, seconds=True)}")
+    if snapshot.lead:
+        agent = next((item for item in snapshot.agents if item.name == snapshot.lead), None)
+        line.append(" | lead ")
+        line.append_text(render_agent(snapshot.lead, agent))
     return _fit(line, width)

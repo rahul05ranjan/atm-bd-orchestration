@@ -46,7 +46,7 @@ class StateStore:
         for number, line in enumerate(lines, start=1):
             decoded = from_json(ActionLine, line)
             if isinstance(decoded, Err):
-                self.load_errors.append(ParseFailed("parse_failed", f"{path}:{number}", decoded.error.message,
+                self.load_errors.append(ParseFailed("parse_failed", f"{path}:{number}", getattr(decoded.error, "message", decoded.error.kind),
                                                     "repair the action history JSON"))
                 continue
             actions.append(decoded.value)

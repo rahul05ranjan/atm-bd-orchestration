@@ -43,12 +43,13 @@ else:
         Textual's run_input_thread names its parser class through the linux_driver module global, so that
         name is the only hook; it is swapped for the life of the input thread and restored afterwards.
         """
-        stock = linux_driver.XTermParser
-        linux_driver.XTermParser = CellMouseParser
+        namespace = linux_driver.__dict__
+        stock = namespace["XTermParser"]
+        namespace["XTermParser"] = CellMouseParser
         try:
             yield
         finally:
-            linux_driver.XTermParser = stock
+            namespace["XTermParser"] = stock
 
     class CellMouseDriver(LinuxDriver):
         """LinuxDriver that never requests in-band resize or pixel mouse reporting."""

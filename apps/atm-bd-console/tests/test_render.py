@@ -7,9 +7,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from contract_samples import STEP
 from rich.cells import cell_len
 
+from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
+from atm_bd_console.enums import CiState, SprintState
+from atm_bd_console.model import _agent_views
 from atm_bd_console.render import _age, _error_text, dashboard, status_bar
 from atm_bd_console.result import (
     CommandFailed,
@@ -27,13 +31,16 @@ from atm_bd_console.types import (
     Action,
     AgentView,
     GhStatus,
+    Member,
     Metrics,
+    Phase,
     PrRow,
     PullRequest,
     Row,
     Section,
     SectionRow,
     Snapshot,
+    Task,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -84,12 +91,12 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
         rendered = dashboard(value, 120, 40)
         text = rendered.plain
         assert text.startswith("phase-bh · 14:04 · next 60s")
-        assert "● busy  4  ❗1 ⚠️1" in text
-        assert "🌀 running" in text and "💎 hard" in text and "📥 normal" in text
+        assert "● ·busy  4  ❗1 ⚠️1" in text
+        assert "\U000f051f running" in text and "💎 hard" in text and "\U000f040d normal" in text
         assert "… +1 more" in text and "⚡ fast" not in text
-        assert "◐ stalling" in text and "🔍 sprint-qa" in text
-        assert "■ blocked" in text and "🛠️ fix-qa" in text
-        assert "○ offline" in text and "· idle" in text
+        assert "◐ ·stalling" in text and "🔍 sprint-qa" in text
+        assert "■ ·blocked" in text and "🛠️ fix-qa" in text
+        assert "○ ·offline" in text and "· ·idle" in text
         assert "❗bh: description for atm-hard" in text
         assert "⚠️bh: description for atm-normal" in text
         styles = {span.style for span in rendered.spans}
@@ -98,9 +105,30 @@ def test_dashboard_agent_rows_styles_icons_and_overflow() -> None:
     pacific_test(check)
 
 
+def test_dashboard_renders_every_member_from_roster_fixture(fake_bin, monkeypatch) -> None:
+    monkeypatch.setenv("ATM_BODY", (FIXTURES / "atm" / "members.json").read_text())
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+    members = atm_source.members("atm-dev", "team-lead")
+    assert isinstance(members, Ok)
+    agents = _agent_views(members.value, (), None, Ok(()), NOW)
+    rendered = dashboard(replace(snapshot(), agents=agents, errors=(), sections=(), sent=()), 120, 40)
+
+    for name, glyph, style in (
+        ("aria", "\U000f05a8", "#FFA60D"),
+        ("boris", "\U000f06c4", "#FF8C66"),
+        ("cy", "\U000f01a6", "#E551BA"),
+        ("dara", "\U000f029b", None),
+        ("eli", "\U000f01e7", "#2DE057"),
+    ):
+        position = rendered.plain.index(glyph + name)
+        if style is not None:
+            assert any(span.start == position and span.end == position + 1 and span.style == style
+                       for span in rendered.spans)
+
+
 def test_sections_error_first_sent_last_height_and_links() -> None:
     error = Timeout("timeout", ("atm",), 5, "retry")
-    pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", "pending", ())
+    pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", CiState.RUNNING, ())
     actions = tuple(Action(NOW - timedelta(minutes=number), "send", "dev-sanity", ("atm-bh-5",), "sent", None)
                     for number in range(6))
     value = replace(
@@ -114,7 +142,7 @@ def test_sections_error_first_sent_last_height_and_links() -> None:
         assert text.index("== Errors (1)") < text.index("== Held (1)") < text.index("== Sent")
         assert "14:04 timeout:" in text and "retry" in text
         assert "bh-6" in text and "3m" in text and "PR #553" in text
-        assert text.count("→ dev-sanity") == 5
+        assert text.count("→ ·dev-sanity") == 5
         assert any("link https://example/pr/553" in str(span.style) for span in rendered.spans)
         clipped = dashboard(value, 80, 10).plain.splitlines()
         assert len(clipped) == 10 and clipped[-1].startswith("… ") and "more rows" in clipped[-1]
@@ -134,7 +162,7 @@ def test_long_titles_with_wide_chars_and_emoji_clip_at_80_and_120() -> None:
         lines = dashboard(value, width, 40).plain.splitlines()
         assert all(cell_len(line) <= width for line in lines), width
         assert any(line.endswith("…") for line in lines), width
-        assert any("🌀 long-title" in line and "❗bh:" in line for line in lines), width
+        assert any("\U000f051f💎 long-title" in line and "❗bh:" in line for line in lines), width
 
     assert any("💎" in line for line in dashboard(value, 120, 40).plain.splitlines())
 
@@ -158,23 +186,52 @@ def test_multiline_task_description_stays_on_one_width_fitted_row(width: int) ->
         assert lines[3].endswith("<review> Inspect 界 branch and report findings. </review> " + "detail " * 19 + "detail")
 
 
+@pytest.mark.parametrize("known_step", [True, False])
+@pytest.mark.parametrize(("description", "summary"), [
+    (('<atm-task id="atm-bi-6.group-dev" sprint="bi-6"> <description><![CDATA['
+      'Implement dev bead `atm-bi-6.group-dev`…'), 'Implement dev bead `atm-bi-6.group-dev`…'),
+    (('<atm-task id="atm-bi-6.group-dev" sprint="bi-6">\n<description><![CDATA[\n'
+      '  Implement\tdev bead\nLater instructions\n]]></description>\n</atm-task>'), 'Implement dev bead'),
+    ('\n  Plain\ttext summary\nLater instructions', 'Plain text summary'),
+    (' \n\t', ''),
+])
+def test_dispatch_task_uses_bead_title_or_plain_first_line(known_step: bool, description: str, summary: str) -> None:
+    task_id = "atm-bi-6.group-dev"
+    title = "Implement status table"
+    task = Task(task_id, "arch-ctm", "active", 0, NOW, NOW, description)
+    step = replace(STEP, bead_id=task_id, kind="dev", title=title, top_epic="atm-phase-bi", tag="phase-bi")
+    phase = Phase("atm-phase-bi", "phase-bi", "Phase BI", False, (), (step,) if known_step else (), ())
+    agents = _agent_views((Member("arch-ctm", "active", NOW),), (task,), phase, Ok(()), NOW)
+    expected = title if known_step else summary
+    assert agents[0].rows[0].description == expected
+    value = replace(snapshot(), agents=agents, errors=(), sections=(), sent=())
+
+    line = next(line for line in dashboard(value, 240, 40).plain.splitlines() if "bi-6.group-dev" in line)
+
+    assert "<" not in line and "CDATA" not in line and "]]>" not in line
+    assert "Later instructions" not in line
+    assert expected in line
+    if expected:
+        assert line.index("bi-6.group-dev") < line.index(expected)
+
+
 def test_status_bar_formats_and_cell_width() -> None:
     value = replace(snapshot(), metrics=Metrics(3, 9, 33, 14 * 3600 + 20 * 60),
                     gh=GhStatus("graphql", True, None, NOW, False))
 
     def check() -> None:
         expected = (FIXTURES / "render" / "status-bar-ok.txt").read_text().rstrip("\n")
-        assert status_bar(value, 120).plain == expected
+        assert status_bar(value, 120).plain == expected + " | lead ·fenix"
         assert status_bar(replace(value, gh=GhStatus("off", None, None, None, False)), 120).plain == (
-            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+            "gh: off | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
         assert status_bar(failed, 120).plain == (
-            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+            "gh: graphql ⛔ timeout 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
         assert status_bar(truncated_ok, 120).plain == (
-            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31"
+            "gh: graphql ✅ 14:04 100+ | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         for width in (80, 120):
             assert cell_len(status_bar(value, width).plain) <= width
@@ -232,14 +289,14 @@ def test_running_contract_snapshot_renders_its_rows_unmodified() -> None:
     rendered = dashboard(decoded.value, 120, 40).plain
 
     assert rendered.splitlines()[0].startswith("phase-bh ·")
-    assert "● arch-ctm  2 ⚠️1" in rendered
+    assert "● ·arch-ctm  2 ⚠️1" in rendered
     assert "bh-6                    7m ⚠️bh-6: QA bh-6 round 2" in rendered
     assert "== Errors (2)" in rendered
     assert "command_failed: gh api graphql (exit 1): HTTP 502" in rendered
     assert "lock_held: snapshot age 42s" in rendered
     assert "== Blocked (1)" in rendered
     assert "CI failing on the top layer PR #1850" in rendered
-    assert "bh-6.qa → quality-mgr" in rendered
+    assert "bh-6.qa → ·quality-mgr" in rendered
 
 
 def test_stopped_snapshot_renders_beads_and_pr_history() -> None:
@@ -254,3 +311,16 @@ def test_stopped_snapshot_renders_beads_and_pr_history() -> None:
     assert "== PRs (1)" in rendered
     assert "PR #1850" in rendered
     assert "== Sent" in rendered
+
+
+def test_stopped_snapshot_renders_unknown_bead_status_icon() -> None:
+    decoded = from_json(Snapshot, (FIXTURES / "contract" / "snapshot-stopped-closed.json").read_text())
+    assert isinstance(decoded, Ok)
+    sprint = decoded.value.sprints[0]
+    step = replace(sprint.steps[0], status=SprintState.UNKNOWN)
+    value = replace(decoded.value, sprints=(replace(sprint, steps=(step,)),))
+
+    rendered = dashboard(value, 120, 40).plain
+
+    assert "bh-6.qa" in rendered
+    assert "? unknown" in rendered

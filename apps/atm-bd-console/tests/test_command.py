@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 from atm_bd_console import command
@@ -43,8 +44,17 @@ def test_missing_program_is_command_failed_127(fake_bin) -> None:
     assert (result.error.code, result.error.fix) == (127, "install it")
 
 
-def test_git_github_and_beads_sources_run_only_through_command() -> None:
-    for name in ("git_source.py", "github_source.py", "beads_source.py"):
+def test_stdin_and_env_reach_the_program(fake_bin, monkeypatch, tmp_path) -> None:
+    stdin_log = tmp_path / "stdin"
+    monkeypatch.setenv("FAKE_STDIN_LOG", str(stdin_log))
+    fake_bin.make("tool", 'printf "%s" "$ATM_IDENTITY"\ncat > "$FAKE_STDIN_LOG"\n')
+    result = command.run(("tool",), "fix it", stdin="piped text", env={**os.environ, "ATM_IDENTITY": "cipher"})
+    assert result == Ok(command.Output(0, "cipher"))
+    assert stdin_log.read_text() == "piped text"
+
+
+def test_git_github_beads_status_and_atm_sources_run_only_through_command() -> None:
+    for name in ("git_source.py", "github_source.py", "beads_source.py", "status.py", "atm_source.py"):
         tree = ast.parse((PACKAGE / name).read_text())
         imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
         imported |= {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}

@@ -1,15 +1,32 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from typing import get_args, get_type_hints
 
 import pytest
-from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO, SAMPLES, SNAPSHOT, TASK
+from contract_samples import (
+    BEAD,
+    CONFIG,
+    ERRORS,
+    INPUTS,
+    NOT_FOUND,
+    PHASE,
+    PLUS_TWO,
+    PRS_FILE,
+    SAMPLES,
+    SNAPSHOT,
+    STEP,
+    TASK,
+)
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
+from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
+from atm_bd_console.icons import icon_for
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
@@ -30,6 +47,88 @@ TEST_LEAD = "test-lead"
 TEST_SANITY_MEMBER = "test-sanity"
 TEST_QA_MEMBER = "test-qa"
 TEST_REVIEWER = "test-reviewer"
+OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "assignee"}
+
+
+def test_pre_enum_snapshot_decodes_to_typed_states() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "snapshot" / "pre-enums.json"
+    decoded = from_json(Snapshot, fixture.read_text())
+    assert isinstance(decoded, Ok)
+    pr = decoded.value.prs[0]
+    assert isinstance(pr.pr.ci, CiState)
+    assert isinstance(pr.pr.state, PrState)
+    assert pr.merge is not None and isinstance(pr.merge.state, MergeState)
+
+
+def test_unrelated_dataclasses_with_domain_names_are_not_migrated() -> None:
+    @dataclass
+    class Snapshot:
+        top_ci: str
+
+    @dataclass
+    class PullRequest:
+        ci: str
+        failed_checks: tuple[str, ...]
+
+    assert from_json(Snapshot, '{"top_ci":"success"}') == Ok(Snapshot("success"))
+    assert from_json(PullRequest, '{"ci":"failure","failed_checks":["linux"]}') == Ok(
+        PullRequest("failure", ("linux",))
+    )
+
+
+@pytest.mark.parametrize(
+    ("legacy", "checks", "expected"),
+    [
+        ("success", [], CiState.PASS),
+        ("pending", [], CiState.RUNNING),
+        ("failure", ["test-macos"], CiState.FAIL_MACOS),
+        ("failure", ["test-windows"], CiState.FAIL_WINDOWS),
+        ("failure", ["test-linux"], CiState.FAIL_LINUX),
+        ("failure", ["test-linux", "test-macos"], CiState.FAIL_BUG),
+        ("failure", [], CiState.FAIL_BUG),
+    ],
+)
+def test_legacy_prs_file_and_snapshot_ci_migration(legacy: str, checks: list[str], expected: CiState) -> None:
+    prs_file = json.loads(to_json(PRS_FILE))
+    prs_file["prs"][0].update(ci=legacy, failed_checks=checks)
+    decoded_file = from_json(types.PrsFile, json.dumps(prs_file))
+    assert isinstance(decoded_file, Ok)
+    assert decoded_file.value.prs[0].ci is expected
+
+    snapshot = json.loads(to_json(SNAPSHOT))
+    snapshot["top_ci"] = legacy
+    snapshot["prs"][0]["pr"].update(ci=legacy, failed_checks=checks)
+    decoded_snapshot = from_json(types.Snapshot, json.dumps(snapshot))
+    assert isinstance(decoded_snapshot, Ok)
+    assert decoded_snapshot.value.top_ci is {
+        "success": CiState.PASS, "pending": CiState.RUNNING, "failure": CiState.FAIL_BUG,
+    }[legacy]
+    assert decoded_snapshot.value.prs[0].pr.ci is expected
+
+
+@pytest.mark.parametrize("checks", [None, "linux", [123], {"test": "linux"}])
+def test_legacy_ci_rejects_malformed_failed_checks(checks: object) -> None:
+    prs_file = json.loads(to_json(PRS_FILE))
+    prs_file["prs"][0].update(ci="failure", failed_checks=checks)
+    decoded = from_json(types.PrsFile, json.dumps(prs_file))
+    assert isinstance(decoded, Err)
+    assert isinstance(decoded.error, ParseFailed)
+    assert decoded.error.source.startswith("$.prs[0].failed_checks")
+
+
+def test_legacy_bead_step_and_qa_strings_decode_to_enums() -> None:
+    import json
+
+    bead = json.loads(to_json(BEAD))
+    bead.pop("raw_status")
+    decoded_bead = from_json(types.Bead, json.dumps(bead))
+    decoded_step = from_json(types.Step, to_json(STEP))
+    agent = replace(SNAPSHOT.agents[0], qa_state=QaState.PASS)
+    decoded_agent = from_json(types.AgentView, to_json(agent))
+    assert isinstance(decoded_bead, Ok) and decoded_bead.value.status is SprintState.IN_PROGRESS
+    assert isinstance(decoded_step, Ok) and decoded_step.value.status is SprintState.IN_PROGRESS
+    assert isinstance(decoded_agent, Ok) and decoded_agent.value.qa_state is QaState.PASS
+    assert '"qa_state":"pass"' in to_json(agent)
 
 
 def test_config_round_trip_and_literal_rejection() -> None:
@@ -66,7 +165,11 @@ def test_samples_cover_every_contract_type_populated() -> None:
     for sample in SAMPLES:
         for field in fields(sample):
             value = getattr(sample, field.name)
-            assert value is not None, f"{type(sample).__name__}.{field.name} is None"
+            assert value is not None or field.name in OPTIONAL_ADDITIONS, (
+                f"{type(sample).__name__}.{field.name} is None"
+            )
+            if field.name in OPTIONAL_ADDITIONS and value is None:
+                continue
             assert not (isinstance(value, (tuple, Mapping, str)) and len(value) == 0), (
                 f"{type(sample).__name__}.{field.name} is empty"
             )
@@ -108,6 +211,37 @@ def test_tick_context_round_trip() -> None:
     assert repo.reviewers_round1 == (TEST_REVIEWER,)
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     assert from_json(Inputs, to_json(inputs)) == Ok(inputs)
+
+
+def test_legacy_snapshot_decodes_with_empty_agent_metadata() -> None:
+    import json
+
+    legacy = json.loads((Path(__file__).parent / "fixtures" / "contract" / "snapshot-running.json").read_text())
+    for agent in legacy["agents"]:
+        for field in ("agent_type", "model", "harness", "qa_state"):
+            agent.pop(field, None)
+    for pr in legacy["prs"]:
+        pr.pop("assignee", None)
+    decoded = from_json(Snapshot, json.dumps(legacy))
+    assert isinstance(decoded, Ok)
+    assert all((agent.agent_type, agent.model, agent.harness, agent.qa_state) == (None, None, None, None)
+               for agent in decoded.value.agents)
+
+
+@pytest.mark.parametrize(
+    ("qa_state", "color"),
+    ((QaState.RUNNING, "#4A5AF8"), (QaState.PASS, "#2EA043"), (QaState.FAIL, "#F85149")),
+)
+def test_qa_icon_color_survives_snapshot_codec_round_trip(qa_state: QaState, color: str) -> None:
+    agent = replace(SNAPSHOT.agents[0], agent_type="qa", qa_state=qa_state)
+    snapshot = replace(SNAPSHOT, agents=(agent,))
+
+    encoded = to_json(snapshot)
+    decoded = from_json(Snapshot, encoded)
+
+    assert decoded == Ok(snapshot)
+    assert to_json(decoded.value) == encoded
+    assert icon_for(decoded.value.agents[0]) == ("\U000f029b", color)
 
 
 def test_inputs_interval_matches_config_interval() -> None:

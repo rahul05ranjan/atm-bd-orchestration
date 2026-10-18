@@ -1,9 +1,50 @@
-# Console operational logs
+# atm-bd
+
+`atm-bd` provides a terminal dashboard and single-tick cron runner for ATM and
+Beads orchestration. It also bundles the orchestration skills for installation
+into a repository.
+
+## Development validation
+
+From the repository root, `just lint` runs the console's lint and type gates.
+Pyright checks only `apps/atm-bd-console/src`, including the enum matches whose
+`assert_never` fallbacks make missing cases type errors. `tests/` is not included in the static type-check gate;
+the test suite is validated by pytest at runtime. Ruff checks both `src` and `tests`.
+The GitHub Actions console source type-check step uses the same scope.
+
+Run the checks directly from `apps/atm-bd-console`:
+
+```bash
+uv run --frozen pytest -q
+uv run --frozen --group dev ruff check src tests
+uv run --frozen pyright src
+```
+
+## Installation and prerequisites
+
+Install the package with `uv tool install atm-bd` (Python 3.11 or newer).
+The console and cron commands operate on a configured repository and require
+the `atm`, `bd`, and `git` executables on `PATH`. The Status graph also uses
+`mmdflux` when available.
+
+Before running `atm-bd skill`, install the `sc-compose` CLI and ensure the
+host `python3` on `PATH` can import `pydantic`, `yaml` (PyYAML), and the
+`sc-compose` Python wheel. The CLI, host wheel, and the wheel in the atm-bd
+environment must have matching versions within the bundled manifest's range;
+the installer checks these requirements before writing files. The host Python
+dependencies can be installed with `python3 -m pip install pydantic pyyaml
+'sc-compose>=1.7.0,<2'`; install the matching `sc-compose` CLI separately.
+
+From the repository root, run `atm-bd skill` to install the bundled skills
+without fetching a release. It reports the bundled source ref, commit SHA,
+and app version. Use `atm-bd skill --help` for release and destination options.
+
+## Console operational logs
 
 ## Launch settings
 
-Run `atm-bd-console --phase bh` from the repository root. For one cron tick,
-use `atm-bd-console --phase bh --headless`; add `--dry-run` to preview actions.
+Run `atm-bd console --phase bh` from the repository root. For one cron tick,
+use `atm-bd cron --phase bh`; add `--dry-run` to preview actions.
 The phase file `.atm-bd/phase-bh.toml` supplies the assignment identity and
 template paths:
 
@@ -56,7 +97,7 @@ still requiring a successful current merge check.
 
 The console owns one `sc-observability` logger for its repository for the life
 of the process. All ticks reuse it, including stopped and failed ticks. Logs
-live under `.atm-bd/atm-bd-console/logs/`; the console sink is disabled. Each
+live under `.atm-bd/atm-bd/logs/`; the console sink is disabled. Each
 tick flushes admitted events before saving its snapshot. Logger construction,
 event admission and flush failures appear in the snapshot's Errors section
 and in headless error output. They do not change whether a dispatch succeeded.
@@ -74,7 +115,7 @@ their operation, outcome and typed error, with team, task IDs or branch context
 where available. `hold` events record the task, recipient and hold reason;
 they do not introduce additional dispatch rules.
 
-The phase's `.atm-bd/atm-bd-console/<root>/actions.jsonl` is an append-only
+The phase's `.atm-bd/atm-bd/<root>/actions.jsonl` is an append-only
 journal. Assignment/send entries record attempts, followed by a `hold` entry
 on failure; `dry_run` entries record previews. An attempt entry alone is not
 proof of delivery. Operational `action` events carry the explicit outcome.

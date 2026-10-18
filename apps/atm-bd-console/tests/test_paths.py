@@ -8,8 +8,8 @@ from atm_bd_console.result import Ok
 
 def test_every_console_path_resolves_under_one_root(tmp_path) -> None:
     assert console_config_path(tmp_path) == tmp_path / ".atm-bd" / "console.toml"
-    assert log_directory(tmp_path) == tmp_path / ".atm-bd" / "atm-bd-console" / "logs"
-    assert state_directory(tmp_path, "atm-bh") == tmp_path / ".atm-bd" / "atm-bd-console" / "atm-bh"
+    assert log_directory(tmp_path) == tmp_path / ".atm-bd" / "atm-bd" / "logs"
+    assert state_directory(tmp_path, "atm-bh") == tmp_path / ".atm-bd" / "atm-bd" / "atm-bh"
 
 
 def test_config_state_dir_is_the_state_directory(phase_repo) -> None:
@@ -25,4 +25,4 @@ def test_logger_writes_into_the_log_directory(tmp_path) -> None:
     assert isinstance(created, Ok)
     assert created.value.event("tick_start", source="test", ok=True) == Ok(None)
     assert created.value.flush() == Ok(None)
-    assert [path.name for path in log_directory(tmp_path).glob("*.jsonl")] == ["atm-bd-console.log.jsonl"]
+    assert [path.name for path in log_directory(tmp_path).glob("*.jsonl")] == ["atm-bd.log.jsonl"]

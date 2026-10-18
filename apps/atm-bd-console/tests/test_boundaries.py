@@ -42,7 +42,11 @@ def _names_console_layout(tree: ast.AST, modules: list[str]) -> bool:
     """The console directory literal, or an import of the .atm-bd name, outside the path owners."""
     if any(module.split(".")[-1] == "PHASE_DIR" for module in modules):
         return True
-    return any(isinstance(node, ast.Constant) and node.value == "atm-bd-console" for node in ast.walk(tree))
+    # A string fragment in a concatenated source-directory name is not a runtime path.
+    fragments = {child for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+                 for child in (node.left, node.right)}
+    return any(isinstance(node, ast.Constant) and node.value == "atm-bd" and node not in fragments
+               for node in ast.walk(tree))
 
 
 def violations(package: Path) -> list[str]:
@@ -109,10 +113,11 @@ def test_planted_bd_list_all_is_flagged(tmp_path: Path) -> None:
 
 def test_planted_console_layout_outside_the_path_owners_is_flagged(tmp_path: Path) -> None:
     found = _plant(tmp_path, {
-        "paths.py": 'CONSOLE_DIR = "atm-bd-console"\n',
+        "paths.py": 'CONSOLE_DIR = "atm-bd"\n',
         "config.py": "from .atm_bd import PHASE_DIR\nSTATE = PHASE_DIR\n",
-        "log.py": 'NAME = "atm-bd-console"\n',
+        "log.py": 'NAME = "atm-bd"\n',
         "app.py": 'print("atm-bd-console: lock held")\n',  # a message, not a path
+        "build.py": 'SOURCE_DIR = "atm-bd" + "-console"\n',
     })
     assert sorted(found) == ["config.py: console layout", "log.py: console layout"]
 

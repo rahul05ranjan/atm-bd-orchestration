@@ -17,7 +17,7 @@ import sys
 
 
 FAILED = 2
-CONSOLE = "atm-bd-console"
+CONSOLE = "atm-bd"
 REQUIRED_CONSOLE_VERSION = (0, 1, 0)
 REQUIRED_CONSOLE_VERSION_TEXT = ".".join(map(str, REQUIRED_CONSOLE_VERSION))
 CONSOLE_INSTALL = "{{ console_install }}"

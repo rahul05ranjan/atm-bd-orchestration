@@ -8,10 +8,21 @@ from pathlib import Path
 import pytest
 
 from atm_bd_console import beads_source
+from atm_bd_console.enums import SprintState
 from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed
 from atm_bd_console.types import Bead
 
 NOW = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("open", SprintState.OPEN), ("closed", SprintState.CLOSED),
+                                                ("unexpected", SprintState.UNKNOWN)])
+def test_bd_status_is_typed_and_preserves_raw_value(raw: str, expected: SprintState) -> None:
+    bead = beads_source._bead({"id": "x", "title": "x", "status": raw, "created_at": "2026-10-15T04:00:00Z"})
+    assert bead.status is expected
+    assert bead.raw_status == raw
+
+
 # Each `bd show` argument names a file under $FAKE_BEADS; the reply is their JSON array, as bd prints it.
 SHOW = """
 [ "$1" = show ] || { echo "unexpected: $*" >&2; exit 2; }
@@ -28,7 +39,7 @@ printf ']'
 
 
 def leaf(bead_id: str, parent: str | None) -> Bead:
-    return Bead(bead_id, bead_id, "open", ("phase-bh",), parent, (), None, {}, NOW, None, None)
+    return Bead(bead_id, bead_id, SprintState.OPEN, ("phase-bh",), parent, (), None, {}, NOW, None, None)
 
 
 @pytest.fixture
@@ -40,6 +51,8 @@ def beads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                             ("atm-bh-6", "atm-phase-bh")):
         raw = {"id": bead_id, "title": bead_id, "status": "closed", "labels": ["phase-bh"],
                "created_at": "2026-10-14T20:00:00-07:00", "closed_at": "2026-10-15T01:00:00Z"}
+        if bead_id == "atm-bh-4":
+            raw["close_reason"] = "PASS all checks"
         if parent:
             raw["parent"] = parent
         (store / f"{bead_id}.json").write_text(json.dumps(raw))
@@ -54,8 +67,9 @@ def test_three_level_chain_is_three_shows(fake_bin, beads: Path) -> None:
     assert isinstance(result, Ok), result
     found = {bead.id: bead for bead in result.value}
     assert set(found) == {*(step.id for step in steps), "atm-bh-4.group", "atm-bh-4", "atm-phase-bh"}
-    assert (found["atm-bh-4"].parent, found["atm-bh-4"].status) == ("atm-phase-bh", "closed")
+    assert (found["atm-bh-4"].parent, found["atm-bh-4"].status) == ("atm-phase-bh", SprintState.CLOSED)
     assert found["atm-bh-4"].closed_at == datetime(2026, 10, 15, 1, 0, tzinfo=UTC)
+    assert found["atm-bh-4"].close_reason == "PASS all checks"
     calls = fake_bin.argv()
     # One show per level; the two steps' shared parent is shown once.
     assert calls == [

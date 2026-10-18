@@ -32,7 +32,7 @@ Requirements in the consuming repository:
   names a team member and is not checked: it may have no agent file;
 - a git `origin` remote (`owner/name`);
 - every manifest requirement on PATH: `python3` (with PyYAML and pydantic),
-  `sc-compose`, `atm`, `bd`, `jq`, `git`, and `atm-bd-console`. The installer
+  `sc-compose`, `atm`, `bd`, `jq`, `git`, and `atm-bd`. The installer
   verifies their declared version floors before it writes anything.
 - `gh` and `gh-stack` for lead-only stacked-PR work (not installer-verified).
 
@@ -60,11 +60,11 @@ below and writes nothing; `complete()` places, renders and records the files.
 
 ## Phase cron
 
-The console's `--headless` option runs one tick and exits. It shares the
+The `atm-bd cron` command runs one tick and exits. It shares the
 `runner.step` path with the app. The documented invocation is:
 
 ```sh
-atm-bd-console --headless --phase bh
+atm-bd cron --phase bh
 ```
 
 Create the log directory with `mkdir -p /Users/randlee/Library/Logs`, then
@@ -73,7 +73,7 @@ It uses absolute repository, executable, PATH, and log paths; a launch or CLI
 failure is written to the same log and keeps a nonzero exit status.
 
 ```cron
-*/15 * * * * /bin/bash -lc 'cd /Users/randlee/github/atm-bd-orchestration || { echo "cannot enter orchestration repo" >&2; exit 72; }; export PATH="/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /Users/randlee/.local/bin/atm-bd-console --headless --phase bh; rc=$?; if [ "$rc" -ne 0 ]; then echo "atm-bd-console phase bh failed with exit $rc" >&2; fi; exit "$rc"' >> /Users/randlee/Library/Logs/atm-bd-console-phase-bh.log 2>&1
+*/15 * * * * /bin/bash -lc 'cd /Users/randlee/github/atm-bd-orchestration || { echo "cannot enter orchestration repo" >&2; exit 72; }; export PATH="/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; /Users/randlee/.local/bin/atm-bd cron --phase bh; rc=$?; if [ "$rc" -ne 0 ]; then echo "atm-bd phase bh failed with exit $rc" >&2; fi; exit "$rc"' >> /Users/randlee/Library/Logs/atm-bd-phase-bh.log 2>&1
 ```
 
 For Hermes cron, create this script under `~/.hermes/scripts/`. It changes to
@@ -84,29 +84,29 @@ records a nonzero run as a failure.
 
 ```sh
 mkdir -p ~/.hermes/scripts
-cat > ~/.hermes/scripts/atm-bd-console-bh.sh <<'EOF'
+cat > ~/.hermes/scripts/atm-bd-bh.sh <<'EOF'
 #!/usr/bin/env bash
 set -u
 repo=/Users/randlee/github/atm-bd-orchestration
-console=/Users/randlee/.local/bin/atm-bd-console
+console=/Users/randlee/.local/bin/atm-bd
 export PATH=/Users/randlee/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 if ! cd "$repo"; then
-  printf 'atm-bd-console cron: cannot enter %s\n' "$repo" >&2
+  printf 'atm-bd cron: cannot enter %s\n' "$repo" >&2
   exit 72
 fi
 if [ ! -x "$console" ]; then
-  printf 'atm-bd-console cron: executable missing: %s\n' "$console" >&2
+  printf 'atm-bd cron: executable missing: %s\n' "$console" >&2
   exit 127
 fi
-"$console" --headless --phase bh
+"$console" cron --phase bh
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  printf 'atm-bd-console cron: command failed with exit %s\n' "$rc" >&2
+  printf 'atm-bd cron: command failed with exit %s\n' "$rc" >&2
 fi
 exit "$rc"
 EOF
-chmod 700 ~/.hermes/scripts/atm-bd-console-bh.sh
-hermes cron create "*/15 * * * *" --no-agent --script atm-bd-console-bh.sh --deliver local --name "atm-bd-console phase-bh"
+chmod 700 ~/.hermes/scripts/atm-bd-bh.sh
+hermes cron create "*/15 * * * *" --no-agent --script atm-bd-bh.sh --deliver local --name "atm-bd phase-bh"
 ```
 
 The examples use `/Users/randlee`; adjust those paths for the host where the

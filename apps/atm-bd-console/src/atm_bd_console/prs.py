@@ -2,41 +2,39 @@ from __future__ import annotations
 
 from rich.text import Text
 
+from .enums import FAILING_CI, MergeState, PrState
+from .icons import icon, merge_icon
 from .ids import short_id
-from .render import _fit
+from .render import _fit, render_agent
 from .types import PrRow, PullRequest, Snapshot
 
-_STATE_GLYPHS = {"open": "◉", "merged": "⑂", "closed": "⊗", "draft": "○"}
-_STATE_STYLES = {"open": "green", "merged": "magenta", "closed": "red", "draft": "grey70"}
 
 def active_pr(pr: PullRequest) -> bool:
-    return pr.state in ("open", "draft")
+    return pr.state in (PrState.OPEN, PrState.DRAFT)
 
 
 def _row(value: PrRow, snapshot: Snapshot) -> Text:
     line = Text("▲ " if value.top else "  ")
-    line.append(f"{_STATE_GLYPHS[value.pr.state]} ", style=_STATE_STYLES[value.pr.state])
+    glyph, style = icon(value.pr.state)
+    line.append(f"{glyph} ", style=style)
     line.append(f"#{value.pr.number}", style=f"link {value.pr.url}")
     line.append(f"  {value.pr.head} → {value.pr.base}")
     line.append(f"  L{value.layer}" if value.layer is not None else "  L—")
     if value.bead_id:
         line.append(f"  {short_id(value.bead_id, snapshot.bead_prefix)}")
+    if value.assignee:
+        member = next((agent for agent in snapshot.agents if agent.name == value.assignee), None)
+        line.append("  ")
+        line.append_text(render_agent(value.assignee, member))
     if value.merge is None:
         line.append("  merge —")
-    elif value.merge.state == "clean":
-        line.append("  merge ✅")
     else:
-        files = f" {', '.join(value.merge.files)}" if value.merge.files else ""
-        line.append(f"  merge ⛔{files}", style="red")
-    if snapshot.gh.mode == "rest" or value.pr.ci == "none":
-        line.append("  CI —")
-    elif value.pr.ci == "success":
-        line.append("  CI ✅", style="green")
-    elif value.pr.ci == "pending":
-        line.append("  CI 🌀", style="yellow")
-    else:
-        checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks else ""
-        line.append(f"  CI ⛔{checks}", style="red")
+        glyph, style = merge_icon(value.merge.state)
+        files = f" {', '.join(value.merge.files)}" if value.merge.files and value.merge.state != MergeState.CLEAN else ""
+        line.append(f"  merge {glyph}{files}", style=style)
+    glyph, style = icon(value.pr.ci)
+    checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci in FAILING_CI else ""
+    line.append(f"  CI {glyph}{checks}", style=style)
     return line
 
 

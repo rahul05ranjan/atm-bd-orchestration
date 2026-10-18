@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import command
+from .atm_source import sprint_state_of
 from .result import Err, Ok, ParseFailed, Result
 from .types import Bead
 
@@ -13,7 +14,13 @@ def _bead(raw: dict[str, Any]) -> Bead:
     def when(name: str) -> datetime | None:
         value = raw.get(name)
         return datetime.fromisoformat(value).astimezone(UTC) if value else None
-    return Bead(raw["id"], raw["title"], raw["status"], tuple(raw.get("labels", ()),), raw.get("parent"), tuple(raw.get("blocked_by", ())), raw.get("assignee"), raw.get("metadata", {}), when("created_at") or datetime.now(UTC), when("claimed_at"), when("closed_at"))
+    close_reason = raw.get("close_reason")
+    return Bead(
+        raw["id"], raw["title"], sprint_state_of(raw["status"]), tuple(raw.get("labels", ())), raw.get("parent"),
+        tuple(raw.get("blocked_by", ())), raw.get("assignee"), raw.get("metadata", {}),
+        when("created_at") or datetime.now(UTC), when("claimed_at"), when("closed_at"),
+        close_reason if isinstance(close_reason, str) else None, raw["status"],
+    )
 
 
 def _run(argv: list[str]) -> Result[tuple[Bead, ...]]:
@@ -23,7 +30,7 @@ def _run(argv: list[str]) -> Result[tuple[Bead, ...]]:
     try:
         raw = json.loads(completed.value.stdout)
         return Ok(tuple(_bead(item) for item in raw))
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
 
 
@@ -42,11 +49,14 @@ def ready(label: str) -> Result[tuple[Bead, ...]]:
 def ancestors(beads: tuple[Bead, ...]) -> Result[tuple[Bead, ...]]:
     known = {bead.id: bead for bead in beads}
     frontier = {bead.parent for bead in beads if bead.parent and bead.parent not in known}
+    visited: set[str] = set()
     while frontier:
+        visited.update(frontier)
         found = show(tuple(sorted(frontier)))
         if isinstance(found, Err):
             return found
         for bead in found.value:
             known[bead.id] = bead
-        frontier = {bead.parent for bead in found.value if bead.parent and bead.parent not in known}
+        frontier = {bead.parent for bead in found.value if bead.parent and bead.parent not in known
+                    and bead.parent not in visited}
     return Ok(tuple(known.values()))

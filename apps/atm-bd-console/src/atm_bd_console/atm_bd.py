@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from .enums import SprintState
 from .ids import short_id
 from .result import ConfigInvalid, Err, Error, IoFailed, NotFound, Ok, ParseFailed, Result
 from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoConfig, Sprint, Step, StepKind
@@ -36,7 +37,7 @@ STAGE_KINDS: Mapping[str, StepKind] = {
     "dev": "dev", "fix": "fix", "finding": "finding", "dev-sanity": SANITY_KIND, "qa": QA_KIND,
     "plan-review": "plan_review", "sprint": "container",
 }
-SUFFIX_STAGES = dict(zip(GROUP_SUFFIXES, ("dev", "dev-sanity", "qa"), strict=True))
+SUFFIX_STAGES: dict[str, str] = dict(zip(GROUP_SUFFIXES, ("dev", "dev-sanity", "qa"), strict=True))
 # Step metadata keys (formulas sprint-group/finding-group, qa-bead.json.j2, finding-bead.json.j2).
 CHECKED_KEYS: Mapping[StepKind, str] = {SANITY_KIND: "dev_bead", QA_KIND: "checked_bead"}
 ROUND_KEY = "round"
@@ -287,7 +288,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         FIX_LABEL in checked_bead.labels or FINDING_LABEL in checked_bead.labels)
     carry = checked if verifies else None
     qa_round = metadata.get(ROUND_KEY)
-    if verifies and FIX_LABEL in checked_bead.labels:
+    if verifies and checked_bead is not None and FIX_LABEL in checked_bead.labels:
         # Fix verification is the round after the fix bead's own round (bh-4 D5).
         if checked_bead.metadata.get(ROUND_KEY) is None:
             return _missing(f"{checked_bead.id}.metadata.{ROUND_KEY}")
@@ -299,7 +300,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         bead.status, False, bead.assignee, metadata.get(BRANCH_KEY), metadata.get(PR_TARGET_KEY),
         metadata.get(WORKTREE_KEY), metadata.get(LAYER_KEY), metadata.get(DIFFICULTY_KEY),
         short_id(top or bead.id, prefix), top, bead.claimed_at, bead.closed_at, bead.title,
-        checked, sprint_bead, qa_round, carry,
+        checked, sprint_bead, qa_round, carry, bead.close_reason,
     ))
 
 
@@ -329,7 +330,8 @@ def _sprint(file: PhaseFile, bead: Bead, beads: tuple[Bead, ...]) -> Result[Spri
         return Err(ConfigInvalid("config_invalid", f"{bead.id}.metadata.layer", layer, "set an integer layer"))
     findings = sum(1 for item in beads if _finding_of(item, bead.id))
     return Ok(Sprint(bead.id, bead.title, meta["layer"], meta["branch"], meta["pr_target"], meta["stack"],
-                     file.depends_on.get(bead.id, ()), bead.status == "closed", findings))
+                     file.depends_on.get(bead.id, ()), bead.status == SprintState.CLOSED, findings, bead.status,
+                     bead.raw_status or str(bead.status)))
 
 
 def phase(
@@ -368,7 +370,7 @@ def phase(
             errors.append((bead.id, mapped_step.error))
         else:
             steps.append(replace(mapped_step.value, ready=bead.id in ready_ids))
-    closed = root.status == "closed"
+    closed = root.status == SprintState.CLOSED
     return Ok(Phase(root.id, file.label, root.title, closed, tuple(sprints), tuple(steps), tuple(errors)))
 
 

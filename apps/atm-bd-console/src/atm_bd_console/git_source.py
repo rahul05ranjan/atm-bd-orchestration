@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import command
+from .enums import MergeState
 from .result import Err, NotFound, Ok, Result
 from .types import Merge, RemoteRef, Worktree
 
@@ -83,6 +84,6 @@ def merge(repo: str | Path, branch: str, target: str) -> Result[Merge]:
         return result
     checked_at = datetime.now(UTC)
     if result.value.code == 0:
-        return Ok(Merge(branch, target, "clean", (), (), checked_at))
+        return Ok(Merge(branch, target, MergeState.CLEAN, (), (), checked_at))
     files, messages = _conflict_output(result.value.stdout)
-    return Ok(Merge(branch, target, "conflict", files, messages, checked_at))
+    return Ok(Merge(branch, target, MergeState.CONFLICT, files, messages, checked_at))
