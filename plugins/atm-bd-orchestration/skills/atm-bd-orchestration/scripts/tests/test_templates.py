@@ -664,7 +664,7 @@ class ConfigVariableTests(unittest.TestCase):
         result = _render("qa-bead.json.j2", {**_example("qa-bead-vars.json"), "qa_member": "my-qa"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["assignee"], "my-qa")
-        self.assertEqual(json.loads(result.stdout)["metadata"]["sprint_bead"], "{{ bead_prefix }}-d-4")
+        self.assertEqual(json.loads(result.stdout)["metadata"]["sprint_bead"], _example("qa-bead-vars.json")["sprint_bead"])
 
     def test_qa_bead_marks_a_quick_fix_explicitly(self):
         import json
