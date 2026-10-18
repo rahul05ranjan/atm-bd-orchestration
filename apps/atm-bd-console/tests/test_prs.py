@@ -104,6 +104,24 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
     assert render_prs(replace(empty, gh=failed), 120).plain == "GitHub read failed: timeout"
 
 
+@pytest.mark.parametrize("cached", ("rows", "empty", "none"))
+def test_paused_notice_precedes_cached_rows_and_empty_states(cached: str) -> None:
+    base = snapshot()
+    gh = replace(base.gh, paused=True, quota_remaining=2450, quota_limit=5000,
+                 quota_reset=NOW, at=None if cached == "none" else NOW,
+                 ok=None if cached == "none" else True)
+    value = replace(base, gh=gh, prs=base.prs if cached == "rows" else ())
+    lines = render_prs(value, 120).plain.splitlines()
+    assert lines[0] == (f"GitHub paused: 2450/5000 graphql remaining, below 50 percent, "
+                        f"resets {NOW.astimezone().strftime('%H:%M')}")
+    if cached == "rows":
+        assert "#11" in lines[1] and "#12" in lines[2]
+    elif cached == "empty":
+        assert lines[1].startswith("No open PR for phase")
+    else:
+        assert len(lines) == 1
+
+
 def test_history_filter_and_glyphs_cover_all_pull_request_states() -> None:
     base = snapshot()
     merged = replace(base.prs[0], pr=replace(base.prs[0].pr, state=PrState.MERGED))

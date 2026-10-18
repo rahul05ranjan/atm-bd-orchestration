@@ -194,7 +194,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
                                       f"unknown CI state {pr.raw_ci!r} for #{pr.number}", now)
                               for pr in prs if pr.ci == CiState.UNKNOWN)
     github_problems = ()
-    if inputs.gh.mode == "off" or inputs.gh.ok is not True or inputs.gh.truncated:
+    if not inputs.gh.paused and (inputs.gh.mode == "off" or inputs.gh.ok is not True or inputs.gh.truncated):
         cause = "off" if inputs.gh.mode == "off" else "truncated" if inputs.gh.truncated else (
             inputs.gh.error.kind if inputs.gh.error else "unavailable"
         )

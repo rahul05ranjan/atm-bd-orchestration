@@ -47,7 +47,9 @@ TEST_LEAD = "test-lead"
 TEST_SANITY_MEMBER = "test-sanity"
 TEST_QA_MEMBER = "test-qa"
 TEST_REVIEWER = "test-reviewer"
-OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "assignee"}
+OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "assignee",
+                      "core_remaining", "core_limit", "core_reset", "graphql_remaining", "graphql_limit",
+                      "graphql_reset", "quota_at"}
 
 
 def test_pre_enum_snapshot_decodes_to_typed_states() -> None:
@@ -173,6 +175,21 @@ def test_samples_cover_every_contract_type_populated() -> None:
             assert not (isinstance(value, (tuple, Mapping, str)) and len(value) == 0), (
                 f"{type(sample).__name__}.{field.name} is empty"
             )
+
+
+def test_old_pr_cache_decodes_with_quota_defaults() -> None:
+    value = json.loads(to_json(PRS_FILE))
+    value.pop("attempted_at")
+    for name in ("quota_remaining", "quota_limit", "quota_reset", "paused", "rate_limited",
+                 "poll_interval_s", "quota_threshold", "core_remaining", "core_limit", "core_reset",
+                 "graphql_remaining", "graphql_limit", "graphql_reset", "quota_at"):
+        value["gh"].pop(name)
+    decoded = from_json(types.PrsFile, json.dumps(value))
+    assert isinstance(decoded, Ok)
+    assert decoded.value.attempted_at is None
+    assert decoded.value.gh.quota_remaining is None and decoded.value.gh.quota_reset is None
+    assert not decoded.value.gh.paused and not decoded.value.gh.rate_limited
+    assert (decoded.value.gh.poll_interval_s, decoded.value.gh.quota_threshold) == (600, 50)
 
 
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda sample: type(sample).__name__)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Literal, Self
 
@@ -127,6 +127,17 @@ def _branch_groups(phase, repo) -> tuple[tuple[str, ...], ...]:
     )))) for sprint in phase.sprints)
 
 
+def _refresh_github(config: Config, now: datetime, gh: GhStatus, groups=()):
+    if config.github == "off":
+        return Ok(()), _gh("off")
+    budget = github_source.Budget(config.github, config.repo_root, config.github_quota_threshold,
+                                  config.github_poll_interval_s, now, gh)
+    result, status = github_source.open_prs(config.github, config.repo_root, groups, budget)
+    if status.paused and gh.mode == config.github:
+        status = replace(status, ok=gh.ok, error=None, at=gh.at, truncated=gh.truncated)
+    return result, status
+
+
 def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger,
                   force_github: bool = False):
     shown_ids = atm_bd.closed_show_ids(file, ())
@@ -140,11 +151,18 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     history = store.load_actions()
     prs = Ok(cached_prs.value.prs) if isinstance(cached_prs, Ok) else Ok(())
     gh = cached_prs.value.gh if config.github != "off" and isinstance(cached_prs, Ok) else _gh(config.github)
+    gh = replace(gh, poll_interval_s=config.github_poll_interval_s, quota_threshold=config.github_quota_threshold)
+    cache_errors = ()
     if force_github and config.github != "off":
-        if config.github == "rest" and isinstance(phase, Ok):
-            prs, gh = github_source.open_prs(config.github, config.repo_root, _branch_groups(phase.value, repo))
-        else:
-            prs, gh = github_source.open_prs(config.github, config.repo_root)
+        groups = _branch_groups(phase.value, repo) if config.github == "rest" and isinstance(phase, Ok) else ()
+        refreshed, gh = _refresh_github(config, now, gh, groups)
+        if isinstance(refreshed, Ok):
+            prs = refreshed
+        previous_read = cached_prs.value.read_at if isinstance(cached_prs, Ok) else now
+        saved = store.write_prs(PrsFile(now if isinstance(refreshed, Ok) else previous_read, gh, prs.value, attempted_at=now))
+        if isinstance(saved, Err):
+            cache_errors = (saved.error,)
+            logger.event("error", source="prs.write", error=asdict(saved.error))
     merges = tuple(Ok(merge) for merge in cached_merges.value.merges.values()) if isinstance(cached_merges, Ok) else ()
     sent = tuple(
         Action(line.at, line.kind if line.kind in ("assign", "send", "batch") else "send", line.to or "—",
@@ -164,7 +182,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     next_state = state if config.dry_run else next_state
     written = store.write_state(next_state)
     history_errors = () if isinstance(history, Ok) or isinstance(history.error, NotFound) else (history.error,)
-    errors = (*snapshot.errors, *history_errors, *store.load_errors, *((written.error,) if isinstance(written, Err) else ()))
+    errors = (*snapshot.errors, *history_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
     for error in errors:
         logger.event("error", error=asdict(error))
     logger.finish(actions=0)
@@ -261,15 +279,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 merge_results.append(Ok(unavailable))
     cached_prs = saved_prs.value if config.github != "off" and isinstance(saved_prs, Ok) else None
     gh = cached_prs.gh if cached_prs is not None else _gh(config.github)
+    gh = replace(gh, poll_interval_s=config.github_poll_interval_s, quota_threshold=config.github_quota_threshold)
     prs = cached_prs.prs if cached_prs is not None else ()
     prs_read_at = cached_prs.read_at if cached_prs is not None else now
     prs_input = Ok(prs) if cached_prs is not None else None
-    if config.github != "off" and (force_github or (due and due.github)):
-        if config.github == "rest" and isinstance(phase, Ok):
-            branch_groups = _branch_groups(phase.value, repo.value)
-            refreshed_prs, gh = github_source.open_prs(config.github, config.repo_root, branch_groups)
-        else:
-            refreshed_prs, gh = github_source.open_prs(config.github)
+    attempted_at = cached_prs.attempted_at if cached_prs is not None else None
+    github_due = (attempted_at is None or cached_prs is None or cached_prs.gh.mode != config.github
+                  or now - attempted_at >= timedelta(seconds=config.github_poll_interval_s))
+    if config.github != "off" and (force_github or (due and github_due)):
+        branch_groups = _branch_groups(phase.value, repo.value) if config.github == "rest" and isinstance(phase, Ok) else ()
+        refreshed_prs, gh = _refresh_github(config, now, gh, branch_groups)
+        attempted_at = now
         if isinstance(refreshed_prs, Ok):
             prs_input = refreshed_prs
             prs = refreshed_prs.value
@@ -277,7 +297,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         elif cached_prs is None:
             prs_input = refreshed_prs
         logger.event(
-            "github_read", forced=force_github, outcome="failed" if isinstance(refreshed_prs, Err) else "ok",
+            "github_read", forced=force_github, outcome="paused" if gh.paused else "failed" if isinstance(refreshed_prs, Err) else "ok",
             error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None,
         )
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
@@ -296,7 +316,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             errors = [*store.load_errors, *action_errors]
             durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
             reported_sent = (*state.sent, *reported)[-5:]
-            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs)),), store.write_state(durable)):
+            for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs), attempted_at=attempted_at)), store.write_state(durable)):
                 if isinstance(written, Err): errors.append(written.error)
             for error in (*snapshot.errors, *errors):
                 logger.event("error", error=asdict(error))

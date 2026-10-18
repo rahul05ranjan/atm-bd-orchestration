@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         if name != "show":
             sub.add_argument("--github", choices=("graphql", "rest", "off"))
             sub.add_argument("--interval", type=int)
+            sub.add_argument("--github-poll-interval", type=int, help="GitHub polling interval in seconds (default 600)")
+            sub.add_argument("--github-quota-threshold", type=int, help="minimum remaining quota percentage (default 50)")
             if name != "snapshot":
                 sub.add_argument("--dry-run", action="store_true")
             sub.add_argument("--no-fetch", action="store_true")
@@ -82,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
     md_table = getattr(args, "md_table", False)
-    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
+    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, github_poll_interval_s=args.github_poll_interval, github_quota_threshold=args.github_quota_threshold, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
     if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3

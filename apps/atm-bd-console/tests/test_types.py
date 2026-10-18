@@ -41,10 +41,10 @@ FIELDS: dict[str, str] = {
     "Merge": "branch target state files messages checked_at",
     "Worktree": "path branch head",
     "PullRequest": "number url head base head_sha ci failed_checks state raw_ci raw_state",
-    "GhStatus": "mode ok error at truncated",
+    "GhStatus": "mode ok error at truncated quota_remaining quota_limit quota_reset paused rate_limited poll_interval_s quota_threshold core_remaining core_limit core_reset graphql_remaining graphql_limit graphql_reset quota_at",
     "RepoConfig": "bead_prefix sanity_member qa_member primary_checkout worktree_base lint_command policy_path "
                   "reviewers_round1 plans_dir",
-    "Config": "phase lead team github interval_s dry_run no_fetch repo_root state_dir notification_sender",
+    "Config": "phase lead team github interval_s dry_run no_fetch repo_root state_dir notification_sender github_poll_interval_s github_quota_threshold",
     "DispatchContext": "step sprint phase_id phase_title lead commit base worktree_path pr layer_prs repo",
     "Inputs": "now lead repo interval_s phase members tasks worktrees remotes merges prs gh task_beads",
     "Row": "task_id state kind difficulty tag marker age_s description",
@@ -63,7 +63,7 @@ FIELDS: dict[str, str] = {
     "State": "problems cycle_first_send last_batch last_cycle idle_since sent remotes batch_due collision_notices",
     "PhaseFile": "phase root_id label sprints depends_on lead templates",
     "MergeFile": "checked_at merges",
-    "PrsFile": "read_at gh prs",
+    "PrsFile": "read_at gh prs attempted_at",
     "ActionLine": "at kind to bead text",
 }
 
