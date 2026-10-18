@@ -164,6 +164,8 @@ def test_long_titles_with_wide_chars_and_emoji_clip_at_80_and_120() -> None:
         assert all(cell_len(line) <= width for line in lines), width
         assert any(line.endswith("…") for line in lines), width
         assert any("\U000f051f💎 long-title" in line and "❗bh:" in line for line in lines), width
+        row = next(line for line in lines if "long-title" in line)
+        assert row.startswith(" \U000f051f💎 long-title"), width
 
     assert any("💎" in line for line in dashboard(value, 120, 40).plain.splitlines())
 
@@ -358,7 +360,7 @@ def test_agent_row_cuts_only_the_title_to_pane_width(width: int) -> None:
     assert cell_len(row) <= width
     assert row.endswith("…")
     assert "0s bi-6: fit the title" in row
-    assert row.startswith(" ") and "bi-6.group-dev" in row
+    assert row.startswith(" \U000f051f💎 bi-6.group-dev"), width
 
 
 def test_agent_row_that_fits_is_unchanged_by_pane_width() -> None:
