@@ -115,14 +115,17 @@ def task_sprint(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Sprin
 
 
 def _gavel(steps: tuple[Step, ...]) -> AgentIcon | None:
-    """The sprint gavel once its dev step is closed: red while any finding child is open, green when none is.
+    """The sprint gavel once its dev step is closed: red while any blocking child is open, green when none is.
 
-    Finding children are the blocking children of the checked bead, and the sprint cannot close while one is
-    open, so the open finding children decide the gavel. A stored QA verdict is not read.
+    Blocking children are open fix steps of poured blocking groups and open blocking finding steps; a minor or
+    important finding does not block the sprint. A stored QA verdict is not read.
     """
     if not any(step.kind == "dev" and step.closed_at for step in steps):
         return None
-    blocking_open = any(step.kind == "finding" and step.status != SprintState.CLOSED for step in steps)
+    blocking_open = any(
+        step.kind in ("fix", "finding") and step.severity == "blocking" and step.status != SprintState.CLOSED
+        for step in steps
+    )
     return AgentIcon.QA_FAIL if blocking_open else AgentIcon.QA_PASS
 
 

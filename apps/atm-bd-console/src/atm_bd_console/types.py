@@ -79,6 +79,7 @@ class Step:
     qa_round: int | None
     carry_forward: str | None
     close_reason: str | None = None
+    severity: str | None = None
 
 
 @dataclass(frozen=True)

@@ -28,6 +28,7 @@ SPRINT_META = ("layer", "branch", "pr_target", "stack")
 STAGE_PREFIX = "stage:"
 FINDING_LABEL = f"{STAGE_PREFIX}finding"
 FIX_LABEL = f"{STAGE_PREFIX}fix"
+SEVERITY_PREFIX = "severity:"
 ANCHOR_LABEL = "anchor"
 SANITY_KIND: StepKind = "sanity"
 QA_KIND: StepKind = "qa"
@@ -43,6 +44,7 @@ CHECKED_KEYS: Mapping[StepKind, str] = {SANITY_KIND: "dev_bead", QA_KIND: "check
 ROUND_KEY = "round"
 SPRINT_KEY = "sprint"
 SPRINT_BEAD_KEY = "sprint_bead"
+SEVERITY_KEY = "severity"
 QUICK_FIX_KEY = "quick_fix"
 BRANCH_KEY, PR_TARGET_KEY, WORKTREE_KEY, LAYER_KEY, DIFFICULTY_KEY = "branch", "pr_target", "worktree", "layer", "difficulty"
 # Semantic source name -> production template variable. Dispatch code uses these names
@@ -288,6 +290,14 @@ def _qa_sprint_bead(bead: Bead, checked_id: str | None, parents: Mapping[str, Be
     return matches[0] if len(matches) == 1 else None
 
 
+def _severity(bead: Bead) -> str | None:
+    """A finding or fix bead's severity: its metadata, else its `severity:<value>` label."""
+    value = bead.metadata.get(SEVERITY_KEY)
+    if isinstance(value, str) and value:
+        return value
+    return next((label.removeprefix(SEVERITY_PREFIX) for label in bead.labels if label.startswith(SEVERITY_PREFIX)), None)
+
+
 def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     metadata = bead.metadata
     kind = _kind(bead)
@@ -317,7 +327,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         bead.status, False, bead.assignee, metadata.get(BRANCH_KEY), metadata.get(PR_TARGET_KEY),
         metadata.get(WORKTREE_KEY), metadata.get(LAYER_KEY), metadata.get(DIFFICULTY_KEY),
         short_id(top or bead.id, prefix), top, bead.claimed_at, bead.closed_at, bead.title,
-        checked, sprint_bead, qa_round, carry, bead.close_reason,
+        checked, sprint_bead, qa_round, carry, bead.close_reason, _severity(bead),
     ))
 
 

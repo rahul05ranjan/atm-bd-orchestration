@@ -440,6 +440,17 @@ def _bead(bead_id: str, parent: str | None, labels: tuple[str, ...] = (), metada
     return Bead(bead_id, bead_id, SprintState.OPEN, labels, parent, (), None, metadata or {}, datetime(2026, 10, 15, tzinfo=UTC), None, None)
 
 
+def test_step_carries_severity_from_metadata_then_label() -> None:
+    from atm_bd_console.atm_bd import step
+
+    fix = _bead("atm-bh-4.finding-r1-fix", "atm-bh-4", ("stage:fix",), {"severity": "blocking", "sprint_bead": "atm-bh-4"})
+    labelled = _bead("atm-bh-4.finding-2", "atm-bh-4", ("stage:finding", "severity:minor"), {"sprint_bead": "atm-bh-4"})
+    plain = _bead("atm-bh-4.finding-3", "atm-bh-4", ("stage:finding",), {"sprint_bead": "atm-bh-4"})
+    assert step(fix, {}).value.severity == "blocking"
+    assert step(labelled, {}).value.severity == "minor"
+    assert step(plain, {}).value.severity is None
+
+
 def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
     from atm_bd_console.atm_bd import step
 

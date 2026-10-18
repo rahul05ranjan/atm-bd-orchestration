@@ -100,7 +100,7 @@ def test_gavel_needs_a_closed_dev_step_and_follows_open_finding_children():
     snapshot = _snapshot()
     dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
     finding = replace(STEP, bead_id="finding", kind="finding", carry_forward=None, sprint_bead=SPRINT.id,
-                      status=SprintState.OPEN, closed_at=None)
+                      status=SprintState.OPEN, closed_at=None, severity="blocking")
     snapshot = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, finding)))
     assert rows(snapshot)[0].state == (AgentIcon.QA_FAIL,)
     closed = replace(finding, status=SprintState.CLOSED, closed_at=NOW + timedelta(seconds=1))
@@ -132,6 +132,24 @@ def test_fix_verification_is_an_active_agent_and_stored_qa_verdicts_never_set_th
 def _sprint_with(snapshot, status, steps):
     sprint = replace(snapshot.phase_data.sprints[0], status=status)
     return replace(snapshot, phase_data=replace(snapshot.phase_data, sprints=(sprint,), steps=steps), task_data=())
+
+
+def test_only_blocking_children_set_the_gavel():
+    snapshot = _snapshot()
+    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+
+    def child(bead_id, kind, severity, status=SprintState.OPEN):
+        return replace(STEP, bead_id=bead_id, kind=kind, carry_forward=None, sprint_bead=SPRINT.id,
+                       status=status, closed_at=None, severity=severity)
+
+    def gavel(*steps):
+        return rows(replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, *steps))))[0].state
+
+    assert gavel(child("minor", "finding", "minor")) == (AgentIcon.QA_PASS,)
+    assert gavel(child("important", "finding", "important")) == (AgentIcon.QA_PASS,)
+    assert gavel(child("fix", "fix", "blocking")) == (AgentIcon.QA_FAIL,)
+    assert gavel(child("fix", "fix", "blocking", SprintState.CLOSED)) == (AgentIcon.QA_PASS,)
+    assert gavel(child("minor", "finding", "minor"), child("fix", "fix", "blocking")) == (AgentIcon.QA_FAIL,)
 
 
 def test_blocked_and_ready_sprints_with_no_agent_draw_their_status_icon():
@@ -322,7 +340,7 @@ def test_twenty_spec_rows_and_rich_colours():
                                  carry_forward=None, closed_at=NOW, close_reason="FAIL" if index == 6 else "PASS"))
         if index == 6:
             steps.append(replace(STEP, bead_id=f"{sprint.id}.finding", sprint_bead=sprint.id, kind="finding",
-                                 carry_forward=None, status=SprintState.OPEN, closed_at=None))
+                                 carry_forward=None, status=SprintState.OPEN, closed_at=None, severity="blocking"))
         if index in pr_values:
             number, state, ci = pr_values[index]
             pr = replace(PR_ROW.pr, number=number, head=sprint.branch, state=state, ci=ci,
