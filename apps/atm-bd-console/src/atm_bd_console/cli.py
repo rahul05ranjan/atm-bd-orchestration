@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in ("cron", "snapshot"):
         lock = acquire_lock(loaded.value.repo_root, root_id)
         if isinstance(lock, Err):
-            print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": _error_text(lock.error)}))
+            print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(lock.error)}"}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
                 text = f"{invocation}: console stopped updating (last tick {snapshot.value.generated_at.astimezone().strftime('%H:%M')})"
@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(to_json({"at": action.at, "kind": action.kind, "to": action.to, "bead": action.bead_ids[0] if action.bead_ids else None, "text": action.text, "outcome": action.outcome or "sent"}))
         if args.command == "cron":
             for error in snapshot.errors:
-                print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": _error_text(error)}))
+                print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(error)}"}))
         return 0
     from .app import run
 

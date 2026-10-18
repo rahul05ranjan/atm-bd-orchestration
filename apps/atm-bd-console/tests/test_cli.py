@@ -332,8 +332,9 @@ def test_headless_action_json_has_delivery_outcome(monkeypatch, capsys) -> None:
     assert json.loads(capsys.readouterr().out)["outcome"] == "failed command_failed"
 
 
+@pytest.mark.parametrize("command", ("cron", "snapshot"))
 @pytest.mark.parametrize("stale", (False, True))
-def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monkeypatch, capsys, stale) -> None:
+def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monkeypatch, capsys, stale, command) -> None:
     generated_at = cli.now() - timedelta(seconds=2 * cli_runtime.interval_s + 1 if stale else 0)
     snapshot = replace(SNAPSHOT, generated_at=generated_at, root_closed=False, stopped=None, errors=())
     acquired = acquire_lock(cli_runtime.repo_root, PHASE_FILE.root_id)
@@ -352,16 +353,16 @@ def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monk
         monkeypatch.setattr(source, name, forbidden)
     with acquired.value as store:
         assert store.write_snapshot(snapshot) == Ok(None)
-        assert cli.main(["cron", "--phase", "bh"]) == 0
+        assert cli.main([command, "--phase", "bh"]) == 0
 
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert len(output) == (2 if stale else 1)
-    assert output[0]["kind"] == "error" and "lock_held" in output[0]["text"]
+    assert output[0]["kind"] == "error" and output[0]["text"].startswith(f"atm-bd {command}: lock_held:")
     if stale:
         last_tick = generated_at.astimezone().strftime("%H:%M")
         assert output[1] == {
             "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
-            "text": f"atm-bd cron: console stopped updating (last tick {last_tick})",
+            "text": f"atm-bd {command}: console stopped updating (last tick {last_tick})",
         }
 
 
@@ -460,8 +461,23 @@ def test_headless_io_failures_keep_path_message_and_fix(cli_runtime, monkeypatch
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert output == [{
         "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
-        "text": f"io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
+        "text": f"atm-bd cron: io_failed: {failed.error.path}: {failed.error.message}: {failed.error.fix}",
     }]
+
+
+@pytest.mark.parametrize("command", ("cron", "snapshot"))
+@pytest.mark.parametrize("error", (TIMEOUT, IO_FAILED))
+def test_lock_failure_reports_full_invocation_and_error(cli_runtime, monkeypatch, capsys, command, error) -> None:
+    monkeypatch.setattr(cli, "acquire_lock", lambda *_: Err(error))
+    monkeypatch.setattr(cli, "load_snapshot", lambda *_: Err(NotFound("not_found", "snapshot", "run")))
+    monkeypatch.setattr(cli.runner, "step", lambda *_: pytest.fail("lock failure must not run a tick"))
+
+    assert cli.main([command, "--phase", "bh"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "at": cli.now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error",
+        "text": f"atm-bd {command}: {cli._error_text(error)}",
+    }
 
 
 def test_headless_lock_failure_is_a_json_error(monkeypatch, capsys) -> None:
