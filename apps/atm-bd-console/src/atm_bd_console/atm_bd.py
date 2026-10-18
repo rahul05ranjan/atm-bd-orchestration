@@ -299,7 +299,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     checked_bead = parents.get(checked) if checked else None
     sprint_bead = _qa_sprint_bead(bead, checked, parents) if kind == QA_KIND else metadata.get(SPRINT_BEAD_KEY)
     if kind == QA_KIND and not sprint_bead:
-        return _missing(f"{bead.id}.metadata.{SPRINT_BEAD_KEY}")
+        return _missing(f"{bead.id}: neither metadata.{SPRINT_BEAD_KEY} nor metadata.{SPRINT_KEY}")
     # Fix verification: a QA of a fix or finding bead carries it forward (never read from metadata).
     verifies = kind == QA_KIND and checked_bead is not None and (
         FIX_LABEL in checked_bead.labels or FINDING_LABEL in checked_bead.labels)

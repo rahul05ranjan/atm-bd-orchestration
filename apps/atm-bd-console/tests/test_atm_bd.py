@@ -498,7 +498,8 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})
     assert isinstance(no_round, Err) and "metadata.round" in no_round.error.what
     no_sprint = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "round": 1}), {})
-    assert isinstance(no_sprint, Err) and "metadata.sprint_bead" in no_sprint.error.what
+    assert isinstance(no_sprint, Err) and no_sprint.error.what == (
+        "atm-bh-4.group-qa: neither metadata.sprint_bead nor metadata.sprint")
 
 
 def test_legacy_qa_resolves_sprint_from_its_container_when_checked_bead_is_not_loaded() -> None:
