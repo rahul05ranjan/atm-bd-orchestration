@@ -32,7 +32,20 @@ from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
 from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
-from atm_bd_console.types import INITIAL_STATE, ActionLine, Due, GhStatus, Problem, RemoteRef, Section, SectionRow, Task
+from atm_bd_console.types import (
+    INITIAL_STATE,
+    ActionLine,
+    Bead,
+    Due,
+    GhStatus,
+    Member,
+    PhaseFile,
+    Problem,
+    RemoteRef,
+    Section,
+    SectionRow,
+    Task,
+)
 
 RUNNING_STATE = replace(STATE, idle_since=None)
 
@@ -172,6 +185,78 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     assert [row.pr.number for row in snapshot.prs] == [PRS_FILE.prs[0].number]
     assert [(action.text, action.outcome) for action in snapshot.sent] == [("QA completed", "recorded")]
     assert snapshot.errors == ()
+
+
+def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch) -> None:
+    """A closed QA bead from the normal batched runner read drives the following tick's icon state."""
+    root_id = "atm-phase-bi"
+    sprint_id = "atm-bi-5"
+    qa_id = f"{sprint_id}.group-qa"
+    file = PhaseFile("bi", root_id, "phase:bi", (sprint_id,), {sprint_id: ()}, "lumen", {})
+    root = Bead(root_id, "Phase BI", "open", ("phase:bi",), None, (), None, {}, NOW, None, None)
+    sprint = Bead(
+        sprint_id, "bi-5", "in_progress", ("phase:bi", "stage:sprint"), root_id, (), None,
+        {"layer": 5, "branch": "sprint/bi-5", "pr_target": "integrate/phase-bi", "stack": "phase-bi"},
+        NOW, None, None,
+    )
+    qa_metadata = {"checked_bead": f"{sprint_id}.group-dev", "sprint_bead": sprint_id,
+                   "sprint": "bi-5", "round": 1}
+    active_qa = Bead(
+        qa_id, "QA round 1", "in_progress", ("phase:bi", "stage:qa"), sprint_id, (), "quality-mgr",
+        qa_metadata, NOW, NOW, None,
+    )
+    closed_qa = replace(active_qa, status="closed", closed_at=NOW, close_reason="PASS: 0 findings filed")
+    phase_file = lambda *_: Ok(file)
+    repo_config = lambda *_: Ok(REPO_CONFIG)
+    active = [True]
+    seen_inputs = []
+    task = Task(qa_id, "quality-mgr", "active", 0, NOW, NOW, "QA round 1")
+
+    def show(ids):
+        if ids == (root_id,):
+            return Ok((root,))
+        if qa_id in ids:
+            return Ok((sprint, closed_qa))
+        if not ids:
+            return Ok(())
+        return Ok((sprint,))
+
+    def open_beads(_label):
+        return Ok((active_qa,) if active[0] else ())
+
+    monkeypatch.setattr(runner.atm_bd, "phase_file", phase_file)
+    monkeypatch.setattr(runner.atm_bd, "repo_config", repo_config)
+    monkeypatch.setattr(runner.beads_source, "show", show)
+    monkeypatch.setattr(runner.beads_source, "open_beads", open_beads)
+    monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
+    def members(*_args):
+        return Ok((Member("quality-mgr", "active", NOW, agent_type="qa"),))
+
+    def tasks(*_args):
+        return Ok((task,) if active[0] else ())
+
+    monkeypatch.setattr(runner.atm_source, "members", members)
+    monkeypatch.setattr(runner.atm_source, "tasks", tasks)
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.model, "due", lambda *_args, **_kwargs: Due(False, (), False))
+    original_tick = runner.model.tick
+
+    def capture_tick(value, *args):
+        seen_inputs.append(value)
+        return original_tick(value, *args)
+
+    monkeypatch.setattr(runner.model, "tick", capture_tick)
+    config = replace(CONFIG, phase="bi", github="off", no_fetch=True, dry_run=True)
+    store = Store()
+
+    first, _ = runner.step(config, RUNNING_STATE, False, store)
+    assert first.agents[0].qa_state == "running"
+    active[0] = False
+    second, _ = runner.step(config, RUNNING_STATE, False, store)
+
+    assert seen_inputs[1].tasks == Ok(())
+    assert seen_inputs[1].phase.value.steps[0].close_reason == "PASS: 0 findings filed"
+    assert second.agents[0].qa_state == "pass"
 
 
 def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypatch, tmp_path) -> None:

@@ -9,6 +9,7 @@ from rich.cells import cell_len
 
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
+from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _reconcile_problems, _sprint_views, due, qa_state_from_close, tick
 from atm_bd_console.result import CommandFailed, Err, NotFound, Ok, Timeout
 from atm_bd_console.types import (
@@ -128,8 +129,9 @@ def test_agent_status_uses_presence_when_task_state_disagrees() -> None:
 
 
 def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> None:
-    assert qa_state_from_close("PASS: checks complete") == "pass"
-    assert qa_state_from_close("FAIL: checks failed") == "fail"
+    assert qa_state_from_close("PASS: 0 findings filed") == "pass"
+    assert qa_state_from_close("PASS: 2 carried findings confirmed") == "pass"
+    assert qa_state_from_close("FAIL: 3 findings filed") == "fail"
     assert qa_state_from_close("needs follow-up") is None
     older = step("qa-old", "atm-bh-1", kind="qa", status="closed", assignee="quality-mgr",
                  closed_at=NOW - timedelta(minutes=2), close_reason="FAIL old")
@@ -142,6 +144,31 @@ def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> N
     task = Task("qa-active", "quality-mgr", "active", 0, NOW, NOW, "QA")
     snapshot, _, _ = tick(inputs(phase(older, newer, active), members=Ok((qa,)), tasks=Ok((task,))), STATE, NOW, render)
     assert snapshot.agents[0].qa_state == "running"
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_state", "expected_color"),
+    (
+        ("PASS: 0 findings filed", "pass", "#2EA043"),
+        ("PASS: 2 carried findings confirmed", "pass", "#2EA043"),
+        ("FAIL: 3 findings filed", "fail", "#F85149"),
+    ),
+)
+def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color) -> None:
+    qa = Member("quality-mgr", "active", NOW, agent_type="qa")
+    active = step("atm-bi-5.group-qa", "atm-bi-5", kind="qa", status="in_progress", assignee=qa.name)
+    task = Task(active.bead_id, qa.name, "active", 0, NOW, NOW, "QA review")
+
+    running, _, _ = tick(
+        inputs(phase(active), members=Ok((qa,)), tasks=Ok((task,))), STATE, NOW, render,
+    )
+    assert running.agents[0].qa_state == "running"
+    assert icon_for(running.agents[0]) == ("\U000f029b", "#4A5AF8")
+
+    closed = replace(active, status="closed", closed_at=NOW, close_reason=reason)
+    result, _, _ = tick(inputs(phase(closed), members=Ok((qa,))), STATE, NOW, render)
+    assert result.agents[0].qa_state == expected_state
+    assert icon_for(result.agents[0]) == ("\U000f029b", expected_color)
 
 
 def test_existing_out_of_phase_bead_is_red_and_missing_bead_is_yellow() -> None:

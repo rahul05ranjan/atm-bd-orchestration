@@ -11,6 +11,7 @@ from contract_samples import CONFIG, ERRORS, INPUTS, NOT_FOUND, PHASE, PLUS_TWO,
 
 from atm_bd_console import result, types
 from atm_bd_console.codec import _ERRORS, from_json, snapshot_stale, to_json
+from atm_bd_console.icons import icon_for
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
@@ -129,6 +130,22 @@ def test_legacy_snapshot_decodes_with_empty_agent_metadata() -> None:
     assert isinstance(decoded, Ok)
     assert all((agent.agent_type, agent.model, agent.harness, agent.qa_state) == (None, None, None, None)
                for agent in decoded.value.agents)
+
+
+@pytest.mark.parametrize(
+    ("qa_state", "color"),
+    (("running", "#4A5AF8"), ("pass", "#2EA043"), ("fail", "#F85149")),
+)
+def test_qa_icon_color_survives_snapshot_codec_round_trip(qa_state: str, color: str) -> None:
+    agent = replace(SNAPSHOT.agents[0], agent_type="qa", qa_state=qa_state)
+    snapshot = replace(SNAPSHOT, agents=(agent,))
+
+    encoded = to_json(snapshot)
+    decoded = from_json(Snapshot, encoded)
+
+    assert decoded == Ok(snapshot)
+    assert to_json(decoded.value) == encoded
+    assert icon_for(decoded.value.agents[0]) == ("\U000f029b", color)
 
 
 def test_inputs_interval_matches_config_interval() -> None:
