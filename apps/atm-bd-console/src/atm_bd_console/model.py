@@ -180,7 +180,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         task_bead_data=inputs.task_beads.value if isinstance(inputs.task_beads, Ok) else (),
         worktree_data=worktrees,
     )
-    from .facts import collisions
+    from .collision import collisions
 
     collision_rows = collisions(snapshot) if stopped is None else ()
     collision_problems = tuple(Problem(f"collision:{key}", sprint_id, inputs.lead, message, now)

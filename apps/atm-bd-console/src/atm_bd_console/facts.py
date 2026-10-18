@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -60,7 +59,7 @@ class SprintFacts:
     problems: tuple[str, ...]
 
 
-def _task_step(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Step | None:
+def task_step(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Step | None:
     beads = {bead.id: bead for bead in snapshot.task_bead_data}
     current = task.id
     visited: set[str] = set()
@@ -75,11 +74,11 @@ def _task_step(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Step |
     return None
 
 
-def _task_sprint(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Sprint | None:
+def task_sprint(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Sprint | None:
     phase = snapshot.phase_data
     if phase is None:
         return None
-    step = _task_step(task, snapshot, steps)
+    step = task_step(task, snapshot, steps)
     if step is not None:
         found = sprint_of(step, phase, snapshot.bead_prefix)
         if found is not None:
@@ -133,8 +132,8 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
         steps = tuple(step for step in phase.steps if sprint_of(step, phase, snapshot.bead_prefix) == sprint)
         agents = tuple(ActiveAgent(task.agent, agent_icon_of(by_member.get(task.agent), step.kind if step else "other"),
                                    task.state_since)
-                       for task in active if _task_sprint(task, snapshot, by_step) == sprint
-                       for step in (_task_step(task, snapshot, by_step),))
+                       for task in active if task_sprint(task, snapshot, by_step) == sprint
+                       for step in (task_step(task, snapshot, by_step),))
         selected = _selected_pr(sprint, steps, snapshot)
         available = snapshot.gh.mode != "off" and snapshot.gh.ok is True and not snapshot.gh.truncated
         if not available:
@@ -170,38 +169,4 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
         pr_facts = None if pr_state == PrState.NONE else PrFacts(pr_state, selected)
         result.append(SprintFacts(sprint.id, short_id(sprint.id, snapshot.bead_prefix), state, agents,
                                   _qa_result(steps), pr_facts, CiFacts(ci), tuple(problems)))
-    return tuple(result)
-
-
-def collisions(snapshot: Snapshot) -> tuple[tuple[str, str, str], ...]:
-    phase = snapshot.phase_data
-    if phase is None:
-        return ()
-    steps = {step.bead_id: step for step in phase.steps}
-    worktrees = {worktree.branch: worktree.path for worktree in snapshot.worktree_data if worktree.branch}
-    mapped = []
-    for task in snapshot.task_data:
-        if task.state != "active":
-            continue
-        sprint = _task_sprint(task, snapshot, steps)
-        if sprint is None:
-            continue
-        step = _task_step(task, snapshot, steps)
-        path = (step.worktree if step else None) or worktrees.get(sprint.branch) or "unknown"
-        mapped.append((task, sprint, path))
-    groups: dict[str, tuple[Sprint, set[str], set[str]]] = {}
-    for task, sprint, path in mapped:
-        peers = [(other, other_sprint, other_path) for other, other_sprint, other_path in mapped
-                 if other_sprint == sprint or (path != "unknown" and other_path == path)]
-        if len(peers) < 2:
-            continue
-        _, names, paths = groups.setdefault(sprint.id, (sprint, set(), set()))
-        names.update(other.agent for other, _, _ in peers)
-        paths.update(other_path for _, _, other_path in peers)
-    result = []
-    for sprint_id, (_, names, paths) in sorted(groups.items()):
-        agents = sorted(names)
-        key = json.dumps([sprint_id, agents], separators=(",", ":"))
-        message = f"collision: {sprint_id}; worktree {', '.join(sorted(paths))}; agents {', '.join(agents)}"
-        result.append((key, sprint_id, message))
     return tuple(result)
