@@ -305,6 +305,46 @@ def test_show_uses_the_configured_repository_root(monkeypatch, capsys, tmp_path)
     assert "stopped: phase closed" in capsys.readouterr().out
 
 
+def test_cron_tick_records_its_schedule_and_the_viewer_judges_it_by_that(cli_runtime, monkeypatch, capsys) -> None:
+    recorded = []
+    load = cli.config_source.load_config
+
+    def record(root, phase, **options):
+        recorded.append(options["interval_s"])
+        return load(root, phase, **options)
+
+    def tick(config, state, _md_table, store):
+        snapshot = replace(SNAPSHOT, stopped=None, errors=(), root_closed=False, generated_at=cli.now(), interval_s=config.interval_s)
+        assert store.write_snapshot(snapshot) == Ok(None)
+        return runner.StepResult(snapshot, state)
+
+    monkeypatch.setattr(cli.config_source, "load_config", record)
+    monkeypatch.setattr(cli.runner, "step", tick)
+    assert cli.main(["cron", "--phase", "bh"]) == 0
+    assert recorded == [cli.config_source.CRON_CADENCE_S]
+    stored = load_snapshot(cli_runtime.repo_root, PHASE_FILE.root_id)
+    assert isinstance(stored, Ok) and stored.value.interval_s == 900
+
+    # Liveness window is twice the recorded interval: 14 minutes after a 15-minute tick is between ticks (live);
+    # 31 minutes after it, the tick due at 15 minutes has been missed by more than an interval (stopped).
+    monkeypatch.setattr(cli, "now", lambda: FIXED_NOW + timedelta(minutes=14))
+    assert cli.main(["show", "--phase", "bh"]) == 0
+    monkeypatch.setattr(cli, "now", lambda: FIXED_NOW + timedelta(minutes=31))
+    assert cli.main(["show", "--phase", "bh"]) == 2
+    assert "is not running" in capsys.readouterr().out
+
+
+def test_cron_cadence_yields_to_an_explicit_interval(monkeypatch) -> None:
+    seen = []
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_a, **options: seen.append(options["interval_s"]) or Err(IoFailed("io_failed", "x", "stop", "fix")))
+
+    cli.main(["cron", "--phase", "bh", "--interval", "300"])
+    cli.main(["snapshot", "--phase", "bh"])
+    cli.main(["console", "--phase", "bh"])
+
+    assert seen == [300, None, None]
+
+
 def test_show_stopped_idle_skips_staleness(monkeypatch, capsys) -> None:
     clock = datetime(2026, 10, 15, tzinfo=UTC)
     monkeypatch.setattr(cli, "now", lambda: clock)

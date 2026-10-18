@@ -21,6 +21,14 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+def _cadence(args: argparse.Namespace) -> int | None:
+    # The liveness window is judged from the interval a tick records, so a cron tick records its schedule
+    # unless --interval says otherwise; without this a 15-minute cron recorded 60 s and read as stopped.
+    if args.interval is None and args.command == "cron":
+        return config_source.CRON_CADENCE_S
+    return args.interval
+
+
 def _error_text(error: Error) -> str:
     if isinstance(error, IoFailed):
         return f"{error.kind}: {error.path}: {error.message}: {error.fix}"
@@ -68,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
     md_table = getattr(args, "md_table", False)
-    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=args.interval, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
+    loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=_cadence(args), dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
     if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
     if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3
