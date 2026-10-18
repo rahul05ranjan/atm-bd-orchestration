@@ -3,14 +3,14 @@ from datetime import UTC, datetime, timedelta
 
 from contract_samples import BEAD, CONFIG, GH_STATUS, INPUTS, MEMBER, PHASE, PR_ROW, SNAPSHOT, SPRINT, STEP, TASK
 
-from atm_bd_console import runner
+from atm_bd_console import runner, status_table
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
 from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, sprint_facts
 from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
 from atm_bd_console.result import Ok
 from atm_bd_console.runner import _durable_state
-from atm_bd_console.status_table import CI, PR, STATE, markdown, rich_table, rows
+from atm_bd_console.status_table import STATE, markdown, rich_table, rows
 from atm_bd_console.types import INITIAL_STATE
 
 NOW = datetime(2026, 10, 17, tzinfo=UTC)
@@ -35,20 +35,27 @@ def test_rows_use_active_tasks_order_and_ignore_queued():
     assert rows(snapshot)[0].state == (AgentIcon.OPUS, AgentIcon.TERRA)
 
 
-def test_producer_lists_cover_every_enum_member_and_absent_data():
+def test_sprint_producer_list_covers_every_enum_member():
     facts = replace(sprint_facts(_snapshot())[0], active=(), last_qa=None)
     for state in SprintState:
         current = replace(facts, status=state)
         assert next(value for producer in STATE if (value := producer(current))) == (state,)
+
+
+def test_rows_preserve_ci_and_pr_enum_values_and_absent_source_defaults(monkeypatch):
+    facts = replace(sprint_facts(_snapshot())[0], active=(), last_qa=None)
+
+    def row_for(current):
+        monkeypatch.setattr(status_table, "sprint_facts", lambda _snapshot, current=current: (current,))
+        return rows(_snapshot())[0]
+
     for state in CiState:
-        current = replace(facts, ci=CiFacts(state))
-        assert next(value for producer in CI if (value := producer(current)) is not None) is state
+        assert row_for(replace(facts, ci=CiFacts(state))).ci is state
     for state in PrState:
-        current = replace(facts, pr=PrFacts(state, None))
-        assert next(value for producer in PR if (value := producer(current)) is not None) is state
-    missing = replace(facts, ci=None, pr=None)
-    assert next(value for producer in CI if (value := producer(missing)) is not None) is CiState.NONE
-    assert next(value for producer in PR if (value := producer(missing)) is not None) is PrState.NONE
+        assert row_for(replace(facts, pr=PrFacts(state, None))).pr_state is state
+    missing = row_for(replace(facts, ci=None, pr=None))
+    assert missing.ci is CiState.NONE
+    assert missing.pr_state is PrState.NONE
 
 
 def test_child_task_inherits_qa_step_role_through_parent_chain():

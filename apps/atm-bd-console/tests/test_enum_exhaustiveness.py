@@ -8,11 +8,6 @@ from atm_bd_console import icons, status_table
 MATCH_SITES = (
     (icons, "icon"), (icons, "merge_icon"),
     (status_table, "_qa"), (status_table, "_sprint"),
-    (status_table, "_ci_unknown"), (status_table, "_ci_none"),
-    (status_table, "_ci_platform"), (status_table, "_ci_bug"),
-    (status_table, "_ci_running"), (status_table, "_ci_pass"),
-    (status_table, "_pr_unknown"), (status_table, "_pr_conflict"),
-    (status_table, "_pr_state"),
 )
 
 
