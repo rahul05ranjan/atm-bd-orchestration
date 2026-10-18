@@ -1,6 +1,7 @@
 {
   "id": "{{ bead_prefix }}-d-4-qa1",
   "checked_bead": "{{ bead_prefix }}-d-4",
+  "sprint_bead": "{{ bead_prefix }}-d-4",
   "phase": "d",
   "sprint": "d-4",
   "stack": "phase-d",

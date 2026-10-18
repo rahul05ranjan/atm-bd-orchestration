@@ -269,6 +269,25 @@ def _kind(bead: Bead) -> StepKind:
     return STAGE_KINDS.get(stage, OTHER_KIND) if stage else OTHER_KIND
 
 
+def _qa_sprint_bead(bead: Bead, checked_id: str | None, parents: Mapping[str, Bead]) -> str | None:
+    """Resolve legacy QA beads whose creator omitted sprint_bead metadata."""
+    sprint_bead = bead.metadata.get(SPRINT_BEAD_KEY)
+    if sprint_bead:
+        return sprint_bead
+    checked = parents.get(checked_id) if checked_id else None
+    if checked is not None and checked.metadata.get(SPRINT_BEAD_KEY):
+        return checked.metadata[SPRINT_BEAD_KEY]
+    parent = parents.get(bead.parent) if bead.parent else None
+    if parent is not None and _kind(parent) == "container":
+        return parent.id
+    sprint = bead.metadata.get(SPRINT_KEY)
+    matches = tuple(
+        item.id for item in parents.values()
+        if _kind(item) == "container" and item.metadata.get(SPRINT_KEY) == sprint
+    ) if sprint else ()
+    return matches[0] if len(matches) == 1 else None
+
+
 def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     metadata = bead.metadata
     kind = _kind(bead)
@@ -278,9 +297,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
     if kind == QA_KIND and metadata.get(ROUND_KEY) is None:
         return _missing(f"{bead.id}.metadata.{ROUND_KEY}")
     checked_bead = parents.get(checked) if checked else None
-    sprint_bead = metadata.get(SPRINT_BEAD_KEY)
-    if kind == QA_KIND and not sprint_bead and checked_bead is not None:
-        sprint_bead = checked_bead.metadata.get(SPRINT_BEAD_KEY)
+    sprint_bead = _qa_sprint_bead(bead, checked, parents) if kind == QA_KIND else metadata.get(SPRINT_BEAD_KEY)
     if kind == QA_KIND and not sprint_bead:
         return _missing(f"{bead.id}.metadata.{SPRINT_BEAD_KEY}")
     # Fix verification: a QA of a fix or finding bead carries it forward (never read from metadata).

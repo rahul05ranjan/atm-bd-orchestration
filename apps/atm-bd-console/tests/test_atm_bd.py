@@ -501,6 +501,45 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     assert isinstance(no_sprint, Err) and "metadata.sprint_bead" in no_sprint.error.what
 
 
+def test_legacy_qa_resolves_sprint_from_its_container_when_checked_bead_is_not_loaded() -> None:
+    from atm_bd_console.atm_bd import step
+
+    root = _bead("atm-phase-bi", None, ("phase-bi",))
+    sprint = _bead("atm-bi-1", root.id, ("stage:sprint",), {"sprint": "bi-1"})
+    qa = _bead(
+        "atm-bi-1.group-qa-f2-qa", sprint.id, ("stage:qa",),
+        {"checked_bead": "atm-bi-1.group-qa-f2", "round": 1, "sprint": "bi-1", "phase": "bi"},
+    )
+
+    result = step(qa, {root.id: root, sprint.id: sprint, qa.id: qa})
+
+    assert isinstance(result, Ok)
+    assert result.value.sprint_bead == sprint.id
+
+
+def test_phase_keeps_legacy_qa_step_when_checked_bead_is_not_loaded() -> None:
+    from atm_bd_console.atm_bd import phase
+    from atm_bd_console.types import PhaseFile
+
+    root = _bead("atm-phase-bi", None, ("phase-bi",))
+    sprint = _bead(
+        "atm-bi-1", root.id, ("stage:sprint",),
+        {"sprint": "bi-1", "layer": 1, "branch": "sprint/bi-1", "pr_target": "main", "stack": "phase-bi"},
+    )
+    qa = _bead(
+        "atm-bi-1.group-qa-f2-qa", sprint.id, ("stage:qa",),
+        {"checked_bead": "atm-bi-1.group-qa-f2", "round": 1, "sprint": "bi-1", "phase": "bi"},
+    )
+    file = PhaseFile("bi", root.id, "phase-bi", (sprint.id,), {}, "lead", {})
+
+    result = phase(file, root, (sprint, qa), (qa,), ())
+
+    assert isinstance(result, Ok)
+    assert result.value.step_errors == ()
+    mapped = next(item for item in result.value.steps if item.bead_id == qa.id)
+    assert (mapped.sprint_bead, mapped.ready) == (sprint.id, True)
+
+
 # D4/D5: step mapping and dispatch_spec.
 TEMPLATES = Path(__file__).resolve().parents[3] / "plugins/atm-bd-orchestration/skills/atm-bd-orchestration/templates"
 NOW = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
