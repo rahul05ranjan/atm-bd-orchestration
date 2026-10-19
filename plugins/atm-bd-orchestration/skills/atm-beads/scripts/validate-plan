@@ -107,8 +107,9 @@ class Beads:
             if self.fixed is not None:
                 self._everything = list(self.fixed.values())
             else:
-                rows = json.loads(self.bd("list", "--all", "--include-gates", "-n", "0", "--json") or "[]")
+                rows = json.loads(self.bd("list", "-l", f"phase-{self.phase}", "--include-gates", "-n", "0", "--json") or "[]")
                 merged = {b["id"]: b for b in rows}
+                merged.update({bead_id: bead for bead_id, bead in self.cache.items() if bead is not None})
                 merged.update(self.file)
                 self._everything = list(merged.values())
         return self._everything

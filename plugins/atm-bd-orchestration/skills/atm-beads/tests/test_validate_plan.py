@@ -178,6 +178,12 @@ class ValidatePlan(Repo):
         out = self.run_beads(VALID + [unknown])
         self.assertEqual((out.returncode, out.stdout), (5, "x-t-1.unknown: no model\n"))
 
+    def test_open_anchor_without_a_stage_is_not_a_workflow_bead(self):
+        anchor = {"id": "x-t-1.anchor", "parent": "x-phase-t", "status": "open",
+                  "labels": ["phase-t", "anchor"]}
+        out = self.run_beads(VALID + [anchor])
+        self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
+
     def test_closed_sprint_and_sanity_are_not_schema_validated(self):
         beads = broken("x-t-1", lambda bead: (bead.update(status="closed"), bead["metadata"].pop("worktree")))
         sanity = next(bead for bead in beads if bead["id"] == "x-t-1.group-sanity")
@@ -324,7 +330,8 @@ if args[:1] == ["show"]:
     print(json.dumps(found))
 elif args[:1] == ["list"]:
     labels = [args[i + 1] for i, a in enumerate(args) if a == "-l"]
-    print(json.dumps([b for b in beads if set(labels) <= set(b.get("labels") or [])]))
+    print(json.dumps([b for b in beads if set(labels) <= set(b.get("labels") or [])
+                      and b.get("status") not in ("closed", "tombstone")]))
 elif args[:1] == ["doctor"]:
     if os.environ.get("FAKE_BD_DOCTOR_ERR"):
         sys.stderr.write(os.environ["FAKE_BD_DOCTOR_ERR"] + "\\n")
@@ -377,7 +384,30 @@ class LivePlan(Repo):
         self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
         lists = [json.loads(line) for line in log.read_text().splitlines() if json.loads(line)[0] == "list"]
         self.assertEqual(len(lists), 1)
-        self.assertIn("--include-gates", lists[0])
+        self.assertEqual(lists[0], ["list", "-l", "phase-t", "--include-gates", "-n", "0", "--json"])
+        self.assertFalse(any("--all" in json.loads(line) for line in log.read_text().splitlines()))
+
+    def test_closed_planned_ids_are_read_by_show_not_an_unscoped_list(self):
+        beads = copy.deepcopy(VALID)
+        closed_ids = {"x-t-1", "x-t-1.group-dev", "x-t-1.group-sanity"}
+        for bead in beads:
+            if bead["id"] in closed_ids:
+                bead["status"] = "closed"
+        beads.append({"id": "x-t-1.anchor", "parent": "x-phase-t", "status": "open", "labels": ["phase-t", "anchor"]})
+        log = self.base / "closed-reads.jsonl"
+        out = self.live(beads, "--phase", "t", "--no-doctor", FAKE_BD_LOG=str(log))
+        self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertTrue(closed_ids <= {call[1] for call in calls if call[0] == "show"})
+        self.assertEqual([call for call in calls if call[0] == "list"],
+                         [["list", "-l", "phase-t", "--include-gates", "-n", "0", "--json"]])
+        self.assertFalse(any("--all" in call for call in calls))
+
+    def test_unlabelled_root_read_by_show_is_still_schema_validated(self):
+        beads = broken("x-phase-t", lambda bead: bead["metadata"].pop("integration_branch"))
+        out = self.live(beads, "--phase", "t", "--no-doctor")
+        self.assertEqual(out.returncode, 5, out.stderr)
+        self.assertIn("x-phase-t: integration_branch: Field required", out.stdout)
 
     def test_plan_missing_on_the_branch_cannot_run(self):
         (self.repo / ".atm-bd/phase-t.toml").write_text(TOML.replace("integrate/phase-t", "integrate/phase-u"))
