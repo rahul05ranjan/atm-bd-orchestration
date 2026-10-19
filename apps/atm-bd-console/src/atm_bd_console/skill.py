@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from . import __version__, skill_source
+from . import __version__, skill_integrity, skill_source
 
 _INSTALLER_NAME = "_atm_bd_bundled_skill_installer"
 
@@ -27,7 +27,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="atm-bd skill", description="Install or list atm-bd-orchestration skills.")
     parser.add_argument("version", nargs="?", help="release version such as 0.16.0")
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--latest", action="store_true", help="install the head of upstream main")
+    source.add_argument("--latest", action="store_true", help="install the latest published release")
     source.add_argument("--list", action="store_true", help="list upstream release tags and available sets")
     parser.add_argument("--dest", type=Path, metavar="REPO", help="target repository (default: current directory)")
     parser.add_argument("--orchestration", action="store_true", help="install the orchestration set (the default and only set)")
@@ -71,6 +71,14 @@ def run(argv: list[str] | None = None) -> int:
             dest = dest / (".codex" if args.codex else ".claude")
         overrides = installer.parse_set(args.set)
         with skill_source.resolve_source(version=args.version, latest=args.latest) as source:
+            manifest = skill_integrity.load_manifest(source)
+            differing = [result for result in skill_integrity.verify_tree(source.pkg_dir, manifest) if result.status != "ok"]
+            if differing:
+                for result in differing:
+                    print(f"{result.status} {result.path}", file=sys.stderr)
+                print(f"atm-bd skill: {source.name} differs from its published {skill_integrity.MANIFEST_NAME} "
+                      f"in {len(differing)} file(s); nothing installed", file=sys.stderr)
+                return 1
             try:
                 plan, _config = installer.plan_install(
                     source.pkg_dir, dest, overrides, codex=args.codex or dest.name == ".codex", overwrite=args.overwrite,
@@ -82,13 +90,17 @@ def run(argv: list[str] | None = None) -> int:
             if plan.problems:
                 raise installer.InstallError("; ".join(plan.problems))
             changed = installer.apply_plan(plan, package_version)
+            skill_integrity.write_install_record(
+                dest, manifest["version"], source.commit, manifest,
+                {key: data for key, (data, _executable) in plan.writes.items()}, source=source.name,
+            )
             print(
                 f"atm-bd-orchestration {package_version}: {changed} file(s) written, "
                 f"{len(plan.writes) - changed} unchanged, {len(plan.removals)} removed, "
                 f"{len(plan.backups)} backed up; config and registry updated"
             )
             print(_source_line(source.name, source.commit))
-    except skill_source.SkillSourceError as error:
+    except (skill_source.SkillSourceError, skill_integrity.IntegrityError) as error:
         print(f"atm-bd skill: {error}", file=sys.stderr)
         return 1
     except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as error:

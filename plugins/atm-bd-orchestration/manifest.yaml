@@ -60,6 +60,7 @@ artifacts:
     - skills/atm-bd-orchestration/references/post-mortem.md
     - skills/atm-bd-orchestration/roles/quality-mgr.md
     - skills/atm-bd-orchestration/scripts/assignment-gates.py
+    - skills/atm-bd-orchestration/scripts/atm-hook-doctor.py
     - skills/atm-bd-orchestration/scripts/bd_commands.py
     - skills/atm-bd-orchestration/scripts/bead-groups
     - skills/atm-bd-orchestration/scripts/bead-queues
@@ -97,6 +98,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/jev_receipts.py
     - skills/atm-bd-orchestration/scripts/tests/rendering.py
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
+    - skills/atm-bd-orchestration/scripts/tests/test_atm_hook_doctor.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_groups.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_pour_mock.py

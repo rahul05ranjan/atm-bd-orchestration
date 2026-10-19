@@ -21,6 +21,7 @@ dependencies = [
     { name = "rich" },
     { name = "sc-compose" },
     { name = "sc-observability" },
+    { name = "sc-sha" },
     { name = "textual" },
 ]
 
@@ -39,6 +40,7 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0.0,<16" },
     { name = "sc-compose", specifier = ">=1.7.0,<2" },
     { name = "sc-observability", specifier = ">=1.5.0,<2" },
+    { name = "sc-sha", specifier = ">=1.7.0,<2" },
     { name = "textual", specifier = ">=8.2.8,<9" },
 ]
 
@@ -478,6 +480,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/bb/e3/2286ef64e6c2574334ed9784a3339cad7a88e28ced9c2d8f0db264a6277f/sc_observability-1.5.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:9e1695e48f1878ac7a26e15378fa4df77f4cb4782e134bedc1802dd2d0ecf5ca", size = 4474157, upload-time = "2026-10-07T15:37:12.423Z" },
     { url = "https://files.pythonhosted.org/packages/27/89/e350fa9e6e1ec3ecaf2464fb18716af4da942a801fcafa1f278c9c10473f/sc_observability-1.5.0-cp310-abi3-win_amd64.whl", hash = "sha256:92a98747890d655bf0945d30a1fc4a071342ff83454049819bb4617f772e2d7b", size = 4396632, upload-time = "2026-10-07T15:37:14.115Z" },
     { url = "https://files.pythonhosted.org/packages/04/2b/b9a32358e827455d611c2512a988380577611b8eb17463ecce4ff986a21b/sc_observability-1.5.0-cp310-abi3-win_arm64.whl", hash = "sha256:8dc9d69bd5ed9ae0234c715356c985634e5baf0bab76fadc7e4f6ff3e7ac3784", size = 4077659, upload-time = "2026-10-07T15:37:15.67Z" },
+]
+
+[[package]]
+name = "sc-sha"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/77/732f1afdcf843312a2a564646b117b9bd49928dcfcee05d49b4025b9a8be/sc_sha-1.7.0.tar.gz", hash = "sha256:38a5b8d97ee871745ef3ab258ee4f66d6689b5fbc1ab9f2186c5f4e88d40b69f", size = 29302, upload-time = "2026-10-11T20:48:01.991Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/74/843c04688e172b37e3103fc87745391969ed3b226f558f67abf22fe97b39/sc_sha-1.7.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:9a337a5621552161b7176086d6d96437a49220c8fafba0c3817650564af6b047", size = 243470, upload-time = "2026-10-11T20:47:55.808Z" },
+    { url = "https://files.pythonhosted.org/packages/12/f4/4116392c472e0556cfff3812970ccd379fb98d1724f1b4a13e289066de55/sc_sha-1.7.0-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:7e456c739c964eca57e45e23dac4b1d77089e9ebddad9131a9843ee9910a28f0", size = 283447, upload-time = "2026-10-11T20:47:57.162Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/39/d352bc3b009cb4c6d73929c3879d3c1134d42eda0a44d7c037892b341379/sc_sha-1.7.0-cp311-cp311-win_amd64.whl", hash = "sha256:533cf08e90128149209328dc6e70e938a0c45662f66059bf9c5056e512c57c18", size = 137640, upload-time = "2026-10-11T20:47:58.505Z" },
 ]
 
 [[package]]

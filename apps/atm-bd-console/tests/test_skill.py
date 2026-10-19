@@ -14,10 +14,15 @@ from pathlib import Path
 import pytest
 from process_helpers import run_process
 
-from atm_bd_console import __version__, cli, skill, skill_source
+from atm_bd_console import __version__, cli, skill, skill_integrity, skill_source
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 PLUGIN = Path(__file__).resolve().parents[3] / "plugins" / "atm-bd-orchestration"
+
+
+def published(pkg_dir: Path) -> bytes:
+    """The manifest a release of this tree publishes."""
+    return json.dumps(skill_integrity.build_manifest(pkg_dir, "0.16.0")).encode()
 
 
 @dataclass
@@ -156,23 +161,31 @@ def skill_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, 
     git("-C", str(work), "add", "-A")
     git("-C", str(work), "commit", "-q", "-m", "unreadable main tree")
     main_commit = git("-C", str(work), "rev-parse", "HEAD")
+    git("-C", str(work), "tag", "v0.16.1")
     git("-C", str(work), "push", "-q", "origin", "main", "--tags")
     url = origin.as_uri()
     monkeypatch.setattr(skill_source, "REPOSITORY", url)
+    manifests = {}
+    for tag in ("v0.16.0", "v0.16.1"):
+        checkout = tmp_path / f"published-{tag}"
+        git("clone", "-q", "--branch", tag, str(origin), str(checkout))
+        manifests[tag] = published(checkout / "plugins" / "atm-bd-orchestration")
+    monkeypatch.setattr(skill_source, "release_manifest", manifests.get)
+    monkeypatch.setattr(skill_source, "latest_release_tag", lambda: "v0.16.1")
     return url, tag_commit, main_commit
 
 
 def test_real_git_lists_and_clones_tag_and_main(skill_remote: tuple[str, str, str], capsys) -> None:
     _url, tag_commit, main_commit = skill_remote
     assert skill.run(["--list"]) == 0
-    assert capsys.readouterr().out == "v0.16.0\norchestration\n"
+    assert capsys.readouterr().out == "v0.16.0\nv0.16.1\norchestration\n"
     with skill_source.resolve_source(version="0.16.0") as source:
         assert (source.name, source.commit) == ("v0.16.0", tag_commit)
         assert (source.pkg_dir / "install.py").is_file()
         assert (source.pkg_dir / load_bundled_installer().CONFIG_TEMPLATE).is_file()
     assert not source.pkg_dir.exists()
     with skill_source.resolve_source(latest=True) as source:
-        assert (source.name, source.commit) == ("main", main_commit)
+        assert (source.name, source.commit) == ("v0.16.1", main_commit)
         assert (source.pkg_dir / "install.py").is_file()
         assert not (source.pkg_dir / load_bundled_installer().CONFIG_TEMPLATE).exists()
     assert not source.pkg_dir.exists()
@@ -193,7 +206,7 @@ def test_real_source_failures_leave_target_unchanged(
     before = consumer_files(target)
     if failure == "unknown":
         args = ["9.9.9"]
-        expected = "unknown version 9.9.9; available tags: v0.16.0"
+        expected = "unknown version 9.9.9; available tags: v0.16.0, v0.16.1"
     elif failure == "git":
         url = (tmp_path / "missing.git").as_uri()
         monkeypatch.setattr(skill_source, "REPOSITORY", url)
@@ -201,7 +214,7 @@ def test_real_source_failures_leave_target_unchanged(
         expected = f"{url}: git ls-remote --tags --refs {url} failed:"
     else:
         args = ["--latest"]
-        expected = f"main is not installable by atm-bd {skill.__version__}:"
+        expected = f"v0.16.1 is not installable by atm-bd {skill.__version__}:"
 
     assert skill.run([*args, "--dest", str(target)]) == 1
     error = capsys.readouterr().err
@@ -220,7 +233,7 @@ def installer(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(skill, "_installer", lambda: fake)
     pkg = tmp_path / "package-data"
     pkg.mkdir()
-    source = skill_source.SkillSource("bundled", pkg, COMMIT)
+    source = skill_source.SkillSource("bundled", pkg, COMMIT, published(pkg))
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
     return fake, source
 
@@ -297,7 +310,7 @@ def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_p
     fake, _ = installer
     plugin = tmp_path / "remote-package"
     plugin.mkdir()
-    source = skill_source.SkillSource("0.16.0", plugin, COMMIT)
+    source = skill_source.SkillSource("0.16.0", plugin, COMMIT, published(plugin))
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
     fake.plan_install = lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad manifest"))
 
@@ -328,7 +341,7 @@ def test_tag_install_does_not_blame_the_ref_for_host_or_target_failures(
     fake, _ = installer
     remote = tmp_path / "remote-package"
     remote.mkdir()
-    source = skill_source.SkillSource("v0.16.0", remote, COMMIT)
+    source = skill_source.SkillSource("v0.16.0", remote, COMMIT, published(remote))
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
     setattr(fake, step, _raise(error))
 
@@ -342,7 +355,7 @@ def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path:
     remote = tmp_path / "remote"
     remote.mkdir()
     (remote / "install.py").write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()\n", encoding="utf-8")
-    source = skill_source.SkillSource("main", remote, COMMIT)
+    source = skill_source.SkillSource("main", remote, COMMIT, published(remote))
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
 
     assert skill.run(["--latest", "--dest", str(tmp_path / "consumer")]) == 0
@@ -373,12 +386,17 @@ def test_bundled_skill_matches_install_py_file_for_file_offline_with_legacy_owne
             shipped.parent.mkdir(parents=True, exist_ok=True)
             shipped.write_bytes(b"locally modified\n")
     monkeypatch.setattr(skill.skill_source, "bundled_directory", lambda: pkg_dir)
+    monkeypatch.setattr(skill.skill_source, "bundled_manifest", lambda: published(pkg_dir))
     monkeypatch.setattr(skill.skill_source, "_run_git", lambda *_: (_ for _ in ()).throw(AssertionError("network")))
+    monkeypatch.setattr(skill.skill_source, "_http_get", lambda *_: (_ for _ in ()).throw(AssertionError("network")))
 
     assert module.main(["--dest", str(direct / subdir), *flags], pkg_dir=pkg_dir) == 0
     assert skill.run(["--dest", str(through_skill), *flags]) == 0
 
-    assert consumer_files(through_skill) == consumer_files(direct)
+    # atm-bd skill writes everything install.py writes, plus its install record.
+    installed = consumer_files(through_skill)
+    assert installed.pop(f"{subdir}/{skill_integrity.RECORD_NAME}")
+    assert installed == consumer_files(direct)
 
 
 def test_skill_is_wired_into_cli_and_help(capsys) -> None:
