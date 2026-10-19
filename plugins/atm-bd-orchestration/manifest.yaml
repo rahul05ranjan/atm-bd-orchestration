@@ -106,7 +106,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_atm_hook_doctor.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_groups.py
-    - skills/atm-bd-orchestration/scripts/tests/test_bead_pour_mock.py
+    - skills/atm-bd-orchestration/scripts/tests/test_bead_pour_real_bd.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_queues.py
     - skills/atm-bd-orchestration/scripts/tests/test_bv_analyze.py
     - skills/atm-bd-orchestration/scripts/tests/test_fix_round_scope.py

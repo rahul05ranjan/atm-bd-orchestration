@@ -4,12 +4,11 @@ from __future__ import annotations
 import copy
 import json
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from phase_fixtures import phase_data, phase_toml, write_phase
+from phase_fixtures import phase_data, phase_toml, run_subprocess, write_phase
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "validate-plan"
@@ -46,7 +45,7 @@ VALID = [ROOT_EPIC, STACK,
 
 
 def git(cwd: Path, *args: str) -> str:
-    return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=cwd, check=True,
+    return run_subprocess(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=cwd, check=True,
                           capture_output=True, text=True).stdout
 
 
@@ -61,7 +60,7 @@ class Repo(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         self.repo = self.base / "repo"
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
+        run_subprocess(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
         config = self.repo / ".claude/project/atm-bd-orchestration.yaml"
         config.parent.mkdir(parents=True)
         config.write_text("plans_dir: plans\nbead_prefix: x\n")
@@ -71,7 +70,7 @@ class Repo(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_vp(self, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-        return subprocess.run([str(SCRIPT), *args], cwd=self.repo, capture_output=True, text=True, env=env)
+        return run_subprocess([str(SCRIPT), *args], cwd=self.repo, capture_output=True, text=True, env=env)
 
     def run_beads(self, beads: list[dict], plan: list = PLAN, *extra: str) -> subprocess.CompletedProcess:
         (self.base / "plan.jsonl").write_text(lines(plan))
@@ -178,7 +177,7 @@ class ValidatePlan(Repo):
 
     def test_published_schemas_are_exported_from_the_models(self):
         with tempfile.TemporaryDirectory() as d:
-            subprocess.run(["python3", str(ROOT / "scripts" / "bead_schema.py"), "export", d], check=True)
+            run_subprocess(["python3", str(ROOT / "scripts" / "bead_schema.py"), "export", d], check=True)
             for exported in sorted(Path(d).iterdir()):
                 with self.subTest(schema=exported.name):
                     self.assertEqual((ROOT / "schemas" / exported.name).read_text(), exported.read_text(),
@@ -316,7 +315,7 @@ class LivePlan(Repo):
     def setUp(self):
         super().setUp()
         origin, bin_dir = self.base / "origin.git", self.base / "bin"
-        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+        run_subprocess(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
         git(self.repo, "remote", "add", "origin", str(origin))
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-qm", "config")

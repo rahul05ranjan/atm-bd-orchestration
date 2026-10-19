@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import copy
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from phase_fixtures import TEMPLATE_DIRECTORY, TEMPLATE_NAMES, phase_data, phase_toml, write_phase
+from phase_fixtures import TEMPLATE_DIRECTORY, TEMPLATE_NAMES, phase_data, phase_toml, run_subprocess, write_phase
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -21,7 +20,7 @@ class PhaseConfigTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        run_subprocess(["git", "init", "-q", str(self.repo)], check=True)
         self.path = write_phase(self.repo, lead="appointed-lead")
         self.data = phase_data(lead="appointed-lead")
 
@@ -117,13 +116,13 @@ class PhaseConfigTests(unittest.TestCase):
         config.write_text("lead: repository-fallback\n")
         code = ("from pathlib import Path; from sprint_index_common import load_phase_config; "
                 "load_phase_config(Path('.'), 't')")
-        result = subprocess.run([sys.executable, "-c", code], cwd=self.repo, capture_output=True, text=True,
+        result = run_subprocess([sys.executable, "-c", code], cwd=self.repo, capture_output=True, text=True,
                                 env={**os.environ, "PYTHONPATH": str(SCRIPTS), "ATM_IDENTITY": "env-fallback"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("lead: required nonempty string", result.stderr)
 
     def init(self, *arguments):
-        return subprocess.run([sys.executable, str(SCRIPTS / "phase-config"), "init", *arguments],
+        return run_subprocess([sys.executable, str(SCRIPTS / "phase-config"), "init", *arguments],
                               cwd=self.repo, capture_output=True, text=True)
 
     def configure_repo(self):

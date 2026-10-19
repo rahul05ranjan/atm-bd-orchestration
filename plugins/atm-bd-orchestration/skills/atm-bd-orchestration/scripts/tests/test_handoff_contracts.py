@@ -573,7 +573,7 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from test_bead_pour_mock import Workspace, init_workspace, stop_server
+        from test_bead_pour_real_bd import Workspace, init_workspace, stop_server
         root = Path(tempfile.mkdtemp(prefix="handoff-blocking-")).resolve()
         cls.ws = Workspace(root)
         cls.addClassCleanup(shutil.rmtree, root, ignore_errors=True)
@@ -601,7 +601,7 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
         return out
 
     def test_the_fix_round_shape_pours_and_a_non_blocking_one_is_refused(self):
-        from test_bead_pour_mock import fix_group, group
+        from test_bead_pour_real_bd import fix_group, group
         ws = self.ws
         sprint = ws.sprint("hz", 1)
         dev, sanity, qa = group(sprint)
@@ -636,7 +636,7 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
         return out
 
     def test_the_round_one_shape_parses_and_pours_and_one_without_its_remedy_is_refused(self):
-        from test_bead_pour_mock import fix_group, group
+        from test_bead_pour_real_bd import fix_group, group
         ws = self.ws
         sprint = ws.sprint("hx", 1)
         _, _, qa = group(sprint)

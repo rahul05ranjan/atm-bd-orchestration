@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 TEMPLATE_DIRECTORY = Path(".claude/skills/atm-bd-orchestration/templates")
@@ -14,6 +15,14 @@ TEMPLATE_NAMES = {
     "plan_review": "plan-review-template.xml.j2",
     "review": "review-template.xml.j2",
 }
+
+
+def run_subprocess(argv, *, on_timeout=None, **kwargs):
+    try:
+        return subprocess.run(argv, timeout=60, **kwargs)
+    except subprocess.TimeoutExpired as error:
+        diagnostic = on_timeout() if on_timeout else ""
+        raise AssertionError(f"{argv!r} timed out; stdout: {error.stdout!r}; stderr: {error.stderr!r}{diagnostic}") from error
 
 
 def phase_data(phase="t", prefix="x", plans_dir="plans", lead="phase-lead"):
