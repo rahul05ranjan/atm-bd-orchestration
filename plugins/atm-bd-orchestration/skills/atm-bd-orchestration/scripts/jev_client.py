@@ -24,6 +24,13 @@ MODEL = "jev-1.13.0"
 HOST = "api.typesafe.ai"
 MAX_REQUEST_BYTES = 96000  # Jev documents 32k state tokens of a 64k request budget; ~3 bytes per token of code.
 MAX_RESPONSE_BYTES = 1048576
+# Lead ruling 2026-10-19: four attempts per part; retries and 413 shortenings share that part's budget.
+MAX_JEV_ATTEMPTS = 4
+
+
+class AttemptBudget:
+    def __init__(self, remaining=MAX_JEV_ATTEMPTS):
+        self.remaining = min(remaining, MAX_JEV_ATTEMPTS)
 
 
 class JevError(Exception):
@@ -146,11 +153,13 @@ def retry_delay(retry_after):
     return min(30.0, max(0.0, delay)) if math.isfinite(delay) else 30.0
 
 
-def evaluate(request, *, sleep=None, max_attempts=4):
+def evaluate(request, *, sleep=None, max_attempts=MAX_JEV_ATTEMPTS, _budget=None):
     key = api_key()
     body = validate_request(request)
     sleeper = sleep or time.sleep
-    for attempt in range(max_attempts):
+    budget = _budget if _budget is not None else AttemptBudget(max_attempts)
+    while budget.remaining > 0:
+        budget.remaining -= 1
         conn = None
         try:
             conn = http.client.HTTPSConnection(HOST, timeout=20)
@@ -162,38 +171,28 @@ def evaluate(request, *, sleep=None, max_attempts=4):
             raw = response.read(MAX_RESPONSE_BYTES + 1)
             retry_after = response.getheader("Retry-After")
         except (OSError, socket.timeout, http.client.HTTPException):
-            if attempt + 1 < max_attempts:
+            if budget.remaining > 0:
                 continue
             raise JevError("SANITY.JEV_UNAVAILABLE", "Jev connection failed or timed out", True) from None
         finally:
             if conn is not None:
                 conn.close()
         if status == 413:
-            exc = oversize(request)
-            exc.remaining_attempts = max_attempts - attempt - 1
-            raise exc
-        if (status == 429 or 500 <= status <= 599) and attempt + 1 < max_attempts:
+            raise oversize(request)
+        if status in (429, 502, 529) and budget.remaining > 0:
             delay = retry_delay(retry_after)
             if delay:
                 sleeper(delay)
             continue
         if status != 200:
-            raise JevError("SANITY.JEV_UNAVAILABLE", f"Jev HTTP {status}; response body withheld", status == 429 or status >= 500)
+            raise JevError("SANITY.JEV_UNAVAILABLE", f"Jev HTTP {status}; response body withheld", status in (429, 502, 529))
         if len(raw) > MAX_RESPONSE_BYTES:
-            if attempt + 1 < max_attempts:
-                continue
             raise JevError("SANITY.JEV_RESPONSE_INVALID", "Jev response exceeded size limit")
         try:
             value = json.loads(raw)
         except (ValueError, UnicodeError):
-            if attempt + 1 < max_attempts:
-                continue
             raise JevError("SANITY.JEV_RESPONSE_INVALID", "Jev response was not JSON") from None
-        try:
-            return validate_response(value, request)
-        except JevError:
-            if attempt + 1 >= max_attempts:
-                raise
+        return validate_response(value, request)
     raise JevError("SANITY.JEV_UNAVAILABLE", "Jev retry budget exhausted", True)
 
 
@@ -319,6 +318,14 @@ def split_request(request, target, changed_files):
     state = request.get("state")
     if not isinstance(state, dict) or not isinstance(state.get("deliverable"), str):
         raise oversize(request)
+    if (not isinstance(state.get("evidence", ""), str)
+            or not isinstance(state.get("context", {}), dict)
+            or not all(isinstance(key, str) and isinstance(value, str)
+                       for key, value in state.get("context", {}).items())
+            or not isinstance(state.get("external_evidence", []), list)
+            or not all(isinstance(entry, dict) and isinstance(entry.get("text", ""), str)
+                       for entry in state.get("external_evidence", []))):
+        raise oversize(request)
     base = copy.deepcopy(request)
     base["state"] = {k: v for k, v in state.items() if k not in ("evidence", "context", "external_evidence", "part", "changed_files")}
     base["state"].update(evidence="", part="999999 of 999999", changed_files=changed_files)
@@ -384,22 +391,33 @@ def split_request(request, target, changed_files):
     return pieces
 
 
-def evaluate_parts(requests, key, changed_files=None):
-    """Evaluate every part; a 413 consumes an attempt before its smaller children."""
-    queue = [(request, 4) for request in requests]
+def evaluate_parts(requests, key, changed_files=None, *, sleep=None):
+    """Initial parts have independent budgets; a 413's smaller children share their parent's remainder."""
+    queue = []
+    for request in requests:
+        try:
+            validate_request(request)
+            initial = [request]
+        except JevError as exc:
+            if exc.code != "SANITY.JEV_REQUEST_TOO_LARGE":
+                raise
+            state = request["state"]
+            files = state.get("changed_files", changed_files or []) if isinstance(state, dict) else changed_files or []
+            initial = split_request(request, MAX_REQUEST_BYTES, files)
+        queue.extend((part, AttemptBudget(MAX_JEV_ATTEMPTS)) for part in initial)
     done = []
     while queue:
         request, budget = queue.pop(0)
         try:
-            response = evaluate(request, max_attempts=budget)
+            response = evaluate(request, sleep=sleep, _budget=budget)
         except JevError as exc:
-            if exc.code != "SANITY.JEV_REQUEST_TOO_LARGE" or getattr(exc, "remaining_attempts", 0) <= 0:
+            if exc.code != "SANITY.JEV_REQUEST_TOO_LARGE" or budget.remaining <= 0:
                 raise
             files = request.get("state", {}).get("changed_files", changed_files or [])
             smaller = split_request(request, size(request) // 2, files)
             if len(smaller) < 2:
                 raise exc
-            queue[0:0] = [(part, exc.remaining_attempts) for part in smaller]
+            queue[0:0] = [(part, budget) for part in smaller]
             continue
         done.append((request, response))
     if len(done) == 1 and "part" not in done[0][0].get("state", {}):
@@ -543,7 +561,45 @@ def announce(message, lead):
             print(f"Announcement to {recipient} unavailable; coordinator must report the error via ATM.", file=sys.stderr)
 
 
-def main(argv=None):
+def evaluation_result(args, *, clock=time.monotonic, sleep=None):
+    elapsed_s = None
+    try:
+        if args.startup:
+            request = startup_request()
+        elif args.assignment:
+            text = args.assignment.read_text()
+            fenced = FENCED.fullmatch(text)
+            assignment = json.loads(fenced.group(1) if fenced else text)
+            requests = assignment_requests(assignment)
+            request = requests[0]
+        else:
+            request = json.loads(args.request.read_text())
+        started = clock()
+        try:
+            if args.assignment:
+                data = evaluate_parts(requests, api_key(), assignment["changed_files"], sleep=sleep)
+            elif args.startup:
+                data = evaluate(request, sleep=sleep)
+            else:
+                data = evaluate_parts([request], api_key(), sleep=sleep)
+        finally:
+            elapsed_s = max(0.0, clock() - started)
+        if not args.startup and len(request["questions"]) == 1 and "parts" not in data and "receipt" not in data:
+            data = {**data, "receipt": receipt(request, data, api_key())}
+        if args.startup:
+            if data["answers"]["startup"]["choice"] != "ready":
+                raise JevError("SANITY.JEV_RESPONSE_INVALID", "Startup probe returned the wrong literal choice")
+            data = {"model": MODEL, "status": "ready", "scope": "authenticated synthetic probe only; sanity accuracy unverified"}
+        result = {"success": True, "data": data, "error": None}
+    except JevError as exc:
+        result = failure(exc)
+    except (OSError, ValueError, UnicodeError):
+        result = failure(JevError("VALIDATION.INPUT", "Request file unavailable or invalid JSON"))
+    result["elapsed_s"] = elapsed_s if elapsed_s is not None else 0.0
+    return result
+
+
+def main(argv=None, *, clock=time.monotonic, sleep=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--startup", action="store_true")
@@ -568,40 +624,7 @@ def main(argv=None):
         announce(f"dev-sanity Jev child failed: {args.error}. Selection takes the LLM reply for JEV slots until a Jev child succeeds.", phase_lead)
         print(json.dumps({"success": True, "data": {"announced": args.error}, "error": None}))
         return 0
-    elapsed_s = None
-    try:
-        if args.startup:
-            request = startup_request()
-        elif args.assignment:
-            text = args.assignment.read_text()
-            fenced = FENCED.fullmatch(text)
-            assignment = json.loads(fenced.group(1) if fenced else text)
-            requests = assignment_requests(assignment)
-            request = requests[0]
-        else:
-            request = json.loads(args.request.read_text())
-        started = time.monotonic()
-        try:
-            if args.assignment:
-                data = evaluate_parts(requests, api_key(), assignment["changed_files"])
-            elif args.startup:
-                data = evaluate(request)
-            else:
-                data = evaluate_parts([request], api_key())
-        finally:
-            elapsed_s = max(0.0, time.monotonic() - started)
-        if not args.startup and len(request["questions"]) == 1 and "parts" not in data and "receipt" not in data:
-            data = {**data, "receipt": receipt(request, data, api_key())}
-        if args.startup:
-            if data["answers"]["startup"]["choice"] != "ready":
-                raise JevError("SANITY.JEV_RESPONSE_INVALID", "Startup probe returned the wrong literal choice")
-            data = {"model": MODEL, "status": "ready", "scope": "authenticated synthetic probe only; sanity accuracy unverified"}
-        result = {"success": True, "data": data, "error": None}
-    except JevError as exc:
-        result = failure(exc)
-    except (OSError, ValueError, UnicodeError):
-        result = failure(JevError("VALIDATION.INPUT", "Request file unavailable or invalid JSON"))
-    result["elapsed_s"] = elapsed_s if elapsed_s is not None else 0.0
+    result = evaluation_result(args, clock=clock, sleep=sleep)
     if args.announce and not result["success"]:
         error = result["error"]
         announce(f"dev-sanity Jev startup failed: {error['code']}: {error['message']}. No sc-sanity-jev checks run; dev-sanity records every JEV slot as unavailable until a startup probe passes.", phase_lead)

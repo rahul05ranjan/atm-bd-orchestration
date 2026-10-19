@@ -23,11 +23,31 @@ def reply():
     }}, "usage": {"input_tokens": 1, "output_tokens": 1}}
 
 
+def no_sleep(delay):
+    raise AssertionError(f"Unexpected retry delay: {delay}")
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 100.0
+        self.waits = []
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def sleep(self, seconds):
+        self.waits.append(seconds)
+        self.advance(seconds)
+
+
 class JevClientTests(unittest.TestCase):
     def test_missing_key_no_network(self):
         with patch.dict(client.os.environ, {}, clear=True), patch.object(client.http.client, "HTTPSConnection") as http:
             with self.assertRaises(client.JevError):
-                client.evaluate(client.startup_request())
+                client.evaluate(client.startup_request(), sleep=no_sleep)
             http.assert_not_called()
 
     def startup(self, argv, team, daemon, environ=None, phase_lead="appointed-lead"):
@@ -50,7 +70,7 @@ class JevClientTests(unittest.TestCase):
              patch.object(client.subprocess, "run", side_effect=run) as send:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                rc = client.main(argv)
+                rc = client.main(argv, sleep=no_sleep)
         sends = [(c.args[0][2], c.kwargs["input"]) for c in send.call_args_list if c.args[0][:2] == ["atm", "send"]]
         return rc, json.loads(output.getvalue()), sends
 
@@ -73,7 +93,7 @@ class JevClientTests(unittest.TestCase):
         rc, _, sends = self.startup(["--startup"], ["oversight@team"], ["daemon@host"])
         self.assertEqual((rc, sends), (2, []))
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            client.main(["--startup", "--announce"])
+            client.main(["--startup", "--announce"], sleep=no_sleep)
 
     def test_error_announces_a_child_failure_verbatim_without_probing(self):
         error = "SANITY.JEV_UNAVAILABLE: Jev HTTP 503; response body withheld"
@@ -92,7 +112,7 @@ class JevClientTests(unittest.TestCase):
                      ["--announce", "--error", error], ["--startup", "--error", error, "--announce", "--phase", "x"],
                      ["--request", "r.json", "--announce", "--phase", "x"]):
             with self.subTest(argv=argv), self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-                client.main(argv)
+                client.main(argv, sleep=no_sleep)
 
     def test_announcement_uses_the_selected_phase_lead_despite_environment_and_yaml(self):
         for lead in ("phase-owner-one", "phase-owner-two"):
@@ -112,14 +132,14 @@ class JevClientTests(unittest.TestCase):
                          patch.object(client, "evaluate") as evaluate, \
                          patch.object(client.subprocess, "run") as send, \
                          contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit):
-                        client.main(["--startup", "--announce", "--phase", "x"])
+                        client.main(["--startup", "--announce", "--phase", "x"], sleep=no_sleep)
                     self.assertIn("phase-x.toml", stderr.getvalue())
                     evaluate.assert_not_called()
                     send.assert_not_called()
 
     def test_legacy_lead_override_is_rejected(self):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as stderr:
-            client.main(["--startup", "--announce", "--lead", "wrong-lead"])
+            client.main(["--startup", "--announce", "--lead", "wrong-lead"], sleep=no_sleep)
         self.assertIn("unrecognized arguments: --lead", stderr.getvalue())
 
     def test_successful_transport(self):
@@ -127,7 +147,7 @@ class JevClientTests(unittest.TestCase):
         conn.getresponse.return_value.status = 200
         conn.getresponse.return_value.read.return_value = json.dumps(reply()).encode()
         with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), patch.object(client.http.client, "HTTPSConnection", return_value=conn):
-            self.assertEqual(client.evaluate(client.startup_request()), reply())
+            self.assertEqual(client.evaluate(client.startup_request(), sleep=no_sleep), reply())
         self.assertEqual(conn.request.call_args.args[:2], ("POST", "/v1/systemone"))
         conn.close.assert_called_once()
 
@@ -137,23 +157,33 @@ class JevClientTests(unittest.TestCase):
         conn.getresponse.return_value.read.return_value = b"test-only-key server details"
         with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), patch.object(client.http.client, "HTTPSConnection", return_value=conn):
             with self.assertRaises(client.JevError) as raised:
-                client.evaluate(client.startup_request())
+                client.evaluate(client.startup_request(), sleep=no_sleep)
         self.assertNotIn("test-only-key", str(raised.exception))
         self.assertFalse(raised.exception.recoverable)
         self.assertEqual(conn.request.call_count, 1)
 
     def test_retry_is_bounded(self):
-        conn = MagicMock()
-        conn.getresponse.return_value.status = 429
-        conn.getresponse.return_value.read.return_value = b"{}"
-        conn.getresponse.return_value.getheader.return_value = "0"
-        with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), patch.object(client.http.client, "HTTPSConnection", return_value=conn), patch.object(client.time, "sleep"):
-            with self.assertRaises(client.JevError):
-                client.evaluate(client.startup_request())
-        self.assertEqual(conn.request.call_count, 4)
+        self.assertEqual(client.MAX_JEV_ATTEMPTS, 4)
+        for transient in (429, 502, 529, OSError("down"), client.socket.timeout("late"),
+                          client.http.client.HTTPException("broken")):
+            with self.subTest(transient=transient):
+                conn = MagicMock()
+                if isinstance(transient, Exception):
+                    conn.request.side_effect = transient
+                else:
+                    conn.getresponse.return_value.status = transient
+                conn.getresponse.return_value.read.return_value = b"{}"
+                conn.getresponse.return_value.getheader.return_value = "0"
+                with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                     patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
+                     self.assertRaises(client.JevError) as raised:
+                    client.evaluate(client.startup_request(), sleep=no_sleep, max_attempts=99)
+                self.assertEqual(conn.request.call_count, 4)
+                self.assertEqual(conn.close.call_count, 4)
+                self.assertTrue(raised.exception.recoverable)
 
     def test_transient_statuses_and_transport_retry_to_success(self):
-        for transient in (429, 502, 503, 529, "transport"):
+        for transient in (429, 502, 529, "transport"):
             with self.subTest(transient=transient):
                 conn = MagicMock()
                 good = MagicMock(status=200)
@@ -166,11 +196,39 @@ class JevClientTests(unittest.TestCase):
                 else:
                     conn.getresponse.side_effect = [bad, good]
                 with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
-                     patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
-                     patch.object(client.time, "sleep") as sleep:
-                    self.assertEqual(client.evaluate(client.startup_request()), reply())
+                     patch.object(client.http.client, "HTTPSConnection", return_value=conn):
+                    self.assertEqual(client.evaluate(client.startup_request(), sleep=no_sleep), reply())
                 self.assertEqual(conn.request.call_count, 2)
-                sleep.assert_not_called()
+
+    def test_other_http_errors_are_terminal(self):
+        for status in sorted(set(range(400, 600)) - {413, 429, 502, 529}):
+            with self.subTest(status=status):
+                conn = MagicMock()
+                conn.getresponse.return_value.status = status
+                conn.getresponse.return_value.read.return_value = b"private server response"
+                with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                     patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
+                     self.assertRaises(client.JevError) as raised:
+                    client.evaluate(client.startup_request(), sleep=no_sleep)
+                self.assertEqual(conn.request.call_count, 1)
+                self.assertFalse(raised.exception.recoverable)
+                self.assertEqual(raised.exception.message, f"Jev HTTP {status}; response body withheld")
+
+    def test_invalid_responses_are_terminal(self):
+        for raw in (b"x" * (client.MAX_RESPONSE_BYTES + 1), b"not-json", b"\xff",
+                    json.dumps({**reply(), "model": "wrong"}).encode(),
+                    json.dumps({**reply(), "answers": {}}).encode()):
+            with self.subTest(raw_size=len(raw)):
+                conn = MagicMock()
+                conn.getresponse.return_value.status = 200
+                conn.getresponse.return_value.read.return_value = raw
+                with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                     patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
+                     self.assertRaises(client.JevError) as raised:
+                    client.evaluate(client.startup_request(), sleep=no_sleep)
+                self.assertEqual(conn.request.call_count, 1)
+                self.assertEqual(raised.exception.code, "SANITY.JEV_RESPONSE_INVALID")
+                self.assertFalse(raised.exception.recoverable)
 
     def test_retry_after_is_honoured_and_capped_without_sleeping(self):
         conn = MagicMock()
@@ -194,12 +252,12 @@ class JevClientTests(unittest.TestCase):
         good.read.return_value = json.dumps(answer).encode()
         busy = MagicMock(status=529, getheader=MagicMock(return_value="0"))
         busy.read.return_value = b"{}"
-        for statuses, count in (([good, good, good], 3), ([good, busy, busy, busy, good, good], 6)):
+        for statuses, count in (([good, good, good], 3), ([busy, busy, busy, good] * 3, 12)):
             conn = MagicMock()
             conn.getresponse.side_effect = statuses
             with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
                  patch.object(client.http.client, "HTTPSConnection", return_value=conn):
-                result = client.evaluate_parts([request, request, request], "test-only-key")
+                result = client.evaluate_parts([request, request, request], "test-only-key", sleep=no_sleep)
             self.assertEqual(conn.request.call_count, count)
             self.assertEqual([p["part"] for p in result["parts"]], ["1 of 3", "2 of 3", "3 of 3"])
 
@@ -215,7 +273,7 @@ class JevClientTests(unittest.TestCase):
         conn.getresponse.side_effect = [too_large, good, good, good]
         with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
              patch.object(client.http.client, "HTTPSConnection", return_value=conn):
-            result = client.evaluate_parts([request], "test-only-key", ["x"])
+            result = client.evaluate_parts([request], "test-only-key", ["x"], sleep=no_sleep)
         self.assertGreaterEqual(len(result["parts"]), 2)
         self.assertTrue(all(part["changed_files"] == ["x"] for part in result["parts"]))
         sent = [json.loads(call.kwargs["body"]) for call in conn.request.call_args_list[1:]]
@@ -239,36 +297,64 @@ class JevClientTests(unittest.TestCase):
         with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
              patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
              self.assertRaises(client.JevError) as raised:
-            client.evaluate_parts([request], "test-only-key")
+            client.evaluate_parts([request], "test-only-key", sleep=no_sleep)
         self.assertEqual(conn.request.call_count, 4)
         self.assertIn("oversized", raised.exception.message)
 
-    def test_elapsed_includes_retries_and_is_present_on_failure(self):
+    def test_shortened_children_share_the_original_parts_remaining_attempts(self):
+        request = client.written_request("delivery", "x" * 20000, part=("1 of 1", ["x"]))
         conn = MagicMock()
-        good = MagicMock(status=200)
-        good.read.return_value = json.dumps(reply()).encode()
-        busy = MagicMock(status=503, getheader=MagicMock(return_value="0"))
+        too_large = MagicMock(status=413)
+        too_large.read.return_value = b"{}"
+        busy = MagicMock(status=529)
         busy.read.return_value = b"{}"
-        conn.getresponse.side_effect = [busy, good]
-        output = io.StringIO()
+        busy.getheader.return_value = "0"
+        good = MagicMock(status=200)
+        good.read.return_value = json.dumps({"model": client.MODEL, "answers": {"written": {
+            "type": "choice", "choice": "yes", "confidence": 1.0, "probabilities": {"yes": 1.0, "no": 0.0}}}}).encode()
+        conn.getresponse.side_effect = [too_large, busy, busy, good, good]
         with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
              patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
-             patch.object(client.time, "monotonic", side_effect=[10.0, 14.2]), \
-             contextlib.redirect_stdout(output):
-            self.assertEqual(client.main(["--startup"]), 0)
-        self.assertAlmostEqual(json.loads(output.getvalue())["elapsed_s"], 4.2)
-        self.assertEqual(conn.request.call_count, 2)
-        conn.getresponse.side_effect = None
-        conn.request.side_effect = OSError("down")
-        output = io.StringIO()
-        with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
-             patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
-             patch.object(client.time, "monotonic", side_effect=[20.0, 25.5]), \
-             contextlib.redirect_stdout(output):
-            self.assertEqual(client.main(["--startup"]), 2)
-        failure = json.loads(output.getvalue())
-        self.assertEqual(failure["elapsed_s"], 5.5)
-        self.assertEqual(failure["error"]["message"], "Jev connection failed or timed out")
+             self.assertRaises(client.JevError) as raised:
+            client.evaluate_parts([request], "test-only-key", sleep=no_sleep)
+        self.assertEqual(conn.request.call_count, 4)
+        self.assertEqual(raised.exception.message, "Jev retry budget exhausted")
+
+    def test_elapsed_includes_retries_and_is_present_on_failure(self):
+        for outcomes, elapsed, status in [([529, 200], 4.5, 0), ([OSError("down")] * 4, 5.0, 2),
+                                           ([502] * 4, 11.0, 2), ([529] * 4, 11.0, 2), ([429] * 4, 11.0, 2),
+                                           ([503], 1.25, 2), (["invalid"], 1.25, 2)]:
+            with self.subTest(outcomes=outcomes):
+                clock = FakeClock()
+                conn = MagicMock()
+                pending = iter(outcomes)
+
+                def send(*args, **kwargs):
+                    clock.advance(1.25)
+                    outcome = next(pending)
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    response = MagicMock(status=200 if outcome == "invalid" else outcome)
+                    response.read.return_value = b"not-json" if outcome == "invalid" else json.dumps(reply()).encode()
+                    response.getheader.return_value = "2"
+                    conn.getresponse.return_value = response
+
+                conn.request.side_effect = send
+                output = io.StringIO()
+                original_clock = client.time.monotonic
+                with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                     patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
+                     contextlib.redirect_stdout(output):
+                    self.assertEqual(client.main(["--startup"], clock=clock, sleep=clock.sleep), status)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result["elapsed_s"], elapsed)
+                self.assertEqual(conn.request.call_count, len(outcomes))
+                self.assertEqual(clock.waits, [2.0] * (len(outcomes) - 1) if isinstance(outcomes[0], int)
+                                 and outcomes[0] in (429, 502, 529) else [])
+                self.assertIs(client.time.monotonic, original_clock)
+                if status:
+                    self.assertIsNone(result["data"])
+                    self.assertTrue(client.is_client_message(result["error"]["message"]))
 
     def test_bad_answer_shapes(self):
         for change in [lambda r: r.update(model="wrong"),
@@ -281,14 +367,69 @@ class JevClientTests(unittest.TestCase):
             with self.assertRaises(client.JevError):
                 client.validate_response(value, client.startup_request())
 
-    def test_oversize_request_abstains(self):
-        request = client.startup_request()
-        request["state"] = "x" * client.MAX_REQUEST_BYTES
-        with self.assertRaises(client.JevError) as raised:
-            client.validate_request(request)
-        self.assertEqual(raised.exception.code, "SANITY.JEV_REQUEST_TOO_LARGE")
-        self.assertTrue(raised.exception.recoverable)
-        self.assertIn("Report this error unchanged", client.suggested_action(raised.exception))
+    def test_local_oversize_is_shortened_before_sending_with_independent_part_budgets(self):
+        header = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n"
+        body = "+" + "x" * client.MAX_REQUEST_BYTES + "\n"
+        request = client.written_request("delivery", header + body, part=("1 of 1", ["f"]))
+        expected_parts = client.split_request(request, client.MAX_REQUEST_BYTES, ["f"])
+        conn = MagicMock()
+        busy = MagicMock(status=529)
+        busy.read.return_value = b"{}"
+        busy.getheader.return_value = "0"
+        good = MagicMock(status=200)
+        good.read.return_value = json.dumps({"model": client.MODEL, "answers": {"written": {
+            "type": "choice", "choice": "yes", "confidence": 1.0, "probabilities": {"yes": 1.0, "no": 0.0}}}}).encode()
+        conn.getresponse.side_effect = [busy, busy, busy, good] * len(expected_parts)
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "request.json"
+            file.write_text(json.dumps(request))
+            output = io.StringIO()
+            clock = FakeClock()
+            conn.request.side_effect = lambda *args, **kwargs: clock.advance(1.0)
+            with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                 patch.object(client.http.client, "HTTPSConnection", return_value=conn), \
+                 patch.object(client, "diff_pieces", wraps=client.diff_pieces) as split, \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(client.main(["--request", str(file)], clock=clock, sleep=no_sleep), 0)
+        split.assert_called()
+        self.assertEqual(conn.request.call_count, 4 * len(expected_parts))
+        sent = [json.loads(call.kwargs["body"]) for call in conn.request.call_args_list[3::4]]
+        self.assertEqual(sent, expected_parts)
+        self.assertTrue(all(client.size(part) <= client.MAX_REQUEST_BYTES for part in sent))
+        self.assertEqual("".join(part["state"]["evidence"].split("@@ -1 +1 @@\n", 1)[1] for part in sent), body)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["elapsed_s"], conn.request.call_count)
+        self.assertTrue(all(client.verify_receipt(part["receipt"], "test-only-key") for part in result["data"]["parts"]))
+
+    def test_unsplittable_local_request_reports_too_large_without_sending(self):
+        request = client.written_request("d" * client.MAX_REQUEST_BYTES, "evidence")
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "request.json"
+            file.write_text(json.dumps(request))
+            output = io.StringIO()
+            with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                 patch.object(client.http.client, "HTTPSConnection") as http, \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(client.main(["--request", str(file)], clock=FakeClock(), sleep=no_sleep), 2)
+        http.assert_not_called()
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["elapsed_s"], 0.0)
+        self.assertEqual(result["error"]["code"], "SANITY.JEV_REQUEST_TOO_LARGE")
+        self.assertIn("oversized", result["error"]["message"])
+
+    def test_non_text_oversize_state_is_terminal_without_network(self):
+        for state in ("x" * client.MAX_REQUEST_BYTES,
+                      {"deliverable": "d", "evidence": {"blob": "x" * client.MAX_REQUEST_BYTES}},
+                      {"deliverable": "d", "context": ["x" * client.MAX_REQUEST_BYTES]},
+                      {"deliverable": "d", "external_evidence": {"blob": "x" * client.MAX_REQUEST_BYTES}}):
+            with self.subTest(state_type=type(state).__name__):
+                request = {**client.startup_request(), "state": state}
+                with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+                     patch.object(client.http.client, "HTTPSConnection") as http, \
+                     self.assertRaises(client.JevError) as raised:
+                    client.evaluate_parts([request], "test-only-key", sleep=no_sleep)
+                http.assert_not_called()
+                self.assertEqual(raised.exception.code, "SANITY.JEV_REQUEST_TOO_LARGE")
 
     def test_finite_request_values_only(self):
         request = client.startup_request()
@@ -311,7 +452,7 @@ class JevClientTests(unittest.TestCase):
             output = io.StringIO()
             with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
                  patch.object(client.http.client, "HTTPSConnection", return_value=conn), contextlib.redirect_stdout(output):
-                self.assertEqual(client.main(["--request", file.name]), 0)
+                self.assertEqual(client.main(["--request", file.name], sleep=no_sleep), 0)
         receipt = json.loads(output.getvalue())["data"]["receipt"]
         self.assertEqual({k: receipt[k] for k in ("model", "question", "choice", "probabilities", "response_id")},
                          {"model": client.MODEL, "question": "written", "choice": "no",
@@ -357,7 +498,7 @@ class JevClientTests(unittest.TestCase):
                 output = io.StringIO()
                 with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
                      patch.object(client.http.client, "HTTPSConnection", return_value=conn), contextlib.redirect_stdout(output):
-                    self.assertEqual(client.main(["--assignment", str(file)]), 0)
+                    self.assertEqual(client.main(["--assignment", str(file)], sleep=no_sleep), 0)
                 sent = json.loads(conn.request.call_args.kwargs["body"])
                 self.assertEqual(sent, request)
                 receipt = json.loads(output.getvalue())["data"]["receipt"]
@@ -370,7 +511,7 @@ class JevClientTests(unittest.TestCase):
                     file.write_text(json.dumps(broken))
                     output = io.StringIO()
                     with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), contextlib.redirect_stdout(output):
-                        self.assertEqual(client.main(["--assignment", str(file)]), 2)
+                        self.assertEqual(client.main(["--assignment", str(file)], sleep=no_sleep), 2)
                     error = json.loads(output.getvalue())["error"]
                     self.assertEqual((error["code"], error["message"]), ("VALIDATION.INPUT", message))
             finally:
@@ -467,7 +608,7 @@ class JevClientTests(unittest.TestCase):
             output = io.StringIO()
             with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
                  patch.object(client.http.client, "HTTPSConnection", side_effect=connection), contextlib.redirect_stdout(output):
-                rc = client.main(["--assignment", str(file)])
+                rc = client.main(["--assignment", str(file)], sleep=no_sleep)
         finally:
             file.unlink()
         return rc, sent, json.loads(output.getvalue())
