@@ -95,7 +95,7 @@ def test_sanity_verdict_uses_layout_c_glyph_and_color(verdict: str, glyph: str, 
     ("claude-code", "Haiku", ("\U000f0156", "#FF6533")),
     ("codex-cli", "GPT-5.6-Terra", ("\U000f01e7", "#2DE057")),
 ])
-def test_sanity_reviewer_and_dev_cells_use_roster_icon_style(
+def test_sanity_reviewer_and_severity_cells_use_roster_icon_style(
     harness: str, model: str, dev_icon: tuple[str, str],
 ) -> None:
     names = ("sanity-jev", "sanity-llm", "dev-sanity")
@@ -115,7 +115,8 @@ def test_sanity_reviewer_and_dev_cells_use_roster_icon_style(
         assert icon_for(member) == (glyph, color)
         token = f"{glyph} {name}"
         start = errors.plain.index(token)
-        assert any(span.start <= start < span.end and str(span.style) == color for span in errors.spans)
+        assert any(span.start == start and span.end == start + len(token)
+                   and str(span.style) == color for span in errors.spans)
 
     glyph, color = dev_icon
     assert icon_for(next(agent for agent in agents if agent.name == "dev-sanity")) == dev_icon
