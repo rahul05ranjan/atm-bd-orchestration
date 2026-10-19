@@ -30,6 +30,7 @@ SPLIT_TESTS = importlib.util.module_from_spec(importlib.util.spec_from_loader(SP
 SPLIT_LOADER.exec_module(SPLIT_TESTS)
 run_bounded = partial(run_process, timeout=HANG_GUARD_SECONDS)
 
+
 def record(**changes):
     value = dict(run_id="run-one", reviewer="sanity-llm", commit="a" * 40,
                  task='task-"quote"\nnext', sprint="d-4", phase="d", started_at="2026-09-30T16:00:00Z",
@@ -337,6 +338,7 @@ with socket.socket(fileno=fd) as control, open(path, 'a') as output:
                      error={"code": "SANITY.RESULT_INVALID", "message": "deliverable 1 envelope invalid"}, errors=errors)
         HISTORY.append_record(self.log, HISTORY.render_record(row))
         self.assertEqual(json.loads(self.log.read_text()), row)
+
 
 def fenced(task, bead, number, sha, findings=()):
     return "```json\n" + json.dumps(receipted({"success": True, "data": {
