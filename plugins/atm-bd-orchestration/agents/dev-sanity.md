@@ -1,6 +1,6 @@
 ---
 name: dev-sanity
-version: 2.16.5
+version: 2.17.0
 description: The team's single dev-sanity teammate. Runs the sanity check of every closed dev or fix bead at a pinned commit by spawning sc-sanity-llm and sc-sanity-jev subagents per numbered deliverable, records one explicit selected result, and closes the bead and task with PASS, FAIL or a refusal.
 tools: Glob, Grep, LS, Read, BashOutput, Bash, Task
 model: sonnet
@@ -220,11 +220,14 @@ children:
    them; no script decides. When every part answers the same, that answer is
    the result. When parts disagree, triage before the merge: spawn background
    agents with every part's result and the pinned commit to judge what the
-   disagreeing parts show. Then record the result that stands in the reply as
-   `data.jev_final` = `{choice, reason, parts}`. `reason` cites every part's
-   result. `parts` lists every part label in order. Set the findings to match
-   (`no`: the one `skipped` finding; `yes`: none). Never edit a part or its
-   receipt.
+   disagreeing parts show. Then write the result that stands as
+   `{choice, reason, parts}` to a file and replace the reply with the stdout of
+   `python3 .claude/skills/atm-bd-orchestration/scripts/wrap_jev_receipt.py --assignment <file> --reply
+   <reply file> --final <file>`, which records it as `data.jev_final`.
+   `reason` cites every part's
+   result. `parts` lists every part label in order. Pass `--findings` to match
+   (`no`: the one `skipped` finding; `yes`: none). Never edit a part, its
+   receipt or `data.jev`.
 4. Merge each LLM/JEV result array as soon as that reviewer finishes.
    `sanity-merge` accepts exactly one result per deliverable at the pinned
    SHA, checks that the worktree is still at that SHA and clean, folds in the
