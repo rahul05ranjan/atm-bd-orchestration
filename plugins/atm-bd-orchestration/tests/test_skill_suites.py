@@ -74,7 +74,11 @@ def installed(tmp_path_factory):
 def test_installed_suite_passes(installed, suite):
     skill_dir = installed / suite
     scripts = skill_dir.parent if skill_dir.parent.name == "scripts" else skill_dir.parent / "scripts"
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(scripts), str(scripts.parent)])}
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(scripts), str(scripts.parent)]),
+        "ATM_BD_CONSOLE_SRC": str(PKG.parents[1] / "apps" / "atm-bd-console" / "src"),
+    }
     proc = run_command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", suite],
                        timeout=SUITE_TIMEOUT, cwd=installed, env=env, stderr=subprocess.STDOUT, text=True)
     assert proc.returncode == 0, proc.stdout[-16000:]   # room for the pour test's server log tails

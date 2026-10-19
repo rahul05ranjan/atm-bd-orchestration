@@ -5,7 +5,9 @@ The manifest detects skill files that differ from what was published; it is not 
 """
 from __future__ import annotations
 
+import ast
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -16,6 +18,7 @@ MANIFEST_NAME = "skill-manifest.json"
 RECORD_NAME = "atm-bd-install.json"
 SCHEMA = 1
 _COMPOSITION_SCHEMA = "sc-sha/manifest/v1"
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 
 Status = Literal["ok", "modified", "missing", "extra"]
 
@@ -40,6 +43,28 @@ class PathResult:
 
 def no_manifest_message(ref: str) -> str:
     return f"{ref} has no published {MANIFEST_NAME}; cannot verify"
+
+
+def valid_build_commit(value: object) -> bool:
+    """Whether a build identity contains a full, lowercase git commit hash."""
+    return isinstance(value, str) and _COMMIT_RE.fullmatch(value) is not None
+
+
+def read_build_commit(identity_file: Path) -> str | None:
+    """Read and validate the generated COMMIT assignment from a build identity module."""
+    try:
+        lines = identity_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        key, separator, raw = line.partition("=")
+        if separator and key.strip() == "COMMIT":
+            try:
+                value = ast.literal_eval(raw.strip())
+            except (SyntaxError, ValueError):
+                return None
+            return value if valid_build_commit(value) else None
+    return None
 
 
 def shipped_files(root: Path) -> list[str]:

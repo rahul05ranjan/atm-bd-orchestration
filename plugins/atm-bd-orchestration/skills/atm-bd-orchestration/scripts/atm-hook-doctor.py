@@ -106,12 +106,23 @@ def doctor(request: dict) -> dict:
 def _doctor_mode() -> int:
     try:
         request = json.loads(sys.stdin.read())
-    except json.JSONDecodeError as error:
-        print(f"atm-hook-doctor: doctor reads a JSON request on stdin: {error}", file=sys.stderr)
+    except json.JSONDecodeError:
+        print(json.dumps({
+            "success": False,
+            "message": "doctor request must be valid JSON",
+            "findings": [{"severity": "error", "code": "request_invalid",
+                          "message": "doctor request must be valid JSON",
+                          "remediation": 'send a JSON object with "hook": "doctor"'}],
+        }))
         return 2
     if not isinstance(request, dict) or request.get("hook") != "doctor":
-        print('atm-hook-doctor: doctor reads {"schema_version", "hook": "doctor", "team", "phase", "custom"} on stdin',
-              file=sys.stderr)
+        message = 'doctor request must be an object with "hook": "doctor"'
+        print(json.dumps({
+            "success": False,
+            "message": message,
+            "findings": [{"severity": "error", "code": "request_invalid", "message": message,
+                          "remediation": 'send a JSON object with "hook": "doctor"'}],
+        }))
         return 2
     print(json.dumps(doctor(request)))
     return 2 if sc_sha is None else 0

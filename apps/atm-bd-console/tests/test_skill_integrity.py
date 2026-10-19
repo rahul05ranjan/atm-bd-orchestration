@@ -4,6 +4,7 @@ Every source is a fixture tree with controlled bytes; git and GitHub are injecte
 """
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import shutil
@@ -12,6 +13,7 @@ import tomllib
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MethodType, SimpleNamespace
 
 import pytest
 import sc_sha
@@ -398,6 +400,51 @@ def _archive_manifest(archive: Path) -> dict:
         return json.loads(source.extractfile(member).read())
 
 
+def test_build_hook_includes_a_manifest_for_a_fixture_tree(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build", APP / "hatch_build.py")
+    assert spec is not None and spec.loader is not None
+    hatch_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hatch_build)
+
+    source = make_tree(tmp_path / "plugin")
+    hook = SimpleNamespace(target_name="wheel", _manifest_dir=None, _generated_identity=False)
+    hook._dest = lambda name: f"atm_bd_console/{name}"
+    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
+    build_data = {"force_include": {}}
+
+    hatch_build.CustomBuildHook._include_manifest(hook, APP, source, build_data, "0.17.4")
+
+    generated, destination = next(iter(build_data["force_include"].items()))
+    assert destination == "atm_bd_console/skill-manifest.json"
+    manifest_path = Path(generated)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest == skill_integrity.build_manifest(source, "0.17.4")
+    hatch_build.CustomBuildHook.finalize(hook, "0.17.4", build_data, "fixture.whl")
+    assert not manifest_path.exists()
+
+
+def test_build_hook_cleans_manifest_temp_dir_when_initialization_fails(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build_cleanup", APP / "hatch_build.py")
+    assert spec is not None and spec.loader is not None
+    hatch_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hatch_build)
+    hook = SimpleNamespace(_manifest_dir=None, _generated_identity=False)
+    temporary = tmp_path / "manifest-temp"
+    temporary.mkdir()
+    (temporary / "skill-manifest.json").write_text("{}\n", encoding="utf-8")
+
+    def fail_initialization(_version, _build_data):
+        hook._manifest_dir = temporary
+        raise RuntimeError("fixture build failure")
+
+    hook._initialize = fail_initialization
+    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
+    with pytest.raises(RuntimeError, match="fixture build failure"):
+        hatch_build.CustomBuildHook.initialize(hook, "0.17.4", {"force_include": {}})
+
+    assert not temporary.exists() and hook._manifest_dir is None
+
+
 def _bundled(archive: Path) -> dict[str, bytes]:
     if archive.suffix == ".whl":
         with zipfile.ZipFile(archive) as wheel:
@@ -412,12 +459,14 @@ def _bundled(archive: Path) -> dict[str, bytes]:
         return found
 
 
-@pytest.mark.skipif(UV is None, reason="uv is required to build the wheel and sdist")
 def test_built_wheel_and_sdist_publish_a_manifest_of_exactly_the_bundled_files(tmp_path: Path) -> None:
+    if UV is None:
+        pytest.fail("uv is required to build and verify the wheel and sdist; install uv in the package-test environment")
     checkout = tmp_path / "checkout"
     run_process("clone", ["git", "clone", "--no-hardlinks", str(REPO), str(checkout)], cwd=tmp_path)
     app = checkout / "apps" / "atm-bd-console"
-    for name in ("hatch_build.py", "pyproject.toml", "uv.lock", "src/atm_bd_console/skill_integrity.py"):
+    for name in ("hatch_build.py", "pyproject.toml", "uv.lock", "src/atm_bd_console/skill.py",
+                 "src/atm_bd_console/skill_source.py", "src/atm_bd_console/skill_integrity.py"):
         shutil.copy2(APP / name, app / name)
 
     def build(out: str, *args: str) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -15,13 +14,24 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
+        self._generated_identity = False
+        self._manifest_dir: Path | None = None
+        try:
+            self._initialize(version, build_data)
+        except Exception:
+            self._cleanup_manifest()
+            if self._generated_identity:
+                (Path(self.root) / "src" / "atm_bd_console" / "_build_identity.py").unlink(missing_ok=True)
+            raise
+
+    def _initialize(self, version: str, build_data: dict[str, object]) -> None:
         package = Path(self.root).resolve()
         root = package.parents[1]
         output = package / "src" / "atm_bd_console" / "_build_identity.py"
-        self._generated_identity = False
         package_version = tomllib.loads((package / "pyproject.toml").read_text())["project"]["version"]
         if (package / "PKG-INFO").is_file() and output.is_file():
-            if not re.search(r"^COMMIT = (['\"])[0-9a-f]{40}\1$", output.read_text(), re.MULTILINE):
+            integrity = _load_integrity(package / "src" / "atm_bd_console" / "skill_integrity.py")
+            if integrity.read_build_commit(output) is None:
                 raise RuntimeError(f"cannot reuse console identity: {output} has no valid 40-hex COMMIT")
             self._include_identity(output, build_data)
             self._include_skills(package, root, build_data, package_version)
@@ -54,8 +64,11 @@ class CustomBuildHook(BuildHookInterface):
         self._include_identity(output, build_data)
 
     def _include_identity(self, output: Path, build_data: dict[str, object]) -> None:
-        destination = "atm_bd_console/_build_identity.py" if self.target_name == "wheel" else "src/atm_bd_console/_build_identity.py"
-        build_data["force_include"][str(output)] = destination
+        build_data["force_include"][str(output)] = self._dest("_build_identity.py")
+
+    def _dest(self, name: str) -> str:
+        prefix = "atm_bd_console" if self.target_name == "wheel" else "src/atm_bd_console"
+        return f"{prefix}/{name}"
 
     def _include_skills(self, package: Path, root: Path, build_data: dict[str, object], package_version: str) -> None:
         plugin = root / "plugins" / "atm-bd-orchestration"
@@ -64,8 +77,7 @@ class CustomBuildHook(BuildHookInterface):
         source = bundled if (package / "PKG-INFO").is_file() else (plugin if plugin.is_dir() else bundled)
         if not source.is_dir():
             raise RuntimeError(f"cannot bundle skills: neither {plugin} nor {bundled} exists")
-        destination = "atm_bd_console/_skills" if self.target_name == "wheel" else "src/atm_bd_console/_skills"
-        build_data["force_include"][str(source)] = destination
+        build_data["force_include"][str(source)] = self._dest("_skills")
         self._include_manifest(package, source, build_data, package_version)
 
     def _include_manifest(self, package: Path, source: Path, build_data: dict[str, object], package_version: str) -> None:
@@ -74,13 +86,15 @@ class CustomBuildHook(BuildHookInterface):
         self._manifest_dir = Path(tempfile.mkdtemp(prefix="atm-bd-skill-manifest-"))
         output = self._manifest_dir / integrity.MANIFEST_NAME
         output.write_text(json.dumps(integrity.build_manifest(source, package_version), indent=2) + "\n", encoding="utf-8")
-        prefix = "atm_bd_console" if self.target_name == "wheel" else "src/atm_bd_console"
-        build_data["force_include"][str(output)] = f"{prefix}/{integrity.MANIFEST_NAME}"
+        build_data["force_include"][str(output)] = self._dest(integrity.MANIFEST_NAME)
+
+    def _cleanup_manifest(self) -> None:
+        if self._manifest_dir is not None:
+            shutil.rmtree(self._manifest_dir, ignore_errors=True)
+            self._manifest_dir = None
 
     def finalize(self, version: str, build_data: dict[str, object], artifact_path: str) -> None:
-        manifest_dir = getattr(self, "_manifest_dir", None)
-        if manifest_dir is not None:
-            shutil.rmtree(manifest_dir, ignore_errors=True)
+        self._cleanup_manifest()
         if self._generated_identity:
             (Path(self.root) / "src" / "atm_bd_console" / "_build_identity.py").unlink(missing_ok=True)
 

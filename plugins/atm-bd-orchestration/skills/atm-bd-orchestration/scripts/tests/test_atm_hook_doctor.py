@@ -1,7 +1,7 @@
 """atm-hook-doctor.py against copied install folders with controlled file contents.
 
 Every run is a real `python3 atm-hook-doctor.py` process. The checks use an interpreter whose environment holds only
-sc_sha (created once per module from the declared range); the sc_sha-absent cases run the test interpreter with
+the declared sc-sha test dependency; `-I` isolates repository imports, and the sc_sha-absent cases run with
 site-packages disabled.
 """
 from __future__ import annotations
@@ -28,41 +28,18 @@ SKILL_FILES = {
 }
 
 
-def _python_in(venv: Path) -> Path:
-    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-
-
 def _run(argv, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=TIMEOUT, check=False, **kwargs)
 
 
 @pytest.fixture(scope="module")
-def sc_sha_python(tmp_path_factory) -> Path:
-    """An interpreter whose environment has sc_sha and nothing from the host repository or atm_bd_console."""
-    venv = tmp_path_factory.mktemp("sc-sha-only") / "venv"
-    uv = shutil.which("uv")
-    if uv:
-        steps = [[uv, "venv", "--python", sys.executable, venv]]
-        install = [[uv, "pip", "install", "--offline", "--python", _python_in(venv), SC_SHA],
-                   [uv, "pip", "install", "--python", _python_in(venv), SC_SHA]]
-    else:
-        steps = [[sys.executable, "-m", "venv", venv]]
-        install = [[_python_in(venv), "-m", "pip", "install", "--disable-pip-version-check", "-q", SC_SHA]]
-    for step in steps:
-        done = _run(step)
-        assert done.returncode == 0, f"{step}: {done.stderr}"
-    errors = []
-    for step in install:
-        done = _run(step)
-        if done.returncode == 0:
-            break
-        errors.append(f"{step}: {done.stderr.strip()}")
-    else:
-        pytest.fail("cannot create the sc_sha-only interpreter the doctor runs with:\n" + "\n".join(errors))
-    python = _python_in(venv)
-    probe = _run([python, "-I", "-c", "import sc_sha, importlib.util as u; "
-                  "print(all(u.find_spec(m) is None for m in ('atm_bd_console', 'atm_core', 'install')))"])
-    assert probe.returncode == 0 and probe.stdout.strip() == "True", probe.stderr
+def sc_sha_python() -> Path:
+    """Use the test interpreter; sc-sha is a declared package-test dependency, never installed by a test."""
+    python = Path(sys.executable)
+    probe = _run([python, "-I", "-c", "import sc_sha; print(sc_sha.__file__)"])
+    if probe.returncode:
+        pytest.fail(f"{SC_SHA} must be installed in the package-test environment: {probe.stderr.strip()}")
+    assert probe.stdout.strip(), probe.stdout
     return python
 
 
@@ -111,6 +88,52 @@ def test_untouched_install_is_ok_per_path_and_passes(install: Path, sc_sha_pytho
     lines = done.stdout.splitlines()
     assert lines[-1] == "PASS"
     assert lines[:-1] == [f"ok {path}" for path in sorted([*SKILL_FILES, ".claude/skills/atm-bd-orchestration/scripts/atm-hook-doctor.py"])]
+
+
+def test_console_install_record_is_readable_by_the_installed_doctor(tmp_path: Path, sc_sha_python: Path) -> None:
+    repo = tmp_path / "repo"
+    dest = repo / ".claude"
+    files = {
+        ".claude/skills/atm-bd-orchestration/SKILL.md": "# orchestration\n",
+        ".claude/skills/atm-bd-orchestration/scripts/tool.py": "print('tool')\n",
+    }
+    for rel, contents in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
+    doctor_rel = ".claude/skills/atm-bd-orchestration/scripts/atm-hook-doctor.py"
+    doctor_path = repo / doctor_rel
+    shutil.copy2(SCRIPT, doctor_path)
+    app_src = Path(os.environ.get(
+        "ATM_BD_CONSOLE_SRC", Path(__file__).resolve().parents[5] / "apps" / "atm-bd-console" / "src",
+    )).resolve()
+    code = """
+import importlib.util, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from atm_bd_console import skill_integrity
+spec = importlib.util.spec_from_file_location('atm_hook_doctor', sys.argv[2])
+doctor = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(doctor)
+assert skill_integrity.RECORD_NAME == doctor.RECORD_NAME
+repo = Path(sys.argv[3])
+dest = repo / '.claude'
+relative = ['.claude/skills/atm-bd-orchestration/SKILL.md',
+            '.claude/skills/atm-bd-orchestration/scripts/tool.py',
+            '.claude/skills/atm-bd-orchestration/scripts/atm-hook-doctor.py']
+installed = {path: (repo / path).read_bytes() for path in relative}
+manifest = {'aggregate': 'a' * 64}
+record = skill_integrity.write_install_record(dest, '0.17.4', '0' * 40, manifest, installed,
+                                             source='v0.17.4')
+print(record.name)
+"""
+    made = _run([sc_sha_python, "-I", "-c", code, app_src, doctor_path, repo], cwd=repo)
+    assert made.returncode == 0, made.stderr
+    assert made.stdout == "atm-bd-install.json\n"
+
+    done = doctor_cli(sc_sha_python, dest)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[-1] == "PASS"
 
 
 def test_planted_modified_missing_and_extra_paths_fail(install: Path, sc_sha_python: Path) -> None:
@@ -180,9 +203,23 @@ def test_doctor_mode_reports_one_error_finding_per_modified_path(install: Path, 
     assert all(set(f) == {"severity", "code", "message", "remediation"} for f in reply["findings"])
 
 
-def test_doctor_mode_rejects_a_request_that_is_not_the_doctor_hook(install: Path, sc_sha_python: Path) -> None:
-    hook = doctor_hook(sc_sha_python, install, request={**REQUEST, "hook": "task.close"})
-    assert hook.returncode == 2 and hook.stdout == "" and '"hook": "doctor"' in hook.stderr
+@pytest.mark.parametrize(("request_text", "message"), [
+    ('{"hook":', "doctor request must be valid JSON"),
+    (json.dumps({**REQUEST, "hook": "task.close"}), 'doctor request must be an object with "hook": "doctor"'),
+], ids=["invalid-json", "wrong-hook"])
+def test_doctor_mode_replies_with_a_request_invalid_finding(
+    install: Path, sc_sha_python: Path, request_text: str, message: str,
+) -> None:
+    hook = _run([sc_sha_python, "-I", install / "skills/atm-bd-orchestration/scripts/atm-hook-doctor.py", "doctor"],
+                input=request_text, cwd=install.parent)
+    assert hook.returncode == 2 and hook.stderr == ""
+    reply = json.loads(hook.stdout)
+    assert set(reply) == {"success", "message", "findings"}
+    assert reply["success"] is False and reply["message"] == message
+    assert reply["findings"] == [{
+        "severity": "error", "code": "request_invalid", "message": message,
+        "remediation": 'send a JSON object with "hook": "doctor"',
+    }]
 
 
 def test_without_sc_sha_the_cli_exits_2_with_the_install_command_and_doctor_still_replies(install: Path) -> None:

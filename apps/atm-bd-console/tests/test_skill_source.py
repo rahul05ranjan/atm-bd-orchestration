@@ -64,6 +64,16 @@ def test_bundled_source_needs_no_network_and_uses_packaged_data(monkeypatch, tmp
         assert source.manifest == PUBLISHED
 
 
+@pytest.mark.parametrize("commit", [COMMIT, "not-a-commit"], ids=["valid", "invalid"])
+def test_build_commit_reads_and_validates_the_shared_identity_file(monkeypatch, tmp_path: Path, commit: str) -> None:
+    module = tmp_path / "atm_bd_console" / "skill_source.py"
+    module.parent.mkdir()
+    (module.parent / "_build_identity.py").write_text(f"IDENTITY = '0.17.4'\nCOMMIT = {commit!r}\n", encoding="utf-8")
+    monkeypatch.setattr(skill_source, "__file__", str(module))
+
+    assert skill_source.build_commit() == (commit if commit == COMMIT else "unknown")
+
+
 def test_bundled_directory_is_only_the_packaged_skills(monkeypatch, tmp_path: Path) -> None:
     # The removed fallback read the plugin four directories above the module; that tree must not be consulted.
     module = tmp_path / "a" / "b" / "c" / "d" / "skill_source.py"
@@ -223,6 +233,16 @@ def test_release_manifest_rejects_an_unreadable_sdist(monkeypatch) -> None:
     monkeypatch.undo()
     monkeypatch.setattr(skill_source, "_http_get", lambda url: b"not a tarball")
     with pytest.raises(skill_source.SkillSourceError, match="atm_bd-0.17.4.tar.gz is not a readable sdist"):
+        skill_source.release_manifest("v0.17.4")
+
+
+def test_release_manifest_rejects_a_version_that_does_not_match_its_tag(monkeypatch) -> None:
+    manifest = b'{"version":"0.17.3"}'
+    archive = _sdist("atm_bd-0.17.4/src/atm_bd_console/skill-manifest.json", manifest)
+    monkeypatch.undo()
+    monkeypatch.setattr(skill_source, "_http_get", lambda _url: archive)
+
+    with pytest.raises(skill_source.SkillSourceError, match="version '0.17.3' does not match release version '0.17.4'"):
         skill_source.release_manifest("v0.17.4")
 
 

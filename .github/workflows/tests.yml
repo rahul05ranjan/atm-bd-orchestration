@@ -101,10 +101,12 @@ jobs:
         with:
           python-version: "3.11"   # sc-compose publishes cp311 wheels
 
+      - uses: astral-sh/setup-uv@v5
+
       # The scripts render with the sc-compose wheel; it is the same version as the CLI below
       # (the floor of the `sc-compose >=` range in plugins/atm-bd-orchestration/manifest.yaml, so the floor stays tested).
       - name: Install Python test dependencies
-        run: python3 -m pip install pytest pydantic pyyaml "sc-compose==${SC_COMPOSE_VERSION}"
+        run: python3 -m pip install pytest pydantic pyyaml "sc-compose==${SC_COMPOSE_VERSION}" "sc-sha>=1.7.0,<2"
 
       # Same pinned release asset and checksum as atm-core's tools/bootstrap.toml.
       - name: Install sc-compose ${{ env.SC_COMPOSE_VERSION }}

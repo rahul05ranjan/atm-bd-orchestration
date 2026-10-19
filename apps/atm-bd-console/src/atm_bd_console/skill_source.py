@@ -11,7 +11,6 @@ import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from importlib import import_module
 from pathlib import Path
 
 from . import __version__, command, skill_integrity
@@ -25,7 +24,7 @@ HTTP_TIMEOUT_S = 60
 _PLUGIN = Path("plugins/atm-bd-orchestration")
 _REQUIRED_FILES = ("install.py", "manifest.yaml", "registry.yaml")
 _TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
-_COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+INSTALL_ERROR_TYPES = (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError)
 # A shallow clone over a slow link needs far longer than the 20 s default for quick queries.
 CLONE_TIMEOUT_S = 300
 
@@ -36,6 +35,18 @@ class SkillSourceError(RuntimeError):
 
 class RepositoryError(SkillSourceError):
     """git could not read REPOSITORY; the ref is not at fault, so the caller does not relabel it."""
+
+
+def install_failure_message(name: str, error: Exception) -> str:
+    """Format an installer-tree failure once for both bundled and released sources."""
+    if name == "bundled":
+        return str(error)
+    return f"{name} is not installable by atm-bd {__version__}: {error}"
+
+
+def build_commit() -> str:
+    """Return the build identity commit only when it is a full lowercase git SHA."""
+    return skill_integrity.read_build_commit(Path(__file__).with_name("_build_identity.py")) or "unknown"
 
 
 @dataclass(frozen=True)
@@ -85,7 +96,19 @@ def release_manifest(tag: str) -> bytes | None:
     try:
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as sdist:
             entry = sdist.extractfile(member)
-            return entry.read() if entry is not None else None
+            if entry is None:
+                return None
+            data = entry.read()
+            try:
+                manifest = json.loads(data)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return data  # The integrity parser reports malformed manifests with the shared fail-closed error.
+            expected = version
+            if isinstance(manifest, dict) and isinstance(manifest.get("version"), str) and manifest["version"] != expected:
+                raise SkillSourceError(
+                    f"{tag}: skill-manifest.json version {manifest['version']!r} does not match release version {expected!r}"
+                )
+            return data
     except KeyError:
         return None
     except (tarfile.TarError, OSError, EOFError) as error:
@@ -145,11 +168,7 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
     if version is None and not latest:
         pkg_dir = bundled_directory()
         _validate_pkg_dir(pkg_dir, "bundled")
-        try:
-            COMMIT = import_module("._build_identity", __package__).COMMIT
-        except ImportError:
-            COMMIT = None
-        commit = COMMIT if isinstance(COMMIT, str) and _COMMIT_RE.fullmatch(COMMIT) else "unknown"
+        commit = build_commit()
         manifest = bundled_manifest()
         if manifest is None:
             raise SkillSourceError(skill_integrity.no_manifest_message("bundled"))
@@ -185,7 +204,7 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
             pkg_dir = checkout / _PLUGIN
             _validate_pkg_dir(pkg_dir, ref)
             commit = _run_git(["-C", str(checkout), "rev-parse", "HEAD"]).strip()
-            if not _COMMIT_RE.fullmatch(commit):
+            if not skill_integrity.valid_build_commit(commit):
                 raise RepositoryError(f"{REPOSITORY}: git rev-parse HEAD returned an invalid commit: {commit!r}")
         except RepositoryError:
             raise

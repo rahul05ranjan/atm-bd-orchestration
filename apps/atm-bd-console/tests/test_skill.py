@@ -320,6 +320,26 @@ def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_p
     assert f"0.16.0 is not installable by atm-bd {__version__}: bad manifest" in error
 
 
+def test_install_record_write_failure_explains_partial_install_and_recovery(
+    installer, tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    fake, _ = installer
+    target = tmp_path / "consumer"
+    target.mkdir()
+
+    def fail(*_args, **_kwargs):
+        raise OSError("record directory is read-only")
+
+    monkeypatch.setattr(skill.skill_integrity, "write_install_record", fail)
+
+    assert skill.run(["--dest", str(target)]) == 1
+
+    error = capsys.readouterr().err
+    assert "files were installed but atm-bd-install.json could not be written" in error
+    assert "rerun `atm-bd skill --dest" in error and "--overwrite` to restore it" in error
+    assert any(call[0] == "apply_plan" for call in fake.calls)
+
+
 def _raise(error: Exception):
     def fail(*_args, **_kwargs):
         raise error
@@ -410,3 +430,4 @@ def test_skill_is_wired_into_cli_and_help(capsys) -> None:
     assert sub.value.code == 0
     output = capsys.readouterr().out
     assert "--orchestration" in output and "--latest" in output and "--list" in output
+    assert "manifest shipped in the same atm-bd wheel" in output
