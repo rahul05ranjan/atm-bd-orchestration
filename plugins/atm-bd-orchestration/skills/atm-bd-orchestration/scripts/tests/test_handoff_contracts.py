@@ -20,7 +20,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from bounded_process import run_bounded
+from subprocess_helpers import run_command
 import rendering
 
 ROOT = Path(__file__).parents[2]
@@ -113,7 +113,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         repo.mkdir()
 
         def git(*args):
-            return run_bounded(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            return run_command(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],
                                   check=True, capture_output=True, text=True).stdout.strip()
 
         git("init", "-q")
@@ -167,7 +167,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         for context, read in ((["docs/retry.md"], {"docs/retry.md": "retry policy\n"}),
                               (["docs/limits.md:2-3"], {"docs/limits.md:2-3": "backoff 2s\njitter on\n"})):
             with self.subTest(context=context):
-                rerun = run_bounded(["bash", "-c", jq], env={"CONTEXT": json.dumps(context), "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"},
+                rerun = run_command(["bash", "-c", jq], env={"CONTEXT": json.dumps(context), "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"},
                                        capture_output=True, text=True)
                 self.assertEqual(rerun.returncode, 0, rerun.stderr)
                 sent = json.loads(rerun.stdout)
@@ -207,7 +207,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         def run(body: str) -> dict:
             path = Path(self.tmp.name) / "assignment.md"
             path.write_text(body)
-            proc = run_bounded([sys.executable, str(ROOT / "scripts/jev_client.py"), "--assignment", str(path)],
+            proc = run_command([sys.executable, str(ROOT / "scripts/jev_client.py"), "--assignment", str(path)],
                                   capture_output=True, text=True, env=env)
             self.assertEqual(proc.returncode, 2, proc.stderr)
             return json.loads(proc.stdout)["error"]
@@ -393,7 +393,7 @@ class FixRoundResultHandoffTests(unittest.TestCase):
 
             def run(body: str) -> subprocess.CompletedProcess:
                 result_path.write_text(body)
-                return run_bounded([sys.executable, str(ROOT / "scripts/fix-round-scope"), "filter", "--carried",
+                return run_command([sys.executable, str(ROOT / "scripts/fix-round-scope"), "filter", "--carried",
                                        str(carried_path), "--reviewer", "arch-qa", "--result", str(result_path)],
                                       capture_output=True, text=True)
 
@@ -542,7 +542,7 @@ class PlanReviewHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:  # the reviewers step c dispatches: what `fix-round-scope owned --plan` prints
             carried = Path(tmp) / "carried.txt"
             carried.write_text(re.sub(r"\{\{[^}]*\}\}", "x", values["carry_forward"]))  # an install-time prefix
-            proc = run_bounded([sys.executable, str(ROOT / "scripts/fix-round-scope"), "owned", "--plan", "--carried",
+            proc = run_command([sys.executable, str(ROOT / "scripts/fix-round-scope"), "owned", "--plan", "--carried",
                                    str(carried)], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         owned = {k: v for k, v in json.loads(proc.stdout).items() if k != "validate-plan"}  # step b re-checks those

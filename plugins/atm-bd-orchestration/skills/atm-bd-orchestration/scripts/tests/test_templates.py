@@ -6,9 +6,7 @@ import re
 import shutil
 import subprocess
 import unittest
-from unittest.mock import patch
-
-from bounded_process import run_bounded
+from subprocess_helpers import run_command
 from rendering import render
 
 
@@ -43,27 +41,6 @@ class TemplateContractTests(unittest.TestCase):
                 status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
                 self.assertNotIn("finding_bead_ids", status)
                 self.assertNotIn("no finding beads were filed", result.stdout)
-
-    def test_review_completion_timeout_reports_captured_output(self):
-        command = ["check-review-completion.py", "vars.json"]
-        error = subprocess.TimeoutExpired(command, 30, output=b"partial out", stderr=b"partial err")
-        with patch.object(subprocess, "run", side_effect=error) as runner:
-            with self.assertRaisesRegex(AssertionError, "check-review-completion.*partial out.*partial err"):
-                run_bounded(command, capture_output=True, text=True)
-        self.assertEqual(runner.call_args.kwargs["timeout"], 30)
-        self.assertEqual(runner.call_args.kwargs["stdin"], subprocess.DEVNULL)
-
-    def test_bounded_command_passes_input_and_custom_runner(self):
-        calls = []
-
-        def runner(argv, **kwargs):
-            calls.append((argv, kwargs))
-            return "result"
-
-        self.assertEqual(run_bounded(["command"], timeout=60, runner=runner, input="payload"), "result")
-        self.assertEqual(run_bounded(["command"], runner=runner, input=None), "result")
-        self.assertEqual(calls, [(["command"], {"timeout": 60, "input": "payload"}),
-                                 (["command"], {"timeout": 30, "input": None, "stdin": subprocess.DEVNULL})])
 
     def test_dev_and_fix_completion_descriptions_identify_send_report_not_task_close(self):
         import yaml
@@ -207,7 +184,7 @@ class TemplateContractTests(unittest.TestCase):
                 with self.subTest(values=values, valid=valid):
                     variables.write_text(json.dumps(values))
                     import sys
-                    checked = run_bounded([
+                    checked = run_command([
                         sys.executable, str(ROOT / "scripts/check-review-completion.py"),
                         str(variables)], capture_output=True, text=True)
                     self.assertEqual(checked.returncode == 0, valid, checked.stderr)

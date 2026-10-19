@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from bounded_process import HANG_GUARD_SECONDS, run_bounded as run_process
+from subprocess_helpers import HANG_GUARD_SECONDS, run_command
 from jev_receipts import CLIENT, env as receipt_env, receipted, split
 from rendering import render
 
@@ -28,7 +28,7 @@ LOADER.exec_module(HISTORY)
 SPLIT_LOADER = importlib.machinery.SourceFileLoader("sanity_split_tests", str(Path(__file__).parent / "test_sanity_split.py"))
 SPLIT_TESTS = importlib.util.module_from_spec(importlib.util.spec_from_loader(SPLIT_LOADER.name, SPLIT_LOADER))
 SPLIT_LOADER.exec_module(SPLIT_TESTS)
-run_bounded = partial(run_process, timeout=HANG_GUARD_SECONDS)
+run_bounded = partial(run_command, timeout=HANG_GUARD_SECONDS)
 
 
 def record(**changes):

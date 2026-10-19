@@ -15,8 +15,25 @@ def test_run_command_uses_timeout_and_captures_output(monkeypatch):
     monkeypatch.setattr(subprocess, "run", run)
     assert run_command(["git", "status"], check=True) is result
     assert calls == [(["git", "status"], {
-        "timeout": COMMAND_TIMEOUT, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "check": True,
+        "timeout": COMMAND_TIMEOUT, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
+        "stdin": subprocess.DEVNULL, "check": True,
     })]
+
+
+def test_run_command_respects_input_capture_and_injected_runner():
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return "result"
+
+    assert run_command(["command"], timeout=60, runner=runner, input="payload", capture_output=True) == "result"
+    assert run_command(["command"], runner=runner, input=None, capture_output=True) == "result"
+    assert calls == [
+        (["command"], {"timeout": 60, "check": False, "input": "payload", "capture_output": True}),
+        (["command"], {"timeout": 30, "check": False, "input": None, "capture_output": True,
+                       "stdin": subprocess.DEVNULL}),
+    ]
 
 
 @pytest.mark.parametrize("output", [b"x" * OUTPUT_TAIL + b"stdout-end", "x" * OUTPUT_TAIL + "stdout-end"])

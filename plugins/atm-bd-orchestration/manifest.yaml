@@ -80,7 +80,6 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
     - skills/atm-bd-orchestration/scripts/stack_top.py
-    - skills/atm-bd-orchestration/scripts/tests/bounded_process.py
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dev-ready.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dirty-tree.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/not-ready.json
@@ -104,6 +103,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/fixtures/zero-delta.json
     - skills/atm-bd-orchestration/scripts/tests/jev_receipts.py
     - skills/atm-bd-orchestration/scripts/tests/rendering.py
+    - skills/atm-bd-orchestration/scripts/tests/subprocess_helpers.py
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
     - skills/atm-bd-orchestration/scripts/tests/test_atm_hook_doctor.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
