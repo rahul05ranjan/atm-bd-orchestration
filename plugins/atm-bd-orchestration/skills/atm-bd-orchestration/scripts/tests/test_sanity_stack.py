@@ -56,6 +56,7 @@ class World:
         self.fail_link = False
         self.cas_fail = False
         self.fail_view = False
+        self.release_failure = None
         self.advance_on_pulls = 0
         self.hook = None
 
@@ -95,6 +96,10 @@ class World:
                     self.bead["assignee"] = ""
             elif "--metadata" in argv:
                 self.bead["metadata"] = json.loads(Path(argv[argv.index("--metadata") + 1][1:]).read_text())
+            elif self.release_failure == "exit13":
+                status, error = 13, "injected release failure"
+            elif self.release_failure == "transport":
+                raise OSError("injected release transport failure")
             else:
                 self.bead["assignee"] = ""
         elif argv[:3] == ["atm", "task", "list"]:
@@ -270,6 +275,55 @@ def test_heartbeat_uses_controlled_clock(world):
     world.advance_on_pulls = 120
     assert world.link(values)["result"] == "stacked"
     assert len([call for call in world.calls if call[:2] == ["bd", "heartbeat"]]) == 1
+
+
+@pytest.mark.parametrize("failure", ["exit13", "transport"])
+def test_release_failure_after_write_keeps_stacked_result(world, failure):
+    values = world.branch("first", "trunk", 1)
+    world.release_failure = failure
+    result = world.link(values)
+    assert result["result"] == "stacked"
+    assert result["top"] == world.bead["metadata"]["layers"][-1]
+    assert result["top"]["head"] == values["commit"]
+    assert "injected release" in result["release_warning"]
+    assert world.bead["assignee"] == "sanity"
+
+
+def test_release_failure_on_idempotent_stacked_retry_is_warning(world):
+    values = world.branch("first", "trunk", 1)
+    assert world.link(values)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    world.release_failure = "exit13"
+    world.calls.clear()
+    result = world.link(values)
+    assert result["result"] == "stacked"
+    assert "injected release failure" in result["release_warning"]
+    assert world.bead["metadata"] == before
+    assert not any("--metadata" in call for call in world.calls)
+
+
+def test_precommit_failure_with_release_failure_preserves_both_errors(world):
+    values = world.branch("first", "trunk", 1)
+    before = copy.deepcopy(world.bead["metadata"])
+    world.pulls[0]["draft"] = True
+    world.release_failure = "exit13"
+    result = world.link(values)
+    assert result["result"] == "stack_failed"
+    assert "missing, draft" in result["evidence"]
+    assert "injected release failure" in result["evidence"]
+    assert world.bead["metadata"] == before
+
+
+def test_release_failure_after_rebase_required_is_stack_failed(world):
+    first = world.branch("first", "trunk", 1)
+    rival = world.branch("rival", "trunk", 2)
+    assert world.link(first)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    world.release_failure = "exit13"
+    result = world.link(rival)
+    assert result["result"] == "stack_failed"
+    assert "injected release failure" in result["evidence"]
+    assert world.bead["metadata"] == before
 
 
 @pytest.mark.parametrize("failure", ["link", "cas", "ambiguous"])

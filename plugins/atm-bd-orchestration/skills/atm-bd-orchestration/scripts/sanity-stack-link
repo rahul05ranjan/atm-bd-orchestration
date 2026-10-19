@@ -304,10 +304,24 @@ def main(argv=None, runner=subprocess.run, clock=time.time, sleep=time.sleep):
         if not actor:
             raise StackError('ATM_IDENTITY is required')
         linker = Linker(values, runner, clock, sleep, actor)
+        result = None
         try:
-            result = linker.execute()
+            try:
+                result = linker.execute()
+            except (StackError, OSError, ValueError, TypeError) as error:
+                result = {'result': 'stack_failed', 'evidence': str(error)}
         finally:
-            linker.release()
+            try:
+                linker.release()
+            except StackError as error:
+                if result is None:
+                    raise
+                if result['result'] == 'stacked':
+                    result['release_warning'] = str(error)
+                elif result['result'] == 'stack_failed':
+                    result['evidence'] += f'; release failed: {error}'
+                else:
+                    result = {'result': 'stack_failed', 'evidence': f'release failed after {result["result"]}: {error}'}
     except (StackError, OSError, ValueError, TypeError) as error:
         result = {'result': 'stack_failed', 'evidence': str(error)}
     print(json.dumps(result))
