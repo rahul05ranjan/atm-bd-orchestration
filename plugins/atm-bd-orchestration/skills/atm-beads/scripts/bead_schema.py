@@ -192,6 +192,8 @@ def problems(bead: dict, model: type[Bead]) -> list[str]:
 def validate_phase(beads: list[dict]) -> list[str]:
     found = []
     for bead in beads:
+        if "anchor" in (bead.get("labels") or []):
+            continue
         bead_id = str(bead.get("id", "?"))
         if re.fullmatch(r".+-phase-[a-z0-9]+", bead_id):
             model = RootBead

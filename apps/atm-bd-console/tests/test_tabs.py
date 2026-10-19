@@ -12,7 +12,7 @@ from rich.cells import cell_len
 from textual import events
 from textual.widgets._markdown import MarkdownBlock
 
-from atm_bd_console import findings_renderer, render, runs
+from atm_bd_console import findings_renderer, ledger_source, render, runs
 from atm_bd_console.app import (
     ConsoleApp,
     _agent_name,
@@ -27,11 +27,19 @@ from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _sprint_views
 from atm_bd_console.prs import render_prs
 from atm_bd_console.render import dashboard, status_bar
+from atm_bd_console.result import Ok
 from atm_bd_console.status import _fallback
 from atm_bd_console.types import AgentView, SprintView, StepView
 
 WIDE = "x" * 200
 TEST_ASSIGNEE = "test-dev"
+
+
+@pytest.fixture(autouse=True)
+def isolated_quality_loader(monkeypatch):
+    monkeypatch.setattr(ledger_source, "closed_quality", lambda *_: Ok(([], [])))
+
+
 SPRINTS = (
     SPRINT_VIEW,
     SprintView("atm-bh-1", "contract", SprintState.CLOSED, (), ()),

@@ -169,9 +169,10 @@ for the complete file and purpose mapping. Update `lead` there for a handoff.
 
 On upgrade, rerun the installer to remove the old repository YAML `lead`, and
 add `lead` plus all seven template entries to each active phase file before
-running phase commands. The installer preserves unrelated `roles.lead` launcher
-metadata but neither reads it nor writes it as a phase lead. `--set lead=...`
-and console/viewer `--as` are not supported.
+running phase commands. The installer reads `roles.lead` only for
+`team_lead_member`, the ANC-057 round-cap recipient, and preserves it rather
+than writing it as a phase lead. `--set lead=...` and console/viewer `--as`
+are not supported.
 
 ## Ownership and upgrades
 

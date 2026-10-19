@@ -19,6 +19,7 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
+from textual.css.query import NoMatches
 from textual.errors import NoWidget
 from textual.message import Message
 from textual.widgets import Markdown, OptionList, Static, TabbedContent, TabPane
@@ -26,7 +27,7 @@ from textual.widgets._markdown import MarkdownBlock
 from textual.widgets._tabbed_content import ContentTab
 from textual.widgets.option_list import Option
 
-from . import findings_renderer, prs, render, runs, status, status_table
+from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .build import display_identity, identity
 from .enums import SprintState
 from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
@@ -268,6 +269,11 @@ class ConsoleApp(App[int]):
         self.quality_runs: list[runs.QaRun] = []
         self.finding_beads: list[dict] = []
         self.runs_error: str | None = None
+        self._open_quality_runs: list[runs.QaRun] = []
+        self._open_findings: list[dict] = []
+        self._closed_quality_runs: list[runs.QaRun] = []
+        self._closed_findings: list[dict] = []
+        self._quality_error: str | None = None
         # Every mouse press, click, key and tab change with the widget it landed on (#241 evidence).
         self.input_log_path = Path(config.state_dir) / "input.log"
 
@@ -319,6 +325,8 @@ class ConsoleApp(App[int]):
 
     def action_refresh(self) -> None:
         self.tick(True)
+        if self.query_one(TabbedContent).active == "quality":
+            self._load_closed_quality()
 
     def action_noop(self) -> None:
         return None
@@ -386,6 +394,32 @@ class ConsoleApp(App[int]):
             self.call_after_refresh(self._refresh_status_viewport)
         elif event.pane.id == "diagnostics":
             self.refresh_views()
+        elif event.pane.id == "quality":
+            self._load_closed_quality()
+
+    @work(thread=True, group="quality", exclusive=True, exit_on_error=False)
+    def _load_closed_quality(self) -> None:
+        result = ledger_source.closed_quality(self.config.repo_root, self.config.phase)
+        self.call_from_thread(self._finish_quality, result)
+
+    def _finish_quality(self, result) -> None:
+        if not self.is_running:
+            return
+        previous = (self._quality_error, self._closed_quality_runs, self._closed_findings)
+        if isinstance(result, Err):
+            self._quality_error = str(result.error)
+        else:
+            self._quality_error = None
+            self._closed_quality_runs, self._closed_findings = result.value
+            self._combine_quality()
+        if previous != (self._quality_error, self._closed_quality_runs, self._closed_findings):
+            self.refresh_views()
+
+    def _combine_quality(self) -> None:
+        qa = {run.bead.get("id"): run.bead for run in (*self._closed_quality_runs, *self._open_quality_runs)}
+        findings = {row.get("id"): row for row in (*self._closed_findings, *self._open_findings)}
+        self.quality_runs = runs.qa_runs(list(qa.values()))
+        self.finding_beads = list(findings.values())
 
     def tick(self, force_github: bool) -> None:
         # Interval ticks are intentionally dropped while work is in flight. Forced
@@ -426,7 +460,8 @@ class ConsoleApp(App[int]):
                      run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None,
                      runs_error: str | None) -> None:
         if run_data is not None:
-            self.sanity_runs, self.quality_runs, self.finding_beads = run_data
+            self.sanity_runs, self._open_quality_runs, self._open_findings = run_data
+            self._combine_quality()
         self.runs_error = runs_error
         if tick_error is not None:
             self._show_tick_error(tick_error)
@@ -509,7 +544,10 @@ class ConsoleApp(App[int]):
         except Exception as error:  # noqa: BLE001
             colors = {}
             content = f"Unable to render findings: {error}"
-        widget = self.query_one("#quality-findings", FindingsMarkdown)
+        try:
+            widget = self.query_one("#quality-findings", FindingsMarkdown)
+        except NoMatches:
+            return  # A queued highlight can arrive while the screen is shutting down.
         widget.reviewer_colors = colors
         widget.update(content)
 
@@ -577,8 +615,9 @@ class ConsoleApp(App[int]):
             self.query_one("#sanity-list", Static).update(sanity)
             self.query_one("#sanity-errors", Static).update(errors)
             quality_error = self.query_one("#quality-error", Static)
-            quality_error.update(Text(f"Unable to load runs: {self.runs_error}", style="red") if self.runs_error else "")
-            quality_error.display = bool(self.runs_error)
+            quality_message = self._quality_error or self.runs_error
+            quality_error.update(Text(f"Unable to load runs: {quality_message}", style="red") if quality_message else "")
+            quality_error.display = bool(quality_message)
             quality = self.query_one("#quality-runs", OptionList)
             highlighted = quality.highlighted
             quality.clear_options()

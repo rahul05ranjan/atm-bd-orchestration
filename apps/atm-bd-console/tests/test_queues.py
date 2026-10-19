@@ -67,7 +67,7 @@ def fixed_runner(open_rows=None, ready_rows=None, task_rows=None, closed_rows=No
             rows = ready_rows
         elif argv[:4] == ["atm", "task", "list", "--all"]:
             rows = task_rows
-        elif argv[:5] == ["bd", "list", "--status", "closed", "--id"]:
+        elif argv[:6] == ["bd", "list", "--status", "closed", "-n", "0"]:
             rows = closed_rows
         else:
             raise AssertionError(f"unexpected source command: {argv}")
@@ -105,7 +105,7 @@ def test_build_classifies_each_queue_from_fixed_json_and_uses_four_batched_reads
     assert calls[0][0] == ["bd", "--readonly", "list", "-l", "phase-bj", "--exclude-label", "anchor", "-n", "0", "--json"]
     assert calls[1][0] == ["bd", "ready", "-l", "phase-bj", "--exclude-label", "anchor", "-n", "0", "--json"]
     assert calls[2][0] == ["atm", "task", "list", "--all", "--json"]
-    assert calls[3][0] == ["bd", "list", "--status", "closed", "--id", "dev-closed", "--json"]
+    assert calls[3][0] == ["bd", "list", "--status", "closed", "-n", "0", "--id", "dev-closed", "--json"]
     assert all(cwd == Path("/fixture/product") for _, cwd in calls)
 
 

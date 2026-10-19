@@ -29,18 +29,18 @@ def _repo_parts(github_repo: str) -> tuple[str, str]:
 
 def graphql_argv(github_repo: str) -> tuple[str, ...]:
     owner, name = _repo_parts(github_repo)
-    return ("gh", "api", "-R", github_repo, "graphql", "-F", f"owner={owner}", "-F", f"name={name}",
+    return ("gh", "api", "graphql", "-F", f"owner={owner}", "-F", f"name={name}",
             "-f", f"query={GRAPHQL}")
 
 
 def rest_argv(github_repo: str) -> tuple[str, ...]:
     _repo_parts(github_repo)
-    return ("gh", "api", "-R", github_repo, f"repos/{github_repo}/pulls?state=all&per_page=100")
+    return ("gh", "api", f"repos/{github_repo}/pulls?state=all&per_page=100")
 
 
 def quota_argv(github_repo: str) -> tuple[str, ...]:
     _repo_parts(github_repo)
-    return ("gh", "api", "-R", github_repo, "rate_limit")
+    return ("gh", "api", "rate_limit")
 
 
 def _quota_entry(resources, resource):
@@ -248,8 +248,7 @@ def _open_prs(mode, code_root, branch_groups, budget, github_repo):
                 selected[pr.number] = pr
         updates: dict[int, PullRequest] = {}
         for pr in selected.values():
-            checks_argv = ("gh", "api", "-R", github_repo,
-                           f"repos/{github_repo}/commits/{pr.head_sha}/check-runs?per_page=100")
+            checks_argv = ("gh", "api", f"repos/{github_repo}/commits/{pr.head_sha}/check-runs?per_page=100")
             response = run(checks_argv, "check GitHub connectivity and retry", cwd=code_root,
                                    timeout_s=REQUEST_TIMEOUT_S)
             if isinstance(response, Err):

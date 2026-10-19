@@ -27,7 +27,7 @@ from contract_samples import (
 )
 
 from atm_bd_console import log, runner
-from atm_bd_console.beads_source import closed_phase_rows, open_rows
+from atm_bd_console.beads_source import open_rows
 from atm_bd_console.command import Output
 from atm_bd_console.enums import QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
@@ -121,7 +121,6 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((BEAD,)))
     monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
-    monkeypatch.setattr(runner.beads_source, "closed_phase_rows", lambda *_args, **_kwargs: Ok([]))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(PHASE))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -155,7 +154,7 @@ def test_tick_reports_open_read_failure_without_collecting_runs(monkeypatch, git
 
 
 @pytest.mark.parametrize("open_failed", [False, True])
-def test_tick_owns_exactly_one_open_and_only_reads_closed_after_success(monkeypatch, github_runtime, open_failed):
+def test_tick_owns_exactly_one_open_and_never_reads_closed(monkeypatch, github_runtime, open_failed):
     store, _, _, _ = github_runtime
     calls = []
 
@@ -166,7 +165,6 @@ def test_tick_owns_exactly_one_open_and_only_reads_closed_after_success(monkeypa
         return Ok(Output(0, "[]"))
 
     monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
-    monkeypatch.setattr(runner.beads_source, "closed_phase_rows", closed_phase_rows)
     monkeypatch.setattr(runner.beads_source.command, "run", run)
 
     def collect(*_args):
@@ -177,8 +175,6 @@ def test_tick_owns_exactly_one_open_and_only_reads_closed_after_success(monkeypa
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
     assert result.runs_error == (str(TIMEOUT) if open_failed else None)
     expected = [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"]]
-    if not open_failed:
-        expected.append(["bd", "list", "-l", f"phase-{CONFIG.phase}", "--status", "closed", "-n", "0", "--json"])
     assert calls == expected
     if open_failed:
         assert result.run_data is None
@@ -363,6 +359,7 @@ def test_closed_phase_forced_refresh_respects_pause_and_keeps_cached_prs(monkeyp
         def now(cls, tz=None): return NOW
 
     monkeypatch.setattr(runner, "datetime", FixedDateTime)
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((closed,)))
@@ -399,7 +396,6 @@ def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> No
 
     for source, name in (
         (runner.beads_source, "open_rows"), (runner.beads_source, "ready"),
-        (runner.beads_source, "closed_phase_rows"),
         (runner.atm_source, "members"), (runner.atm_source, "tasks"),
         (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
         (runner.git_source, "remote_refs"), (runner.git_source, "merge"),
@@ -871,10 +867,6 @@ def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(gi
     store, _, _, _ = github_runtime
     config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code", no_fetch=False)
     calls = []
-    bead_roots = []
-
-    monkeypatch.setattr(runner.beads_source, "closed_phase_rows",
-                        lambda phase, *, cwd: bead_roots.append((phase, cwd)) or Ok([]))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda root: calls.append(("worktrees", root)) or Ok(()))
     monkeypatch.setattr(runner.git_source, "fetch", lambda root: calls.append(("fetch", root)) or Ok(None))
     monkeypatch.setattr(runner.git_source, "remote_refs", lambda root: calls.append(("remote_refs", root)) or Ok((REMOTE_REF,)))
@@ -890,7 +882,6 @@ def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(gi
         ("remote_refs", "/code-checkout"),
         ("merge", "/code-checkout", "feature/x", "main"),
     ]
-    assert bead_roots == [("bh", "/repo")]
 
 
 def test_refresh_github_uses_configured_code_checkout_and_repo_slug(monkeypatch) -> None:

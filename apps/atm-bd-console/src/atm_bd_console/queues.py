@@ -165,7 +165,7 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
     unknown = sorted(set(task_by_id) - set(by_id))
     closed: dict[str, dict[str, Any]] = {}
     if unknown:
-        closed_rows = _array(run_json(["bd", "list", "--status", "closed", "--id", ",".join(unknown), "--json"], cwd=repo_root, runner=runner), "bd list --status closed")
+        closed_rows = _array(run_json(["bd", "list", "--status", "closed", "-n", "0", "--id", ",".join(unknown), "--json"], cwd=repo_root, runner=runner), "bd list --status closed")
         closed = {_valid_id(bead, "bd list --status closed"): bead for bead in closed_rows}
 
     children: dict[str, list[dict[str, Any]]] = {}

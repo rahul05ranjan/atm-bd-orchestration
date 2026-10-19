@@ -298,9 +298,10 @@ def test_gh_reported_timeout_carries_the_request_timeout(fake_bin, monkeypatch) 
 def test_no_repository_slug_is_hard_coded(fake_bin, monkeypatch, tmp_path) -> None:
     source = (Path(github_source.__file__)).read_text()
     assert "randlee" not in source and "atm-bd-orchestration" not in source
-    assert GRAPHQL_ARGV[:5] == ("gh", "api", "-R", TEST_REPO, "graphql")
+    assert GRAPHQL_ARGV[:3] == ("gh", "api", "graphql")
     assert "owner=randlee" in GRAPHQL_ARGV and "name=atm-bd-orchestration" in GRAPHQL_ARGV
-    assert REST_ARGV[:4] == ("gh", "api", "-R", TEST_REPO)
+    assert REST_ARGV[:2] == ("gh", "api")
+    assert REST_ARGV[2] == f"repos/{TEST_REPO}/pulls?state=all&per_page=100"
     assert "repos/{owner}/{repo}" not in source
     assert "repository(owner: $owner, name: $name)" in github_source.GRAPHQL
     fake_bin.make("gh", 'printf "%s" "$PWD" >&2\nexit 1\n')
@@ -324,5 +325,7 @@ def test_rest_and_check_runs_use_code_checkout_and_explicit_repo(monkeypatch, tm
     assert isinstance(result, Ok) and status.ok
     assert len(calls) == 2
     assert all(cwd == tmp_path for _, cwd in calls)
-    assert all(argv[:4] == ("gh", "api", "-R", TEST_REPO) for argv, _ in calls)
+    assert all(argv[:2] == ("gh", "api") for argv, _ in calls)
     assert calls[1][0][-1] == f"repos/{TEST_REPO}/commits/{selected[0]['head']['sha']}/check-runs?per_page=100"
+    api_argvs = [GRAPHQL_ARGV, REST_ARGV, github_source.quota_argv(TEST_REPO), *(argv for argv, _ in calls)]
+    assert all(flag not in argv for argv in api_argvs for flag in ("-R", "--repo"))
