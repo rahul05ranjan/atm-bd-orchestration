@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.18.0] - 2026-10-19
 
 ### Changed
 - Upgrade note: open beads poured by 0.16.x formulas lack the required `branch`, `worktree`, `pr_target`, and `difficulty` metadata and are reported by `validate-plan`. Re-pour those beads with the current formulas before validating the phase.
