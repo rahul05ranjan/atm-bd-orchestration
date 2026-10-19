@@ -1,5 +1,6 @@
 """Exercise the installed sc-compose -> typed JSON -> locked append pipeline."""
 import concurrent.futures
+from functools import partial
 import importlib.machinery
 import importlib.util
 import json
@@ -15,6 +16,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+from bounded_process import HANG_GUARD_SECONDS, run_bounded
 from jev_receipts import CLIENT, env as receipt_env, receipted, split
 from rendering import render
 
@@ -26,16 +28,6 @@ LOADER.exec_module(HISTORY)
 SPLIT_LOADER = importlib.machinery.SourceFileLoader("sanity_split_tests", str(Path(__file__).parent / "test_sanity_split.py"))
 SPLIT_TESTS = importlib.util.module_from_spec(importlib.util.spec_from_loader(SPLIT_LOADER.name, SPLIT_LOADER))
 SPLIT_LOADER.exec_module(SPLIT_TESTS)
-
-HANG_GUARD_SECONDS = 60
-
-
-def run_bounded(argv, **kwargs):
-    try:
-        return subprocess.run(argv, timeout=HANG_GUARD_SECONDS, **kwargs)
-    except subprocess.TimeoutExpired as exc:
-        raise AssertionError(f"command timed out: {argv!r}") from exc
-
 
 def record(**changes):
     value = dict(run_id="run-one", reviewer="sanity-llm", commit="a" * 40,
@@ -180,12 +172,7 @@ class SanityHistory(unittest.TestCase):
         HISTORY.append_record(self.log, record(run_id="new"))
         self.assertEqual([json.loads(line)["run_id"] for line in self.log.read_text().splitlines()], ["run-one", "new"])
 
-    def test_partial_append_blocks_reader_and_duplicate_retry_is_noop(self):
-        reader_attempted = threading.Event()
-        reader_thread = threading.local()
-        real_flock = HISTORY.fcntl.flock
-        real_run = subprocess.run
-        calls = []
+    def partial_compose(self):
         fake = self.root / "fake_sc_compose.py"
         fake.write_text("""import json, os, socket, sys
 fd = int(sys.argv[1])
@@ -193,7 +180,7 @@ args = sys.argv[2:]
 record = json.load(open(args[args.index('--var-file') + 1]))
 path = args[args.index('--append') + 1]
 data = json.dumps(record, separators=(',', ':')) + '\\n'
-with socket.socket(fileno=fd) as control, open(path, 'w') as output:
+with socket.socket(fileno=fd) as control, open(path, 'a') as output:
     midpoint = len(data) // 2
     output.write(data[:midpoint])
     output.flush()
@@ -202,6 +189,15 @@ with socket.socket(fileno=fd) as control, open(path, 'w') as output:
         raise RuntimeError('test did not release append')
     output.write(data[midpoint:])
 """)
+        return fake
+
+    def test_partial_append_blocks_reader_and_duplicate_retry_is_noop(self):
+        reader_attempted = threading.Event()
+        reader_thread = threading.local()
+        real_flock = HISTORY.fcntl.flock
+        real_run = subprocess.run
+        calls = []
+        fake = self.partial_compose()
 
         def observed_flock(fd, operation):
             if getattr(reader_thread, "is_reader", False):
@@ -249,6 +245,44 @@ with socket.socket(fileno=fd) as control, open(path, 'w') as output:
         self.assertFalse(Path(argv[argv.index("--var-file") + 1]).exists())
         HISTORY.append_record(self.log, record())
         self.assertEqual(json.loads(self.log.read_text()), record())
+
+    def test_timeout_rolls_back_partial_append_and_allows_retry(self):
+        fake = self.partial_compose()
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                self.log.unlink(missing_ok=True)
+                if existing:
+                    HISTORY.append_record(self.log, record())
+                before = self.log.read_bytes() if existing else b""
+                next_record = record(run_id="next")
+                parent, child = socket.socketpair()
+                calls = []
+                with parent, child:
+                    parent.settimeout(HANG_GUARD_SECONDS)
+
+                    def timeout_after_partial(argv, **kwargs):
+                        calls.append((argv, kwargs))
+                        proc = subprocess.Popen([sys.executable, str(fake), str(child.fileno()), *argv[1:]],
+                                                pass_fds=(child.fileno(),), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        try:
+                            self.assertEqual(parent.recv(1), b"P")
+                            self.assertTrue(self.log.read_bytes().startswith(before))
+                            self.assertGreater(len(self.log.read_bytes()), len(before))
+                        finally:
+                            proc.kill()
+                            proc.communicate(timeout=HANG_GUARD_SECONDS)
+                        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+                    with patch.object(HISTORY.subprocess, "run", side_effect=timeout_after_partial), \
+                            self.assertRaisesRegex(SystemExit, "SANITY.LOG_APPEND_TIMEOUT.*sc-compose"):
+                        HISTORY.append_record(self.log, next_record)
+                argv, kwargs = calls[0]
+                self.assertEqual(kwargs["timeout"], HISTORY.APPEND_TIMEOUT_SECONDS)
+                self.assertFalse(Path(argv[argv.index("--var-file") + 1]).exists())
+                self.assertEqual(self.log.read_bytes(), before)
+                HISTORY.append_record(self.log, next_record)
+                self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()],
+                                 ([record()] if existing else []) + [next_record])
 
     def test_process_timeout_names_command(self):
         with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(["script", "--arg"], 60)):
@@ -324,14 +358,8 @@ class ShippedFlow(unittest.TestCase):
         self.root = Path(self.temp.name)
         real_run = subprocess.run
 
-        def bounded_repo_command(argv, **kwargs):
-            try:
-                return real_run(argv, timeout=HANG_GUARD_SECONDS, **kwargs)
-            except subprocess.TimeoutExpired as exc:
-                raise AssertionError(f"command timed out: {argv!r}") from exc
-
         # The shared Repo helper also spawns git commands during construction.
-        with patch.object(SPLIT_TESTS.subprocess, "run", side_effect=bounded_repo_command):
+        with patch.object(SPLIT_TESTS.subprocess, "run", side_effect=partial(run_bounded, runner=real_run)):
             self.repo = SPLIT_TESTS.Repo(self.root)
         with (self.repo.wt / ".git/info/exclude").open("a") as exclude:
             exclude.write(".sc/\n")

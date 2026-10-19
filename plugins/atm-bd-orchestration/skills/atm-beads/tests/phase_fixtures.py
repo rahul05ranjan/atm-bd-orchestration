@@ -61,6 +61,8 @@ def write_phase(repo, phase="t", prefix="x", plans_dir="plans", lead="phase-lead
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(phase_toml(phase_data(phase, prefix, plans_dir, lead)), encoding="utf-8")
     return path
+
+
 SERVER_DIR = ".dolt-server"   # data directory and log of the workspace's own dolt sql-server
 
 # Runs dolt as its child and stops it when the test process that started it is gone (killed, so class

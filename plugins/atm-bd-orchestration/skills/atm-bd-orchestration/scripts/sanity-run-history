@@ -300,6 +300,7 @@ def _append_locked(log_path, record):
         if {**prior[-1], "completed_local": None} != {**{k: v for k, v in record.items() if k not in later}, "completed_local": None}:
             fail("run/reviewer already logged with different results")
         return
+    original_size = log_path.stat().st_size if log_path.exists() else 0
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as var_file:
         json.dump(record, var_file)
     try:
@@ -308,6 +309,12 @@ def _append_locked(log_path, record):
                                    "--file", str(RECORD_TEMPLATE), "--var-file", var_file.name, "--append", str(log_path)],
                                   text=True, capture_output=True, timeout=APPEND_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
+            try:
+                if original_size or log_path.exists():
+                    with log_path.open("r+b") as log:
+                        log.truncate(original_size)
+            except OSError as exc:
+                fail(f"SANITY.LOG_APPEND_TIMEOUT: sc-compose append to {log_path} exceeded {APPEND_TIMEOUT_SECONDS}s; rollback failed: {exc}")
             fail(f"SANITY.LOG_APPEND_TIMEOUT: sc-compose append to {log_path} exceeded {APPEND_TIMEOUT_SECONDS}s")
     finally:
         os.unlink(var_file.name)

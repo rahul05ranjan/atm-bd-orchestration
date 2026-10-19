@@ -4,12 +4,11 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
 
+from bounded_process import run_bounded
 from jev_receipts import CLIENT, env, receipted, split
 from rendering import render
 
@@ -18,16 +17,6 @@ SCRIPT = ROOT / "scripts/sanity-merge"
 TEMPLATES = ROOT / "templates"
 TASK, DEV, SPRINT, BRANCH = "{{ bead_prefix }}-d-4-sanity", "{{ bead_prefix }}-d-4", "d-4", "sprint/d-4-x"
 FINDING = {"kind": "skipped", "file": "crates/x/src/lib.rs", "line": 3, "issue": "no 503 test"}
-HANG_GUARD_SECONDS = 60
-
-
-def run_bounded(argv, **kwargs):
-    try:
-        return subprocess.run(argv, timeout=HANG_GUARD_SECONDS, **kwargs)
-    except subprocess.TimeoutExpired as exc:
-        raise AssertionError(f"command timed out: {argv!r}") from exc
-
-
 def without(envelope, key):
     return {k: v for k, v in envelope.items() if k != key}
 
@@ -90,11 +79,6 @@ class SanityMerge(unittest.TestCase):
         argv = args or (str(self.manifest), TASK, DEV, SPRINT)
         body = results if isinstance(results, str) else json.dumps(results)
         return run_bounded([str(SCRIPT), *argv, "--client", str(CLIENT)], input=body, capture_output=True, text=True, env=env())
-
-    def test_process_timeout_names_command(self):
-        with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(["script", "--arg"], 60)):
-            with self.assertRaisesRegex(AssertionError, "script.*--arg"):
-                run_bounded(["script", "--arg"])
 
     def test_paired_reports_share_identity_preserve_conclusions_and_own_timing(self):
         self.write_manifest(run_id="shared-run", reviewers=["sanity-llm", "sanity-jev"],
