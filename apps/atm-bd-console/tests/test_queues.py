@@ -242,7 +242,9 @@ def test_phase_uses_console_phase_file_reader(monkeypatch, tmp_path: Path):
     assert calls == [(str(tmp_path), "../product")]
     assert result["root"] == ROOT
     assert result["integration_branch"] == "integrate/phase-bj"
-    assert queues._resolve(args, tmp_path)[2] == (tmp_path / "../product").resolve()
+    resolved = queues._resolve(args, tmp_path)
+    assert resolved[2] == (tmp_path / "../product").resolve()
+    assert resolved[3] == "owner/repo"
 
 
 def test_phase_rejects_non_git_code_checkout_before_running_gh(monkeypatch, tmp_path: Path, capsys):
@@ -315,7 +317,7 @@ def test_phase_stack_check_uses_valid_sibling_checkout(monkeypatch, tmp_path: Pa
     report = queues.build(args, tmp_path, now=NOW, runner=run)
 
     assert report["integration_branch"] == "integrate/phase-bj"
-    assert (["gh", "api", "--paginate", "--slurp", "repos/{owner}/{repo}/stacks?per_page=100"], code_root) in validation_calls
+    assert (["gh", "api", "--paginate", "--slurp", "repos/owner/repo/stacks?per_page=100"], code_root) in validation_calls
     assert (["git", "worktree", "list", "--porcelain"], code_root) in validation_calls
     assert ("git", "rev-parse", "--show-toplevel") in [tuple(argv) for argv, _ in validation_calls]
 
@@ -341,11 +343,12 @@ def test_stack_queues_use_the_code_checkout_and_report_stack_problems():
         return Ok(Output(0, output))
     queues_by_key = {key: [] for key, _, _ in queues.QUEUES}
 
-    note = queues.stacks("integrate/phase-bj", queues_by_key, NOW, Path("/fixture/code"), runner=run)
+    note = queues.stacks("integrate/phase-bj", queues_by_key, NOW, Path("/fixture/code"), "code-owner/code-repo", runner=run)
 
     assert note == "1 open stack(s) on integrate/phase-bj, 1 unmerged layer(s) in the local stack"
     assert [row["id"] for row in queues_by_key["stack_incoherent"]] == ["stack#353"]
     assert [row["id"] for row in queues_by_key["pr_unlinked"]] == ["pr#101"]
+    assert calls[0][0] == ["gh", "api", "--paginate", "--slurp", "repos/code-owner/code-repo/stacks?per_page=100"]
     assert calls[0][0][:2] == ["gh", "api"] and calls[0][1] == Path("/fixture/code")
     assert calls[1] == (["git", "worktree", "list", "--porcelain"], Path("/fixture/code"))
     assert calls[2] == (["gh", "stack", "view", "--json"], "/fixture/code/integrate")

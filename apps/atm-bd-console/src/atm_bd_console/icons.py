@@ -70,8 +70,8 @@ MARKER_FIX_QA = "🛠️"
 # Lead ruling 2026-10-19 applies those entries to sanity verdicts as well.
 # Layout C has no API_FAILURE entry; the lead ruled to retain U+F0026 #D29922.
 SANITY_VERDICT_ICONS: dict[str, Icon] = {
-    "PASS": ("\U000f029b", "#2EA043"),
-    "FAIL": ("\U000f029b", "#F85149"),
+    "PASS": AGENT_ICONS[AgentIcon.QA_PASS],
+    "FAIL": AGENT_ICONS[AgentIcon.QA_FAIL],
     "API_FAILURE": ("\U000f0026", "#D29922"),
 }
 
