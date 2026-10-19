@@ -28,7 +28,7 @@ from textual.widgets._tabbed_content import ContentTab
 from textual.widgets.option_list import Option
 
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
-from .build import display_identity, identity
+from .build import display_identity
 from .enums import SprintState
 from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
@@ -647,7 +647,7 @@ class ConsoleApp(App[int]):
             agent_details = [render.render_agent(agent.name, agent).plain for agent in self.snapshot.agents]
         agents = "Agents: " + ", ".join(agent_details) if agent_details else "Agents: none"
         self.query_one("#diagnostics-text", Static).update(
-            f"Build: {identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
+            f"Build: {display_identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
 RunnerStep = Callable[[Config, State, bool, StateStore], StepResult]

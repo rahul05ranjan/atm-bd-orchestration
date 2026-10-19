@@ -19,7 +19,7 @@ from textual import events
 from atm_bd_console import app as console
 from atm_bd_console import prs, render
 from atm_bd_console.app import ConsoleApp, run
-from atm_bd_console.build import display_identity, identity
+from atm_bd_console.build import display_identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.result import Ok
@@ -294,7 +294,7 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             await settle(pilot)
             assert app.query_one("TabbedContent").active == "diagnostics"
             shown = app.query_one("#diagnostics-text").render().plain
-            assert f"Build: {identity()}" in shown
+            assert f"Build: {display_identity()}" in shown
             assert "Agents: ·arch-ctm" in shown
             await pilot.resize_terminal(120, 40)
             await settle(pilot)
