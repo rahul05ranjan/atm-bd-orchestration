@@ -391,16 +391,17 @@ class ShippedFlow(unittest.TestCase):
                                "--reviewer", reviewer, "--started-at", str(now - 60), "--completed-at", str(now),
                                *extra, "--client", str(CLIENT)], input=stdin, capture_output=True, text=True, env=receipt_env())
 
-    def run_flow(self, select, jev_failure=None):
+    def run_flow(self, select, jev_failure=None, llm_failure=None):
         sha = self.repo.sha
         skipped = {"kind": "skipped", "file": "crates/types/src/retry.rs", "line": 1, "issue": "404 test not written"}
-        replies = {"sanity-llm": [fenced(self.task, self.bead, 1, sha), fenced(self.task, self.bead, 2, sha)],
+        replies = {"sanity-llm": [fenced(self.task, self.bead, 1, sha), llm_failure or fenced(self.task, self.bead, 2, sha)],
                    "sanity-jev": [fenced(self.task, self.bead, 1, sha),
                                   jev_failure or fenced(self.task, self.bead, 2, sha, [skipped])]}
         reviewer_vars = {}
         for reviewer, texts in replies.items():
             merged = self.merge(reviewer, stdin=json.dumps(texts))  # reply text kept unchanged as strings
-            self.assertEqual(merged.returncode, 3 if reviewer == "sanity-jev" and jev_failure else 0, merged.stderr)
+            failure = jev_failure if reviewer == "sanity-jev" else llm_failure
+            self.assertEqual(merged.returncode, 3 if failure else 0, merged.stderr)
             reviewer_vars[reviewer] = self.root / f"{reviewer}-vars.json"
             reviewer_vars[reviewer].write_text(merged.stdout)
         digests = {r: json.loads(v.read_text())["reviewer_results_sha256"] for r, v in reviewer_vars.items()}
@@ -455,6 +456,19 @@ class ShippedFlow(unittest.TestCase):
             ("sanity-jev", "CANNOT_RUN", [{k: error[k] for k in ("code", "message", "recoverable", "deliverable")}])])
         self.assertEqual(rows[1]["kind"], "API_FAILURE")
         self.assertEqual(rows[1]["error"]["message"], error["message"])
+
+    def test_exhausted_llm_api_failure_has_its_own_kind(self):
+        error = {"code": "SANITY.LLM_API_FAILURE", "message": "upstream API error: busy",
+                 "recoverable": True, "suggested_action": "retry later", "deliverable": 2}
+        failure = {"success": False, "data": None, "error": error}
+
+        def take_jev(selection):
+            selection[1].update(llm="cannot_run", selected="jev", reason=error["message"])
+
+        _, rows, _ = self.run_flow(take_jev, llm_failure=failure)
+        self.assertEqual(rows[0]["kind"], "API_FAILURE")
+        self.assertEqual(rows[0]["error"]["message"], error["message"])
+        self.assertEqual(rows[0]["errors"][0]["message"], error["message"])
 
     def test_oversized_jev_failure_reaches_ledger_with_reason(self):
         spec = importlib.util.spec_from_file_location("jev_client_for_history", CLIENT)

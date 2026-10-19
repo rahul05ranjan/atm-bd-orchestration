@@ -78,6 +78,8 @@ def checked_dev(bead):
 def result_kind(value):
     error = value.get("error")
     code = error.get("code") if isinstance(error, dict) else None
+    if value.get("reviewer") == "sanity-llm" and code == "SANITY.LLM_API_FAILURE":
+        return "API_FAILURE"
     return "API_FAILURE" if value.get("reviewer") == "sanity-jev" and isinstance(code, str) and code.startswith("SANITY.JEV_") else "verdict"
 
 

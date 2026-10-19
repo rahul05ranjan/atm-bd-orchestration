@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Phase bj integrates the close hook, stack ledger and serialized sanity linking, sanity and quality run tabs, and manifest-based plugin integrity verification.
 - `dev-sanity-complete.md.j2` 2.0.1 states FAIL handoff, lead escalation and the absence of finding beads in one conditional sentence. Version 2.0.0 removes `finding_bead_ids` from its status JSON and defaults. `task-close-vars.j2` 2.0.0 also removes the retired `finding_bead_ids` default.
 - The command is now `atm-bd`: use `atm-bd console` for the dashboard and `atm-bd cron` for one tick. Existing users should run `uv tool uninstall atm-bd-console` before installing the new tool; the old executable is not an alias.
 - Runtime state, locks, snapshots, and logs start fresh under `.atm-bd/atm-bd/`; old state and logs are not migrated or read. After stopping the old console, `.atm-bd/atm-bd-console/` can be deleted if its contents are no longer needed.

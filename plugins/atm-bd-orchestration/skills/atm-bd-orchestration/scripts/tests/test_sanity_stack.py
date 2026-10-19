@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+from contextlib import redirect_stderr, redirect_stdout
+import copy
+from datetime import datetime, timezone
+import importlib.machinery
+import importlib.util
+import io
+import json
+from pathlib import Path
+import subprocess
+
+import pytest
+
+
+SCRIPTS = Path(__file__).resolve().parents[1]
+LOADER = importlib.machinery.SourceFileLoader("sanity_stack_link", str(SCRIPTS / "sanity-stack-link"))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+LINK = importlib.util.module_from_spec(SPEC)
+LOADER.exec_module(LINK)
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1800000000.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class World:
+    def __init__(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ATM_IDENTITY", "sanity")
+        self.root = tmp_path / "repo"
+        origin = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+        subprocess.run(["git", "init", "-b", "trunk", str(self.root)], check=True, capture_output=True)
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test")
+        self.git("remote", "add", "origin", str(origin))
+        self.git("commit", "--allow-empty", "-m", "trunk")
+        self.git("push", "origin", "trunk")
+        self.clock = Clock()
+        self.bead = {"id": "phase.stack", "assignee": "", "metadata": {"trunk": "trunk", "stack_number": None, "layers": []}}
+        self.other = {"assignee": "other"}
+        self.pulls = []
+        self.stacks = []
+        self.calls = []
+        self.unavailable = False
+        self.fail_link = False
+        self.cas_fail = False
+        self.fail_view = False
+        self.advance_on_pulls = 0
+        self.hook = None
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, text=True).stdout.strip()
+
+    def branch(self, name, base, number):
+        self.git("checkout", "-b", name, base)
+        self.git("commit", "--allow-empty", "-m", name)
+        sha = self.git("rev-parse", "HEAD")
+        self.git("push", "origin", name)
+        self.pulls.append({"number": number, "base": base, "head": name, "sha": sha, "draft": False})
+        return {"checked_bead": "dev", "branch": name, "pr_number": number, "commit": sha,
+                "stack_bead": "phase.stack", "budget": "full", "timeout_s": 10}
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        if self.hook is not None:
+            return self.hook(argv, **kwargs)
+        output, error, status = "", "", 0
+        if argv[:2] == ["bd", "show"]:
+            output = json.dumps([self.bead])
+        elif argv[:2] == ["bd", "heartbeat"]:
+            assert self.bead["assignee"] == "sanity"
+        elif argv[:2] == ["bd", "reclaim"]:
+            assert argv[2:6] == ["--id", "phase.stack", "--older-than", "1800s"]
+            self.bead["assignee"] = ""
+        elif argv[:2] == ["bd", "update"]:
+            if "--claim" in argv:
+                if self.bead["assignee"]:
+                    status, error = 1, "held"
+                else:
+                    self.bead["assignee"] = "sanity"
+            elif self.bead["assignee"] != "sanity" or (self.cas_fail and "--metadata" in argv):
+                status, error = 13, "assignee changed"
+                if self.cas_fail:
+                    self.bead["assignee"] = ""
+            elif "--metadata" in argv:
+                self.bead["metadata"] = json.loads(Path(argv[argv.index("--metadata") + 1][1:]).read_text())
+            else:
+                self.bead["assignee"] = ""
+        elif argv[:3] == ["atm", "task", "list"]:
+            output = json.dumps([{"assignee": self.bead["assignee"], "state": "active", "task_id": "holder-task"}])
+        elif argv[:3] == ["gh", "api", "rate_limit"]:
+            output = json.dumps({"remaining": 0 if self.unavailable else 500})
+        elif argv[:3] == ["gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100"]:
+            self.clock.now += self.advance_on_pulls
+            self.advance_on_pulls = 0
+            output = json.dumps(self.pulls)
+        elif argv[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"]:
+            output = json.dumps(self.stacks)
+        elif argv[:3] == ["gh", "stack", "link"]:
+            if self.fail_link:
+                status, error = 1, "injected link failure"
+            elif argv[3] == "--base":
+                self.stacks.append({"number": 7, "base": argv[4], "prs": [int(value) for value in argv[5:]]})
+            else:
+                stack = next(item for item in self.stacks if item["number"] == int(argv[3]))
+                stack["prs"].append(int(argv[4]))
+        elif argv[0] == "python3":
+            if self.fail_view:
+                status, error = 1, "injected view failure"
+        elif argv[0] == "git":
+            return subprocess.run(argv, cwd=self.root, **kwargs)
+        else:
+            raise AssertionError(argv)
+        return subprocess.CompletedProcess(argv, status, output, error)
+
+    def link(self, values):
+        path = self.root / "input.json"
+        path.write_text(json.dumps(values))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = LINK.main(["--input", str(path)], runner=self, clock=self.clock, sleep=self.clock.sleep)
+        result = json.loads(output.getvalue())
+        assert status == (result["result"] == "stack_failed")
+        return result
+
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    return World(tmp_path, monkeypatch)
+
+
+def test_three_passes_link_in_verdict_order(world):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    third = world.branch("third", "second", 3)
+    assert [world.link(item)["result"] for item in (first, second, third)] == ["stacked"] * 3
+    metadata = world.bead["metadata"]
+    assert [item["branch"] for item in metadata["layers"]] == ["first", "second", "third"]
+    assert all(item["linked"] for item in metadata["layers"])
+    assert metadata["stack_number"] == 7
+    assert world.bead["assignee"] == ""
+
+
+def test_divergence_never_links_or_writes(world):
+    first = world.branch("first", "trunk", 1)
+    rival = world.branch("rival", "trunk", 2)
+    assert world.link(first)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    world.calls.clear()
+    assert world.link(rival)["result"] == "rebase_required"
+    assert world.bead["metadata"] == before
+    assert not any(call[:3] == ["gh", "stack", "link"] or "--metadata" in call for call in world.calls)
+
+
+@pytest.mark.parametrize("budget,unavailable", [("lean", False), ("full", True)])
+def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
+    values = world.branch("first", "trunk", 1)
+    values["budget"] = budget
+    world.unavailable = unavailable
+    assert world.link(values)["top"]["linked"] is False
+    assert len([call for call in world.calls if len(call) > 2 and "/pulls?" in call[2]]) == 1
+    assert not any("graphql" == token for call in world.calls for token in call)
+    assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
+    world.unavailable = False
+    second = world.branch("second", "first", 2)
+    assert world.link(second)["result"] == "stacked"
+    assert all(layer["linked"] for layer in world.bead["metadata"]["layers"])
+
+
+def test_timeout_and_scoped_reclaim(world):
+    values = world.branch("first", "trunk", 1)
+    world.bead.update(assignee="other", started_at="2027-01-01T00:00:00Z",
+                      lease_expires_at=datetime.fromtimestamp(world.clock() + 100, timezone.utc).isoformat())
+    start = world.clock()
+    result = world.link(values)
+    assert result == {"result": "lock_timeout", "holder": "other", "claimed_at": "2027-01-01T00:00:00Z", "holder_task": "holder-task"}
+    assert world.clock() - start == 10
+    world.bead["lease_expires_at"] = datetime.fromtimestamp(world.clock() - 1801, timezone.utc).isoformat()
+    result = world.link(values)
+    assert result["reclaimed"] == {"holder": "other", "claimed_at": "2027-01-01T00:00:00Z"}
+    assert world.other["assignee"] == "other"
+
+
+def test_heartbeat_uses_controlled_clock(world):
+    values = world.branch("first", "trunk", 1)
+    world.advance_on_pulls = 120
+    assert world.link(values)["result"] == "stacked"
+    assert len([call for call in world.calls if call[:2] == ["bd", "heartbeat"]]) == 1
+
+
+@pytest.mark.parametrize("failure", ["link", "cas", "ambiguous"])
+def test_failures_leave_ledger_and_release(world, failure):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    assert world.link(first)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    if failure == "link":
+        world.fail_link = True
+    elif failure == "cas":
+        world.cas_fail = True
+    else:
+        world.stacks = [{"number": 7, "base": "trunk", "prs": [1]}, {"number": 8, "base": "trunk", "prs": [1]}]
+    assert world.link(second)["result"] == "stack_failed"
+    assert world.bead["metadata"] == before
+    assert world.bead["assignee"] == ""
+
+
+def test_torn_hosted_link_reconciles_and_preserves_lean_layer(world):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    third = world.branch("third", "second", 3)
+    first["budget"] = second["budget"] = "lean"
+    assert world.link(first)["result"] == "stacked"
+    assert world.link(second)["result"] == "stacked"
+    world.stacks = [{"number": 7, "base": "trunk", "prs": [1]}]
+    third["budget"] = "lean"
+    assert world.link(third)["result"] == "stacked"
+    assert [item["linked"] for item in world.bead["metadata"]["layers"]] == [True, False, False]
+
+
+def test_retry_recovers_hosted_only_torn_link(world):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    assert world.link(first)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    world.fail_view = True
+    assert world.link(second)["result"] == "stack_failed"
+    assert world.bead["metadata"] == before
+    world.fail_view = False
+    world.calls.clear()
+    assert world.link(second)["result"] == "stacked"
+    assert [item["pr"] for item in world.bead["metadata"]["layers"]] == [1, 2]
+    assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
+
+
+def test_rebase_then_real_sanity_hook_preserves_round_and_hands_off(world, tmp_path, monkeypatch):
+    first = world.branch("first", "trunk", 1)
+    rival = world.branch("rival", "trunk", 2)
+    assert world.link(first)["result"] == "stacked"
+    assert world.link(rival)["result"] == "rebase_required"
+    world.git("checkout", "rival")
+    world.git("rebase", "first")
+    world.git("push", "--force", "origin", "rival")
+    rival["commit"] = world.git("rev-parse", "HEAD")
+    world.pulls[1].update(sha=rival["commit"], base="first")
+    result = world.link(rival)
+    assert result["result"] == "stacked"
+
+    test_spec = importlib.util.spec_from_file_location("bj3_hook_tests", SCRIPTS / "tests/test_task_close.py")
+    tests = importlib.util.module_from_spec(test_spec)
+    test_spec.loader.exec_module(tests)
+    hook_root = tmp_path / "hook"
+    hook_root.mkdir()
+    hook = tests.World(hook_root, monkeypatch)
+    hook.beads["phase.stack"] = world.bead
+    hook.beads[hook.values["sanity_bead"]]["metadata"]["sanity_round"] = 2
+    hook.values.update(stack_bead="phase.stack", branch="rival", commit=rival["commit"],
+                       pr_number=2, base="first", stacked=result)
+    hook.tasks[hook.values["sanity_task_id"]].append(hook.assignment(1))
+    hook.path.write_text(json.dumps(hook.values))
+    world.hook = hook
+    output, errors = io.StringIO(), io.StringIO()
+    with redirect_stdout(output), redirect_stderr(errors):
+        code = tests.hook.main(["--role", "sanity", "--vars", str(hook.path)], runner=world, clock=world.clock)
+    assert code == 0, errors.getvalue()
+    outcome = json.loads(output.getvalue())
+    assert "ok" in outcome
+    sanity = hook.beads[hook.values["sanity_bead"]]
+    assert sanity["close_reason"] == "PASS at " + rival["commit"]
+    assert sanity["metadata"]["sanity_round"] == 2
+    assert any(command[:4] == ["atm", "task", "close", hook.values["dev_task_id"]] and actor == "phase-lead"
+               for command, actor in hook.writes)
+    qa = next(message for message in hook.messages if message["type"] == "qa-task")
+    assert (qa["sender"], qa["recipient"], qa["values"]["base"]) == ("phase-lead", "quality", "first")

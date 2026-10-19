@@ -79,6 +79,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/sanity-merge
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
+    - skills/atm-bd-orchestration/scripts/sanity-stack-link
     - skills/atm-bd-orchestration/scripts/stack_top.py
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dev-ready.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dirty-tree.json
@@ -104,6 +105,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/jev_receipts.py
     - skills/atm-bd-orchestration/scripts/tests/rendering.py
     - skills/atm-bd-orchestration/scripts/tests/subprocess_helpers.py
+    - skills/atm-bd-orchestration/scripts/tests/test_agent_prompts.py
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
     - skills/atm-bd-orchestration/scripts/tests/test_atm_hook_doctor.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
@@ -120,6 +122,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_run_history.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_split.py
+    - skills/atm-bd-orchestration/scripts/tests/test_sanity_stack.py
     - skills/atm-bd-orchestration/scripts/tests/test_task_close.py
     - skills/atm-bd-orchestration/scripts/tests/test_templates.py
     - skills/atm-bd-orchestration/scripts/tests/test_transitions.py
@@ -221,6 +224,7 @@ artifacts:
     - agents/ceremony-qa.md
     - agents/dev-sanity.md
     - agents/parallax.md
+    - agents/sanity-stack.md
     - agents/sc-sanity-jev.md
     - agents/sc-sanity-llm.md
 # ARTIFACTS-END

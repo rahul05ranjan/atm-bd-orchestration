@@ -574,13 +574,12 @@ class DevAssignmentTests(unittest.TestCase):
         self.assertIn("change = git diff <baseRefOid>...<headRefOid> of each layer PR 250 262 (gh pr view <n> --json baseRefOid,headRefOid).", layered.stdout)
         self.assertNotIn(f"git diff origin/{qa['base']}", layered.stdout)
 
-    def test_sanity_reads_the_stack_from_githubs_stacks_api(self):
-        for text in ((ROOT.parents[1] / "agents/dev-sanity.md").read_text(),):
-            with self.subTest(text=text[:40]):
-                self.assertIn("gh api 'repos/{owner}/{repo}/stacks' --paginate --jq '.[]'`", text)
-                self.assertIn("never local `gh stack` tracking", text)
-                self.assertNotIn("gh_stack_view.py", text)
-                self.assertNotIn("`gh stack view --json` in the", text)
+    def test_sanity_links_the_stack_on_pass(self):
+        text = (ROOT.parents[1] / "agents/dev-sanity.md").read_text()
+        self.assertIn("sanity-stack-link --input <file>", text)
+        self.assertIn("On `stacked`", text)
+        self.assertIn("only then run `atm-task-close.py", text)
+        self.assertNotIn("SANITY.NOT_STACKED", text)
 
     def test_completion_preserves_stack_evidence_without_requiring_link_or_landing(self):
         for name in ("dev-complete.md.j2", "fix-complete.md.j2"):
