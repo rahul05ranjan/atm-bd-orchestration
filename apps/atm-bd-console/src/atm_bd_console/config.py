@@ -40,7 +40,7 @@ def _github_repo(origin: str) -> str | None:
     return f"{owner}/{name}"
 
 
-def _code_repository(root: Path, checkout: str | None) -> Result[tuple[str, str]]:
+def code_repository(root: Path, checkout: str | None) -> Result[tuple[str, str]]:
     """Resolve the optional code checkout and its explicit GitHub repository identity."""
     try:
         code_root = (root / checkout).resolve() if checkout is not None else root.resolve()
@@ -164,7 +164,7 @@ def load_config(
     phase_settings = phase_file(str(root), phase)
     if isinstance(phase_settings, Err):
         return phase_settings
-    code_repo = _code_repository(root, phase_settings.value.code_checkout)
+    code_repo = code_repository(root, phase_settings.value.code_checkout)
     if isinstance(code_repo, Err):
         return code_repo
     state_dir = state_directory(root, f"atm-phase-{phase}")

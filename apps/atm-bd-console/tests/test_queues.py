@@ -9,6 +9,7 @@ import pytest
 import sc_compose
 
 from atm_bd_console import queues
+from atm_bd_console import config
 from atm_bd_console.command import Output
 from atm_bd_console.result import CommandFailed, Err, Ok
 
@@ -228,16 +229,96 @@ def test_phase_uses_console_phase_file_reader(monkeypatch, tmp_path: Path):
     phase_path = tmp_path / ".atm-bd" / "phase-bj.toml"
     phase_path.parent.mkdir(parents=True, exist_ok=True)
     phase_path.write_text('plan = "docs/plans/phase-bj.jsonl"\nroot = "atm-phase-bj"\nintegration_branch = "integrate/phase-bj"\ncode_checkout = "../product"\n')
-    monkeypatch.setattr(queues.atm_bd, "phase_file", lambda repo, phase: calls.append((repo, phase)) or Ok(
-        SimpleNamespace(root_id=ROOT, integration_branch="integrate/phase-bj")))
+    code_root = tmp_path / "../product"
+    def validate(root, checkout):
+        calls.append((str(root), checkout))
+        return Ok((str(code_root.resolve()), "owner/repo"))
+    monkeypatch.setattr(config, "code_repository", validate)
+    monkeypatch.setattr(queues.atm_bd, "phase_file", lambda repo, phase: Ok(
+        SimpleNamespace(root_id=ROOT, code_checkout="../product")))
 
     args = SimpleNamespace(phase="bj", root=None, stack=False)
     result = queues.build(args, tmp_path, now=NOW, runner=run)
 
-    assert calls == [(str(tmp_path), "bj")]
+    assert calls == [(str(tmp_path), "../product")]
     assert result["root"] == ROOT
     assert result["integration_branch"] == "integrate/phase-bj"
     assert queues._resolve(args, tmp_path)[2] == (tmp_path / "../product").resolve()
+
+
+def test_phase_rejects_non_git_code_checkout_before_running_gh(monkeypatch, tmp_path: Path, capsys):
+    (tmp_path / ".atm-bd").mkdir()
+    (tmp_path / ".atm-bd" / "phase-bj.toml").write_text('integration_branch = "integrate/phase-bj"\n')
+    calls = []
+    def run(argv, fix, *, cwd=None, **kwargs):
+        calls.append((list(argv), cwd))
+        if tuple(argv) == ("git", "rev-parse", "--show-toplevel"):
+            return Err(CommandFailed("command_failed", tuple(argv), 128, "not a git repository", fix))
+        raise AssertionError(f"unexpected validation command: {argv}")
+    monkeypatch.setattr(config.command, "run", run)
+    monkeypatch.setattr(queues.atm_bd, "phase_file", lambda repo, phase: Ok(
+        SimpleNamespace(root_id=ROOT, code_checkout="../not-a-repo")))
+    args = SimpleNamespace(phase="bj", root=None, stack=True, json=False, all=False, min_age=10, state_file=None)
+
+    assert queues.main(args, repo_root=tmp_path, runner=run, now=NOW) == 2
+    captured = capsys.readouterr()
+    assert "config_invalid: set code_checkout to that repository's primary checkout" in captured.err
+    assert calls == [(["git", "rev-parse", "--show-toplevel"], (tmp_path / "../not-a-repo").resolve())]
+    assert not any(argv[0] == "gh" for argv, _ in calls)
+
+
+def test_phase_rejects_code_checkout_subdirectory_with_primary_checkout_hint(monkeypatch, tmp_path: Path, capsys):
+    (tmp_path / ".atm-bd").mkdir()
+    (tmp_path / ".atm-bd" / "phase-bj.toml").write_text('integration_branch = "integrate/phase-bj"\n')
+    checkout = (tmp_path / "../checkout").resolve()
+    subdirectory = checkout / "subdir"
+    calls = []
+    def run(argv, fix, *, cwd=None, **kwargs):
+        calls.append((list(argv), cwd))
+        if tuple(argv) == ("git", "rev-parse", "--show-toplevel"):
+            return Ok(Output(0, f"{checkout}\n"))
+        raise AssertionError(f"unexpected validation command: {argv}")
+    monkeypatch.setattr(config.command, "run", run)
+    monkeypatch.setattr(queues.atm_bd, "phase_file", lambda repo, phase: Ok(
+        SimpleNamespace(root_id=ROOT, code_checkout="../checkout/subdir")))
+    args = SimpleNamespace(phase="bj", root=None, stack=True, json=False, all=False, min_age=10, state_file=None)
+
+    assert queues.main(args, repo_root=tmp_path, runner=run, now=NOW) == 2
+    captured = capsys.readouterr()
+    assert f"use the primary checkout at {checkout}" in captured.err
+    assert calls == [(["git", "rev-parse", "--show-toplevel"], subdirectory)]
+
+
+def test_phase_stack_check_uses_valid_sibling_checkout(monkeypatch, tmp_path: Path):
+    (tmp_path / ".atm-bd").mkdir()
+    (tmp_path / ".atm-bd" / "phase-bj.toml").write_text('integration_branch = "integrate/phase-bj"\n')
+    code_root = (tmp_path / "../code-checkout").resolve()
+    validation_calls = []
+    source_runner, source_calls = fixed_runner()
+    def run(argv, fix, *, cwd=None, **kwargs):
+        validation_calls.append((list(argv), cwd))
+        if tuple(argv) == ("git", "rev-parse", "--show-toplevel"):
+            return Ok(Output(0, f"{code_root}\n"))
+        if tuple(argv) == ("git", "remote", "get-url", "origin"):
+            return Ok(Output(0, "https://github.com/owner/repo.git\n"))
+        if tuple(argv[:2]) == ("gh", "api"):
+            return Ok(Output(0, "[]"))
+        if tuple(argv) == ("git", "worktree", "list", "--porcelain"):
+            return Ok(Output(0, f"worktree {code_root / 'integrate'}\nbranch refs/heads/integrate/phase-bj\n"))
+        if tuple(argv) == ("gh", "stack", "view", "--json"):
+            return Ok(Output(0, json.dumps({"trunk": "integrate/phase-bj", "branches": []})))
+        return source_runner(list(argv), fix, cwd=cwd, **kwargs)
+    monkeypatch.setattr(config.command, "run", run)
+    monkeypatch.setattr(queues.atm_bd, "phase_file", lambda repo, phase: Ok(
+        SimpleNamespace(root_id=ROOT, code_checkout="../code-checkout")))
+    args = SimpleNamespace(phase="bj", root=None, stack=True)
+
+    report = queues.build(args, tmp_path, now=NOW, runner=run)
+
+    assert report["integration_branch"] == "integrate/phase-bj"
+    assert (["gh", "api", "--paginate", "--slurp", "repos/{owner}/{repo}/stacks?per_page=100"], code_root) in validation_calls
+    assert (["git", "worktree", "list", "--porcelain"], code_root) in validation_calls
+    assert ("git", "rev-parse", "--show-toplevel") in [tuple(argv) for argv, _ in validation_calls]
 
 
 def test_stack_queues_use_the_code_checkout_and_report_stack_problems():

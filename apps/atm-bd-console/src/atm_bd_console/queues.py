@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import atm_bd, command
+from . import atm_bd, command, config
 from .result import CommandFailed, Err, Timeout
 
 SCHEMA = "atm-bd-orchestration/bead-queues/v1"
@@ -116,14 +116,16 @@ def _resolve(args, repo_root: Path) -> tuple[str, str | None, Path]:
         result = atm_bd.phase_file(str(repo_root), args.phase)
         if isinstance(result, Err):
             raise QueueFailure(f"atm-bd queues --phase {args.phase}: {result.error.kind}: {result.error.fix}")
+        code_repo = config.code_repository(repo_root, result.value.code_checkout)
+        if isinstance(code_repo, Err):
+            error = code_repo.error
+            raise QueueFailure(f"atm-bd queues --phase {args.phase}: {error.kind}: {error.fix}")
         phase_path = repo_root / ".atm-bd" / f"phase-{args.phase}.toml"
         try:
-            values = tomllib.loads(phase_path.read_text(encoding="utf-8"))
+            integration_branch = tomllib.loads(phase_path.read_text(encoding="utf-8")).get("integration_branch")
         except (OSError, tomllib.TOMLDecodeError) as error:
             raise QueueFailure(f"{phase_path}: {error}: repair the phase file") from error
-        code_checkout = values.get("code_checkout")
-        code_root = (repo_root / code_checkout).resolve() if isinstance(code_checkout, str) and code_checkout else repo_root
-        return result.value.root_id, values.get("integration_branch"), code_root
+        return result.value.root_id, integration_branch, Path(code_repo.value[0])
     root = args.root
     phase = root.rsplit("-phase-", 1)[-1]
     if not phase or phase == root:
