@@ -56,6 +56,20 @@ RECEIPT = jev_reply(1)["data"]["jev"]
 
 
 class SanityHistory(unittest.TestCase):
+    def test_non_git_cwd_reports_clean_failure(self):
+        values = {"sprint": "bj-4", "run_id": "x", "reviewer": "sanity-llm", "commit": "a" * 40,
+                  "started_at": "2026-10-02T00:00:00Z", "completed_at": "2026-10-02T00:01:00Z",
+                  "verdict": "PASS", "findings_count": 0}
+        vars_path = self.root / "vars.json"
+        vars_path.write_text(json.dumps(values))
+        args = ["sanity-run-history", "--vars", str(vars_path), "--task", "task", "--bead", "bead",
+                "--pr-number", "1", "--iteration", "1", "--final-verdict", "PASS"]
+        for error in (OSError("git unavailable"), subprocess.CalledProcessError(128, ["git"])):
+            with self.subTest(error=error), patch.object(sys, "argv", args), patch.object(HISTORY, "bead_data", return_value={}), \
+                    patch.object(HISTORY, "primary_root", side_effect=error), self.assertRaises(SystemExit) as raised:
+                HISTORY.main()
+            self.assertIn("sanity-run-history: cannot locate sanity ledger", str(raised.exception))
+
     def test_shared_elapsed_validator_and_single_bead_read(self):
         for value in (0, 1.25):
             self.assertTrue(HISTORY.valid_elapsed_s(value))

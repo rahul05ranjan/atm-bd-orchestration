@@ -11,10 +11,10 @@ def valid_elapsed_s(value: object) -> bool:
     return type(value) in (int, float) and math.isfinite(value) and value >= 0
 
 
-def primary_root() -> Path:
-    result = subprocess.run(
+def primary_root(cwd: str | Path | None = None, *, run=subprocess.run) -> Path:
+    result = run(
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, cwd=cwd,
     )
     return Path(result.stdout.strip()).parent
 

@@ -130,7 +130,7 @@ class SanityMerge(unittest.TestCase):
         out = self.merge(results, *args)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(json.loads(out.stdout)["reviewer_results"], results)
-        for value in (-1, True, "4.2"):
+        for value in (-1, float("nan"), True, "4.2"):
             bad = [{**self.result(1), "elapsed_s": value}, self.result(2)]
             self.assertNotEqual(self.merge(bad, *args).returncode, 0)
 

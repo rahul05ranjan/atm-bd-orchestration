@@ -32,6 +32,7 @@ from .enums import SprintState
 from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
+from .runner import StepResult
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn
@@ -291,6 +292,7 @@ class ConsoleApp(App[int]):
                 yield Static(id="sanity-list")
                 yield Static(id="sanity-errors")
             with TabPane("Quality", id="quality"):
+                yield Static(id="quality-error")
                 yield OptionList(id="quality-runs")
                 yield FindingsMarkdown(id="quality-findings")
             with TabPane("Diagnostics", id="diagnostics"):
@@ -408,8 +410,8 @@ class ConsoleApp(App[int]):
             step_result = self.step(self.config, self.state, force_github)
             snapshot, state = step_result
             self.state = state
-            run_data = getattr(step_result, "run_data", None)
-            runs_error = getattr(step_result, "runs_error", None)
+            run_data = step_result.run_data
+            runs_error = step_result.runs_error
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
         finally:
@@ -575,6 +577,9 @@ class ConsoleApp(App[int]):
                 sanity.append(f"\nUnable to load runs: {self.runs_error}", style="red")
             self.query_one("#sanity-list", Static).update(sanity)
             self.query_one("#sanity-errors", Static).update(errors)
+            quality_error = self.query_one("#quality-error", Static)
+            quality_error.update(Text(f"Unable to load runs: {self.runs_error}", style="red") if self.runs_error else "")
+            quality_error.display = bool(self.runs_error)
             quality = self.query_one("#quality-runs", OptionList)
             highlighted = quality.highlighted
             quality.clear_options()
@@ -607,7 +612,7 @@ class ConsoleApp(App[int]):
             f"Build: {identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
-RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]
+RunnerStep = Callable[[Config, State, bool, StateStore], StepResult]
 
 
 def run(config: Config, step: StepFn | None, state: State, startup_error: Error | None = None, *, runner_step: RunnerStep | None = None) -> int:

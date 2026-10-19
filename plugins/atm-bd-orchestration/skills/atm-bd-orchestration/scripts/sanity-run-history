@@ -195,7 +195,10 @@ def main() -> None:
         "duration": f"{elapsed // 60}m{elapsed % 60:02d}s",
     }
     record = render_record(record)
-    log_path = ledger_path(primary_root(), phase)
+    try:
+        log_path = ledger_path(primary_root(), phase)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        fail(f"cannot locate sanity ledger: {exc}")
     append_record(log_path, record)
     print(log_path)
 

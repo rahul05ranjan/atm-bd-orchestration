@@ -27,6 +27,8 @@ from contract_samples import (
 )
 
 from atm_bd_console import log, runner
+from atm_bd_console.beads_source import closed_phase_rows, open_rows
+from atm_bd_console.command import Output
 from atm_bd_console.enums import QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
@@ -141,6 +143,34 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     monkeypatch.setattr(runner.github_source, "open_prs", github)
     return Store(), calls, events, inputs
+
+
+def test_tick_reports_open_read_failure_without_collecting_runs(monkeypatch, github_runtime):
+    store, _, _, _ = github_runtime
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.ledger_source, "collect", lambda *_: pytest.fail("must not collect incomplete rows"))
+    result = runner.step(CONFIG, RUNNING_STATE, False, store)
+    assert result.run_data is None
+    assert result.runs_error == str(TIMEOUT)
+
+
+def test_tick_owns_exactly_one_open_and_one_closed_phase_list(monkeypatch, github_runtime):
+    store, _, _, _ = github_runtime
+    calls = []
+
+    def run(argv, _fix, **_kwargs):
+        calls.append(argv)
+        return Ok(Output(0, "[]"))
+
+    monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
+    monkeypatch.setattr(runner.beads_source, "closed_phase_rows", closed_phase_rows)
+    monkeypatch.setattr(runner.beads_source.command, "run", run)
+    monkeypatch.setattr(runner.ledger_source, "collect", lambda *_: ([], [], []))
+    result = runner.step(CONFIG, RUNNING_STATE, False, store)
+    assert result.runs_error is None
+    assert calls == [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"],
+                     ["bd", "list", "-l", f"phase-{CONFIG.phase}", "--status", "closed", "-n", "0", "--json"]]
+    assert all("--all" not in argv for argv in calls)
 
 
 def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> None:

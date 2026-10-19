@@ -13,11 +13,23 @@ from .enums import MergeState, SprintState
 from .log import TickLog, create_console_logger, error_message
 from .result import Err, NotFound, Ok
 from .state import StateStore, load_merges, load_prs, load_snapshot
-from .types import Action, ActionLine, Config, GhStatus, Inputs, Merge, MergeFile, Metrics, PrsFile, Snapshot, State
+from .types import (
+    Action,
+    ActionLine,
+    Config,
+    GhStatus,
+    Inputs,
+    Merge,
+    MergeFile,
+    Metrics,
+    PrsFile,
+    Snapshot,
+    State,
+)
 
 
 class StepResult(tuple[Snapshot, State]):
-    """A two-value compatible tick result with all actions reported this tick."""
+    """Two-value compatible tick result carrying actions and run-tab state."""
 
     reported: tuple[Action, ...]
     run_data: tuple[list, list, list[dict]] | None
@@ -245,13 +257,16 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     logger.result("phase", phase)
     run_data = None
     runs_error = None
+    # bd list excludes closed rows by default; this one separate, bounded-by-phase
+    # history read avoids --all while the tick's open read supplies live rows.
     closed_rows = logger.result("beads.closed_runs", beads_source.closed_phase_rows(config.phase, cwd=config.repo_root), phase=config.phase)
-    if isinstance(closed_rows, Err):
+    if isinstance(opened, Err):
+        runs_error = str(opened.error)
+    elif isinstance(closed_rows, Err):
         runs_error = str(closed_rows.error)
     else:
         try:
-            run_data = ledger_source.collect(config.repo_root, config.phase,
-                                             opened.value.rows if isinstance(opened, Ok) else (), closed_rows.value)
+            run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, closed_rows.value)
         except (OSError, ValueError, RuntimeError) as run_error:
             runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)

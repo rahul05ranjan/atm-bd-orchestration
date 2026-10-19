@@ -764,7 +764,7 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
     def runner_step(current, current_state, force, store):
         assert store is acquired.value and store._lock_file is not None
         seen.extend((current, current_state, force, store))
-        return SNAPSHOT, current_state
+        return runner.StepResult(SNAPSHOT, current_state)
 
     monkeypatch.setattr(app, "ConsoleApp", FakeApp)
     monkeypatch.setattr(app, "acquire_lock", lambda *_: acquired)

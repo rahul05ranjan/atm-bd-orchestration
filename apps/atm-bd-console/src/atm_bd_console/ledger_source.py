@@ -1,41 +1,24 @@
 """I/O adapter for the run ledger and QA/finding rows consumed by the tabs."""
 from __future__ import annotations
 
-import importlib.util
 import json
-from pathlib import Path
 from typing import Any
 
-from . import beads_source, runs
+from . import command, runs
 from .result import Err
-
-
-def _ledger_path_helper(repo_root: str) -> Any:
-    root = Path(repo_root)
-    candidates = (
-        root / ".claude/skills/atm-beads/scripts/sanity_shared.py",
-        root / "plugins/atm-bd-orchestration/skills/atm-beads/scripts/sanity_shared.py",
-        Path(__file__).resolve().parents[4] / "plugins/atm-bd-orchestration/skills/atm-beads/scripts/sanity_shared.py",
-        Path(__file__).resolve().parent / "_skills/skills/atm-beads/scripts/sanity_shared.py",
-    )
-    path = next((candidate for candidate in candidates if candidate.is_file()), None)
-    if path is None:
-        raise RuntimeError("sanity ledger path helper is not installed")
-    spec = importlib.util.spec_from_file_location("atm_bd_sanity_shared", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load sanity ledger path helper")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from .skill_loader import load_skill
 
 
 def read_ledger(repo_root: str, phase: str) -> list[dict[str, Any]]:
-    shared = _ledger_path_helper(repo_root)
-    common = beads_source.command.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                      "locate sanity ledger", cwd=repo_root)
-    if isinstance(common, Err):
-        raise RuntimeError(f"cannot locate sanity ledger: {common.error}")  # noqa: TRY004
-    root = Path(common.value.stdout.strip()).parent
+    shared, _ = load_skill(repo_root, "atm-beads/scripts/sanity_shared.py")
+
+    def run_git(argv, **kwargs):
+        result = command.run(argv, "locate sanity ledger", cwd=kwargs.get("cwd"))
+        if isinstance(result, Err):
+            raise RuntimeError(f"cannot locate sanity ledger: {result.error}")  # noqa: TRY004
+        return result.value
+
+    root = shared.primary_root(repo_root, run=run_git)
     path = shared.ledger_path(root, phase)
     if not path.exists():
         return []

@@ -59,13 +59,8 @@ def show(ids: tuple[str, ...]) -> Result[tuple[Bead, ...]]:
     return Ok(()) if not ids else _run(["bd", "show", *ids, "--json"])
 
 
-def open_beads(label: str) -> Result[tuple[Bead, ...]]:
-    opened = open_rows(label)
-    return opened if isinstance(opened, Err) else Ok(opened.value.beads)
-
-
 def open_rows(label: str) -> Result[BeadRows]:
-    raw = _raw(["bd", "list", "-l", label, "--json"])
+    raw = _raw(["bd", "list", "-l", label, "-n", "0", "--json"])
     if isinstance(raw, Err):
         return raw
     try:
@@ -76,26 +71,6 @@ def open_rows(label: str) -> Result[BeadRows]:
 
 def ready(label: str) -> Result[tuple[Bead, ...]]:
     return _run(["bd", "ready", "-l", label, "--json"])
-
-
-def run_beads(phase: str, stage: str, *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
-    """Return unprojected QA/finding beads, including their dependency edges."""
-    rows: dict[str, dict[str, Any]] = {}
-    # Default bd list excludes closed beads; explicit status includes history without --all.
-    for status_args in ([], ["--status", "closed"]):
-        value = _raw(["bd", "list", "-l", f"phase-{phase},stage:{stage}", *status_args, "-n", "0", "--json"], cwd=cwd)
-        if isinstance(value, Err):
-            return value
-        if not all(isinstance(row.get("id"), str) for row in value.value):
-            return Err(ParseFailed("parse_failed", "bd", "expected bead objects with ids", "repair bd JSON"))
-        rows.update({row["id"]: row for row in value.value})
-    return Ok(list(rows.values()))
-
-
-def raw_show(ids: tuple[str, ...], *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
-    if not ids:
-        return Ok([])
-    return _raw(["bd", "show", *ids, "--json"], cwd=cwd)
 
 
 def closed_phase_rows(phase: str, *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:

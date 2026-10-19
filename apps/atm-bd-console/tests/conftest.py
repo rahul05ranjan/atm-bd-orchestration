@@ -34,7 +34,7 @@ class FakeStep:
         self.calls: list[bool] = []
         self.run_data = run_data
 
-    def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+    def __call__(self, config: Config, state: State, force_github: bool) -> StepResult:
         self.calls.append(force_github)
         return StepResult(self.snapshot, state, run_data=self.run_data)
 

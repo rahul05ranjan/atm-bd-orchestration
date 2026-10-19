@@ -290,7 +290,7 @@ def _read(fake_bin) -> tuple[tuple[Bead, ...], tuple[Bead, ...], tuple[Bead, ...
     """One tick's bead reads: open and ready by label, then one batched show of the plan-derived closed ids."""
     _replay_bd(fake_bin)
     file = _ok(PLAN_FILE)
-    open_beads = _ok(beads_source.open_beads(file.label))
+    open_beads = _ok(beads_source.open_rows(file.label)).beads
     ready = _ok(beads_source.ready(file.label))
     shown = _ok(beads_source.show(closed_show_ids(file, open_beads + ready)))
     return open_beads, ready, shown
@@ -308,7 +308,7 @@ def test_closed_ids_are_derived_from_the_plan_and_shown_in_one_batched_call(fake
     open_beads, ready, shown = _read(fake_bin)
     assert closed_show_ids(_ok(PLAN_FILE), open_beads + ready) == CLOSED_IDS
     assert fake_bin.argv() == [
-        ("bd", "list", "-l", "phase-bh", "--json"),
+        ("bd", "list", "-l", "phase-bh", "-n", "0", "--json"),
         ("bd", "ready", "-l", "phase-bh", "--json"),
         ("bd", "show", *CLOSED_IDS, "--json"),
     ]

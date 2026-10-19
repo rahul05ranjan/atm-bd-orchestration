@@ -1,32 +1,18 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
 import pytest
 import sc_compose
 
-from atm_bd_console import beads_source, command, findings_renderer, ledger_source, runs
+from atm_bd_console import beads_source, command, findings_renderer, ledger_source, runs, skill_loader
 from atm_bd_console.enums import QaState
 from atm_bd_console.result import Ok
 
 ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "plugins/atm-bd-orchestration/skills/atm-bd-orchestration"
-
-
-def test_run_beads_reads_default_and_explicit_closed_without_all(monkeypatch) -> None:
-    calls = []
-
-    def run(argv, _fix, **_kwargs):
-        calls.append(argv)
-        return Ok(command.Output(0, json.dumps([{"id": "same"}, {"id": "closed", "status": "closed"}]
-                                               if "--status" in argv else [{"id": "same", "status": "open"}])))
-
-    monkeypatch.setattr(beads_source.command, "run", run)
-    result = beads_source.run_beads("bj", "qa")
-    assert isinstance(result, Ok) and [row["id"] for row in result.value] == ["same", "closed"]
-    assert calls == [["bd", "list", "-l", "phase-bj,stage:qa", "-n", "0", "--json"],
-                     ["bd", "list", "-l", "phase-bj,stage:qa", "--status", "closed", "-n", "0", "--json"]]
 
 
 def test_closed_phase_rows_uses_the_shared_bd_reader_once(monkeypatch) -> None:
@@ -57,8 +43,31 @@ def test_run_data_combines_tick_beads_without_mutating_bead_rows(monkeypatch) ->
     assert "checked_bead_data" not in qa
 
 
+def test_ledger_uses_shared_primary_root_and_cached_skill_loader(monkeypatch, tmp_path) -> None:
+    calls = []
+    ledger = tmp_path / ".sc/sanity-log/phase-bj.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text('{"run_id":"one"}\n')
+
+    def run(argv, _fix, **kwargs):
+        calls.append((argv, kwargs.get("cwd")))
+        return Ok(command.Output(0, str(tmp_path / ".git")))
+
+    monkeypatch.setattr(ledger_source.command, "run", run)
+    assert ledger_source.read_ledger(str(tmp_path), "bj") == [{"run_id": "one"}]
+    module, _ = skill_loader.load_skill(str(tmp_path), "atm-beads/scripts/sanity_shared.py")
+    assert skill_loader.load_skill(str(tmp_path), "atm-beads/scripts/sanity_shared.py")[0] is module
+    assert calls == [(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], str(tmp_path))]
+
+
 def test_runs_module_keeps_adapter_io_out_of_pure_transformers() -> None:
-    assert not {"importlib", "json", "pathlib", "subprocess"} & runs.__dict__.keys()
+    tree = ast.parse(Path(runs.__file__).read_text(encoding="utf-8"))
+    allowed = {"re", "dataclasses", "datetime", "typing", "enums", "model", "__future__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] in allowed for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module and node.module.split(".")[0] in allowed
 
 
 def test_sanity_merges_reviewers_newest_first_and_accepts_old_rows() -> None:
