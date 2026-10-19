@@ -26,6 +26,8 @@ ROLES = ("dev", "fix", "sanity", "qa")
 COMMAND_TIMEOUT = 30
 ASSIGNMENT_EVENTS = frozenset(("assigned", "reassigned", "reopened"))
 TERMINAL_STATES = frozenset(("complete",))
+COMPLETED = "completed"
+REFUSED = "refused"
 
 
 class CloseError(RuntimeError):
@@ -137,8 +139,14 @@ def sanity_round_key(metadata, bead):
     return key
 
 
-def latest_assignment(events):
-    return next((event for event in reversed(events) if event.get("event") in ASSIGNMENT_EVENTS), None)
+def assignment_details(events, task):
+    for index in range(len(events) - 1, -1, -1):
+        assignment = events[index]
+        if assignment.get("event") in ASSIGNMENT_EVENTS:
+            assignment_id = assignment.get("message_id") or assignment["seq"]
+            round_number = 1 + sum(event.get("event") == COMPLETED for event in events[:index])
+            return assignment, assignment_id, round_number
+    raise CloseError("REPLAY.CONFLICT", f"{task} has no assignment event", "Assign the tracked task before closing it.")
 
 
 def validate_command_json(argv, data):
@@ -302,12 +310,7 @@ class Hook:
         self.records = {bead: self.read_bead(bead) for bead in sorted(beads)}
         self.task_history = {task: self.events(task) for task in sorted(tasks)}
         events = self.task_history[self.task]
-        assignment = latest_assignment(events)
-        if assignment is None:
-            raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
-        self.assignment_id = assignment.get("message_id") or assignment["seq"]
-        index = max(index for index, event in enumerate(events) if event.get("event") in ASSIGNMENT_EVENTS)
-        self.assignment_round = 1 + sum(event.get("event") == "completed" for event in events[:index])
+        _, self.assignment_id, self.assignment_round = assignment_details(events, self.task)
         return self.check_replay()
 
     def update(self, bead, **fields):
@@ -339,7 +342,7 @@ class Hook:
         metadata = record.get("metadata") or {}
         events = self.task_history[self.task]
         latest = events[-1] if events else {}
-        if self.role == "sanity" and latest.get("event") == "refused":
+        if self.role == "sanity" and latest.get("event") == REFUSED:
             if self.values["verdict"] == "CANNOT_RUN":
                 return True
             raise CloseError("REPLAY.CONFLICT", "sanity task was refused", "Request a new same-id assignment before PASS or FAIL.")
@@ -359,10 +362,8 @@ class Hook:
         return False
 
     def assignment_is_current(self):
-        assignment = latest_assignment(self.events(self.task))
-        if assignment is None:
-            raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
-        return (assignment.get("message_id") or assignment["seq"]) == self.assignment_id
+        _, assignment_id, _ = assignment_details(self.events(self.task), self.task)
+        return assignment_id == self.assignment_id
 
     def stack_top(self):
         self.last_json_argv = ["bd", "show", self.values["stack_bead"], "--json"]
@@ -446,7 +447,7 @@ class Hook:
                       "--vars", str(path or self.path)], lead=True)
         self.assigned.append(bead)
 
-    def close_task(self, task, template=None, *, outcome="completed", lead=False):
+    def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False):
         events = self.task_history[task]
         latest = events[-1] if events else {}
         if latest.get("to_state") not in TERMINAL_STATES:
@@ -523,7 +524,7 @@ class Hook:
             record = self.bead(bead)
             if record.get("status") != "open" or record.get("assignee"):
                 self.update(bead, status="open", assignee="")
-            self.close_task(bead, "dev-sanity-complete.md.j2", outcome="refused")
+            self.close_task(bead, "dev-sanity-complete.md.j2", outcome=REFUSED)
             return
         self.render("dev-sanity-complete.md.j2")
         if verdict == "PASS":

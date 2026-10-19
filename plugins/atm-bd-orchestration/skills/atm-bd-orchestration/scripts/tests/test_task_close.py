@@ -177,6 +177,24 @@ def world(tmp_path, monkeypatch):
     return World(tmp_path, monkeypatch)
 
 
+def test_assignment_details_uses_latest_assignment_and_prior_completions():
+    latest = {"event": "reopened", "seq": 4}
+    events = [{"event": "assigned", "message_id": "first", "seq": 1},
+              {"event": "completed"}, {"event": "reassigned", "message_id": "second", "seq": 3},
+              latest, {"event": "completed"}]
+    assert hook.assignment_details(events, "task") == (latest, 4, 2)
+    latest["message_id"] = "latest"
+    assert hook.assignment_details(events, "task") == (latest, "latest", 2)
+
+
+def test_assignment_details_requires_an_assignment():
+    with pytest.raises(hook.CloseError) as error:
+        hook.assignment_details([{"event": "completed"}], "missing-task")
+    assert error.value.code == "REPLAY.CONFLICT"
+    assert str(error.value) == "missing-task has no assignment event"
+    assert error.value.fix == "Assign the tracked task before closing it."
+
+
 @pytest.mark.parametrize("template", ["dev-template", "fix-assignment"])
 @pytest.mark.parametrize("layers,expected", [
     ([{"branch": "older", "head": "a" * 40}, {"branch": "ledger-top", "head": "b" * 40}], "ledger-top"),
