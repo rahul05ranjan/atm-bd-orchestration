@@ -105,7 +105,7 @@ def read_config(root, role, verdict):
             fix = f"Repair the readable UTF-8 YAML mapping in {path} at the location reported in the error."
         raise CloseError("CONFIG.INVALID", f"{path}: {error}",
                          fix) from error
-    fields = ["dev_sanity_member"] if role in ("dev", "fix") else ["qa_member"] if role == "sanity" and verdict == "PASS" else []
+    fields = ["dev_sanity_member"] if role in ("dev", "fix") else ["qa_member"] if role == "sanity" and verdict == "PASS" else ["team_lead_member"] if role == "sanity" and verdict == "FAIL" else []
     for field in fields:
         value = config.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -554,8 +554,10 @@ class Hook:
             if not self.assignment_is_current():
                 return
         if count > self.config["max_sanity_rounds"]:
-            message = f"SANITY.ROUND_CAP {bead} {values['commit']} assignment={self.assignment_id} undone=" + ",".join(str(item["number"]) for item in values["undone"])
-            self.run(["atm", "send", self.lead, message])
+            events = self.task_history[bead]
+            if not (events and events[-1].get("to_state") in TERMINAL_STATES):
+                message = f"SANITY.ROUND_CAP {bead} {values['commit']} assignment={self.assignment_id} undone=" + ",".join(str(item["number"]) for item in values["undone"])
+                self.run(["atm", "send", self.config["team_lead_member"], message])
             self.close_task(bead, "dev-sanity-complete.md.j2")
             return "SANITY.ROUND_CAP"
         checked = self.bead(values["checked_bead"])

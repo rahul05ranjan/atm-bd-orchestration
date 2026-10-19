@@ -94,7 +94,7 @@ def make_consumer(path: Path, installer, pkg_dir: Path = PLUGIN) -> Path:
             values[name] = ["req-qa", "arch-qa"]
         elif name not in installer.ROLE_KEYS:
             values[name] = f"test-{name}"
-    values["roles"] = {"dev-sanity": "quality-mgr", "quality-mgr": "quality-mgr"}
+    values["roles"] = {"dev-sanity": "quality-mgr", "quality-mgr": "quality-mgr", "lead": "team-lead"}
     import yaml
 
     (path / ".claude/agents/registry.yaml").write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")

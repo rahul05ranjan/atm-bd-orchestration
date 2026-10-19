@@ -29,7 +29,7 @@ class World:
         (root / ".atm.toml").write_text('[atm]\ndefault_team = "test-team"\n')
         config = root / hook.repo_config.RELATIVE_PATH
         config.parent.mkdir(parents=True)
-        config.write_text('bead_prefix: atm\ndev_sanity_member: sanity\nqa_member: quality\n')
+        config.write_text('bead_prefix: atm\ndev_sanity_member: sanity\nqa_member: quality\nteam_lead_member: team-lead\n')
         self.path = root / "dispatch.json"
         self.beads = {}
         for name in ("checked_bead", "sanity_bead", "qa_bead"):

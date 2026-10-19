@@ -350,8 +350,7 @@ def test_failure_cap_exceeds_limit_and_counts_distinct_assignments(world, config
             assert world.beads[checked]["status"] == "closed"
             assert world.beads[bead]["status"] == "in_progress"
     cap_messages = [message for message in world.messages if "SANITY.ROUND_CAP" in message["body"]]
-    assert len(cap_messages) == 1
-    assert cap_messages[0]["recipient"] == "phase-lead"
+    assert [(message["type"], message["recipient"]) for message in cap_messages] == [(None, "team-lead")]
 
 
 def test_sanity_fail_message_contains_exact_undone_deliverables(world):
@@ -558,15 +557,14 @@ def test_cannot_run_terminal_refusal_is_a_noop_until_new_assignment(world):
     assert "ok" in world.run("sanity", verdict="PASS")
 
 
-def test_round_cap_replay_may_repeat_notice_but_not_increment_counter(world):
+def test_round_cap_replay_sends_one_notice_and_does_not_increment_counter(world):
     bead = world.values["sanity_bead"]
     world.beads[bead]["metadata"]["sanity_round"] = 5
     world.beads[world.values["checked_bead"]]["status"] = "closed"
     result = world.run("sanity", verdict="FAIL", undone=[{"number": 7, "reason": "not implemented"}])
     assert result["ok"]["escalated"] == "SANITY.ROUND_CAP"
     assert world.run("sanity")["ok"]["escalated"] == "SANITY.ROUND_CAP"
-    assert len(world.messages) == 2
-    assert world.messages[0]["body"] == world.messages[1]["body"]
+    assert len(world.messages) == 1
     assert world.beads[bead]["metadata"]["sanity_round"] == 6
 
 
@@ -770,6 +768,17 @@ def test_d1_missing_repository_field_names_correction(world, field):
     assert error["code"] == "CONFIG.INVALID"
     assert field in error["message"] and field in error["fix"]
     assert str(path) in error["fix"]
+    assert world.calls == []
+
+
+def test_sanity_fail_without_team_lead_member_names_correction(world):
+    path = world.root / hook.repo_config.RELATIVE_PATH
+    values = hook.yaml.safe_load(path.read_text())
+    del values["team_lead_member"]
+    path.write_text(hook.yaml.safe_dump(values))
+    error = world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "missing"}])["err"]
+    assert error["code"] == "CONFIG.INVALID"
+    assert "team_lead_member" in error["message"] and "team_lead_member" in error["fix"]
     assert world.calls == []
 
 

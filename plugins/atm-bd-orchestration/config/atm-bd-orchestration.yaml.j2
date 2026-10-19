@@ -6,6 +6,7 @@ required_variables:
   - bead_prefix
   - dev_sanity_member
   - qa_member
+  - team_lead_member
   - worktree_base
   - test_command
   - lint_command
@@ -24,6 +25,7 @@ defaults:
 bead_prefix: {{ bead_prefix | tojson }}
 dev_sanity_member: {{ dev_sanity_member | tojson }}
 qa_member: {{ qa_member | tojson }}
+team_lead_member: {{ team_lead_member | tojson }}
 worktree_base: {{ worktree_base | tojson }}
 test_command: {{ test_command | tojson }}
 lint_command: {{ lint_command | tojson }}

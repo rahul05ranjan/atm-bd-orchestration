@@ -27,7 +27,7 @@ PKG = Path(__file__).resolve().parents[1]
 SC_COMPOSE = shutil.which("sc-compose") is not None
 REPO_STRINGS = ("sc-observability", "sc-obs", "obs-", "randlee/sc-", "/Users/randlee", "atm-core", "atm-dev")
 SPEC_VARIABLES = [
-    "bead_prefix", "dev_sanity_member", "qa_member", "worktree_base", "test_command",
+    "bead_prefix", "dev_sanity_member", "qa_member", "team_lead_member", "worktree_base", "test_command",
     "lint_command", "integration_branch_pattern", "plans_dir", "requirements_globs", "adr_globs",
     "policy_path", "reviewers_round1",
 ]
@@ -556,7 +556,7 @@ def test_fresh_install(tmp_path, capsys):
     config = yaml.safe_load((repo / install.CONFIG_OUT).read_text())
     assert list(config) == [*SPEC_VARIABLES, "max_sanity_rounds"]
     assert config["max_sanity_rounds"] == 5
-    assert config["qa_member"] == "quality-mgr" and "lead" not in config
+    assert config["qa_member"] == "quality-mgr" and config["team_lead_member"] == "my-lead" and "lead" not in config
     assert config["integration_branch_pattern"] == "integrate/phase-{phase}"
     assert config["requirements_globs"] == ["docs/requirements.md", "docs/**/requirements.md"]
     assert config["reviewers_round1"] == ["req-qa", "arch-qa"]
@@ -623,6 +623,15 @@ def test_missing_role_variable_names_the_roles_key(tmp_path, capsys):
     repo = make_repo(tmp_path)
     rc, err = run(repo, capsys=capsys)   # no roles.quality-mgr and no --set qa_member
     assert rc == 1 and "qa_member in .claude/agents/registry.yaml roles.quality-mgr" in err
+
+
+@needs_sc_compose
+def test_missing_roles_lead_names_team_lead_member(tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    registry = repo / ".claude/agents/registry.yaml"
+    registry.write_text(registry.read_text().replace("  lead: my-lead\n", ""))
+    rc, err = run(repo, *QA, capsys=capsys)
+    assert rc == 1 and "team_lead_member in .claude/agents/registry.yaml roles.lead" in err
 
 
 @needs_sc_compose

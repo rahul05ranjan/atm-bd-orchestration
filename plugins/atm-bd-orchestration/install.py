@@ -17,6 +17,7 @@ role members, which are read from `roles:`:
 
     dev_sanity_member  -> roles.dev-sanity
     qa_member          -> roles.quality-mgr
+    team_lead_member   -> roles.lead
 
 The template is rendered strictly with the sc-compose wheel into
 `<repo>/.claude/project/atm-bd-orchestration.yaml`; a missing variable is an
@@ -80,7 +81,7 @@ LIST_VARIABLES = frozenset({
     "reviewers_round1",
 })
 # Variables read from registry.yaml `roles:` and written back there.
-ROLE_KEYS = {"dev_sanity_member": "dev-sanity", "qa_member": "quality-mgr"}
+ROLE_KEYS = {"dev_sanity_member": "dev-sanity", "qa_member": "quality-mgr", "team_lead_member": "lead"}
 # Variables naming agents that must have .claude/agents/<name>.md. dev_sanity_member
 # is a team member running the dev-sanity directive and may have no agent file.
 AGENT_VARIABLES = ("qa_member", "reviewers_round1")
