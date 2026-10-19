@@ -15,12 +15,12 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
-        self._manifest_dir: Path | None = None
-        self._manifest_finalizer: weakref.finalize | None = None
+        self._build_dir: Path | None = None
+        self._build_finalizer: weakref.finalize | None = None
         try:
             self._initialize(version, build_data)
         except Exception:
-            self._cleanup_manifest()
+            self._cleanup_build_dir()
             raise
 
     def _initialize(self, version: str, build_data: dict[str, object]) -> None:
@@ -58,8 +58,7 @@ class CustomBuildHook(BuildHookInterface):
         major, minor, _patch = package_version.split(".", 2)
         identity = f"{major}.{minor}.{count}+g{revision}{'-dirty' if dirty else ''}"
         self._include_skills(package, root, build_data, package_version)
-        assert self._manifest_dir is not None
-        output = self._manifest_dir / "_build_identity.py"
+        output = self._managed_build_dir() / "_build_identity.py"
         output.write_text(f'IDENTITY = {identity!r}\nCOMMIT = {commit!r}\n')
         self._include_identity(output, build_data)
 
@@ -83,20 +82,24 @@ class CustomBuildHook(BuildHookInterface):
     def _include_manifest(self, package: Path, source: Path, build_data: dict[str, object], package_version: str) -> None:
         """Publish skill-manifest.json beside the bundled skills; it exists only in the built artifacts, never in git."""
         integrity = _load_integrity(package / "src" / "atm_bd_console" / "skill_integrity.py")
-        self._manifest_dir = Path(tempfile.mkdtemp(prefix="atm-bd-skill-manifest-"))
-        self._manifest_finalizer = weakref.finalize(self, shutil.rmtree, self._manifest_dir, ignore_errors=True)
-        output = self._manifest_dir / integrity.MANIFEST_NAME
+        output = self._managed_build_dir() / integrity.MANIFEST_NAME
         output.write_text(json.dumps(integrity.build_manifest(source, package_version), indent=2) + "\n", encoding="utf-8")
         build_data["force_include"][str(output)] = self._dest(integrity.MANIFEST_NAME)
 
-    def _cleanup_manifest(self) -> None:
-        if self._manifest_finalizer is not None:
-            self._manifest_finalizer()
-            self._manifest_finalizer = None
-        self._manifest_dir = None
+    def _managed_build_dir(self) -> Path:
+        if self._build_dir is None:
+            self._build_dir = Path(tempfile.mkdtemp(prefix="atm-bd-skill-manifest-"))
+            self._build_finalizer = weakref.finalize(self, shutil.rmtree, self._build_dir, ignore_errors=True)
+        return self._build_dir
+
+    def _cleanup_build_dir(self) -> None:
+        if self._build_finalizer is not None:
+            self._build_finalizer()
+            self._build_finalizer = None
+        self._build_dir = None
 
     def finalize(self, version: str, build_data: dict[str, object], artifact_path: str) -> None:
-        self._cleanup_manifest()
+        self._cleanup_build_dir()
 
 
 def _load_integrity(path: Path):

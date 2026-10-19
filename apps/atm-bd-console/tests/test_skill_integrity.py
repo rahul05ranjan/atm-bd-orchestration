@@ -474,24 +474,75 @@ def _archive_manifest(archive: Path) -> dict:
         return json.loads(source.extractfile(member).read())
 
 
-def test_failed_build_hook_cleans_manifest_and_generated_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def controlled_build_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     spec = importlib.util.spec_from_file_location("atm_bd_hatch_build", APP / "hatch_build.py")
     assert spec is not None and spec.loader is not None
     hatch_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hatch_build)
-    monkeypatch.setattr(hatch_build.tempfile, "tempdir", str(tmp_path))
+
+    root = tmp_path / "checkout"
+    package = root / "apps/atm-bd-console"
+    module_dir = package / "src/atm_bd_console"
+    module_dir.mkdir(parents=True)
+    shutil.copy2(APP / "pyproject.toml", package / "pyproject.toml")
+    shutil.copy2(APP / "src/atm_bd_console/skill_integrity.py", module_dir / "skill_integrity.py")
+    make_tree(root / "plugins/atm-bd-orchestration")
+    temporary = tmp_path / "managed"
+    temporary.mkdir()
+    monkeypatch.setattr(hatch_build.tempfile, "tempdir", str(temporary))
+    answers = {
+        ("rev-parse", "--show-toplevel"): str(root),
+        ("rev-parse", "--is-shallow-repository"): "false",
+        ("rev-parse", "--short", "HEAD"): COMMIT[:7],
+        ("rev-parse", "HEAD"): COMMIT,
+        ("rev-list", "--count", "HEAD"): "42",
+        ("status", "--porcelain", "--", ".", ":!.ok"): "",
+    }
+
+    def git_output(argv, **kwargs):
+        assert argv[:3] == ["git", "-C", root]
+        return answers[tuple(argv[3:])]
+
+    monkeypatch.setattr(hatch_build.subprocess, "check_output", git_output)
+    return hatch_build, package, temporary
+
+
+def test_failed_build_hook_cleans_manifest_and_generated_identity(controlled_build_hook) -> None:
+    hatch_build, package, temporary = controlled_build_hook
 
     def fail_after_hook_initialization() -> None:
-        hook = hatch_build.CustomBuildHook(str(APP), {}, {}, None, str(APP), "wheel")
-        hook.initialize(VERSION, {"force_include": {}})
+        hook = hatch_build.CustomBuildHook(str(package), {}, {}, None, str(package), "wheel")
+        build_data = {"force_include": {}}
+        hook.initialize(VERSION, build_data)
+        managed, = temporary.glob("atm-bd-skill-manifest-*")
+        identity, = (Path(source) for source, dest in build_data["force_include"].items()
+                     if dest == "atm_bd_console/_build_identity.py")
+        assert identity.parent == managed and identity.is_file()
+        assert COMMIT in identity.read_text()
+        assert (managed / "skill-manifest.json").is_file()
         raise RuntimeError("simulated artifact build failure")
 
     with pytest.raises(RuntimeError, match="simulated artifact build failure"):
         fail_after_hook_initialization()
     gc.collect()
 
-    assert list(tmp_path.glob("atm-bd-skill-manifest-*")) == []
-    assert not (APP / "src" / "atm_bd_console" / "_build_identity.py").exists()
+    assert list(temporary.glob("atm-bd-skill-manifest-*")) == []
+
+
+def test_build_identity_allocates_managed_dir_without_manifest_first(controlled_build_hook, monkeypatch) -> None:
+    hatch_build, package, temporary = controlled_build_hook
+    hook = hatch_build.CustomBuildHook(str(package), {}, {}, None, str(package), "wheel")
+    monkeypatch.setattr(hook, "_include_skills", lambda *args: None)
+    build_data = {"force_include": {}}
+    hook.initialize(VERSION, build_data)
+    managed, = temporary.glob("atm-bd-skill-manifest-*")
+    identity, = (Path(source) for source, dest in build_data["force_include"].items()
+                 if dest == "atm_bd_console/_build_identity.py")
+    assert identity.parent == managed and identity.is_file()
+    assert hook._managed_build_dir() == managed
+    hook.finalize(VERSION, build_data, "artifact")
+    assert list(temporary.glob("atm-bd-skill-manifest-*")) == []
 
 
 def _bundled(archive: Path) -> dict[str, bytes]:
