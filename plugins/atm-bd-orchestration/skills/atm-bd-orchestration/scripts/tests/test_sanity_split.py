@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import subprocess
@@ -16,6 +17,7 @@ import unittest
 import unittest.mock
 
 from rendering import render
+from subprocess_helpers import HANG_GUARD_SECONDS
 
 SCRIPTS = Path(__file__).parents[1]
 SCRIPT = SCRIPTS / "sanity-split"
@@ -75,6 +77,20 @@ def kill_group(pgid):
         pass
 
 
+def wait_process(proc, step):
+    try:
+        return proc.wait(timeout=HANG_GUARD_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise AssertionError(f"{step} timed out after {HANG_GUARD_SECONDS}s") from error
+
+
+def read_event(event, step):
+    ready, _, _ = select.select([event], [], [], HANG_GUARD_SECONDS)
+    if not ready:
+        raise AssertionError(f"{step} timed out after {HANG_GUARD_SECONDS}s")
+    return event.read(1)
+
+
 def stop_supervisor(proc):
     """Stop and reap a supervisor that the test still owns."""
     if proc.poll() is None:
@@ -82,7 +98,24 @@ def stop_supervisor(proc):
             os.killpg(proc.pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
-        proc.wait()
+        wait_process(proc, "stop supervisor")
+
+
+class WaitGuardTests(unittest.TestCase):
+    def test_process_timeout_names_step(self):
+        proc = unittest.mock.Mock()
+        proc.wait.side_effect = subprocess.TimeoutExpired("supervisor", HANG_GUARD_SECONDS)
+        with self.assertRaisesRegex(AssertionError, "lint exit .* timed out"):
+            wait_process(proc, "lint exit file")
+        proc.wait.assert_called_once_with(timeout=HANG_GUARD_SECONDS)
+
+    def test_event_timeout_names_step(self):
+        event = unittest.mock.Mock()
+        with unittest.mock.patch.object(select, "select", return_value=([], [], [])) as poll:
+            with self.assertRaisesRegex(AssertionError, "marker lint.pid timed out"):
+                read_event(event, "marker lint.pid")
+        poll.assert_called_once_with([event], [], [], HANG_GUARD_SECONDS)
+        event.read.assert_not_called()
 
 
 DESCRIPTION = """## Goal
@@ -177,7 +210,7 @@ class SanitySplit(unittest.TestCase):
                   lint=FAKE_LINT):
         for supervisor in self.supervisors.values():
             if supervisor.poll() is None:
-                supervisor.wait()
+                wait_process(supervisor, "previous supervisor before split")
         bead_file = self.root / "bead.json"
         bead_file.write_text(json.dumps(bead_json if bead_json is not None else bead()))
         argv = [str(SCRIPT), "--task", "{{ bead_prefix }}-x-1-sanity", "--bead", "{{ bead_prefix }}-x-1", "--worktree", str(worktree or self.repo.wt),
@@ -230,7 +263,7 @@ class SanitySplit(unittest.TestCase):
 
     def wait_lint(self, exit_file):
         exit_file = Path(exit_file)
-        self.exit_processes[str(exit_file)].wait()
+        wait_process(self.exit_processes[str(exit_file)], f"lint exit {exit_file}")
         return exit_file.read_text().strip()
 
     def merge(self, manifest, results):
@@ -556,7 +589,7 @@ class SanitySplit(unittest.TestCase):
         self.marker_event()
         out = self.run_split(lint="exit 3")
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(self.event_read.read(1), b"")
+        self.assertEqual(read_event(self.event_read, "child exit before readiness"), b"")
         self.assertEqual(self.wait_lint(json.loads(out.stdout)["lint"]["exit_file"]), "3")
 
     def owned_group(self, command):
@@ -568,7 +601,8 @@ class SanitySplit(unittest.TestCase):
 
     def read_marker(self, marker):
         """The first number in an atomically written marker; its last number is the lint process group id."""
-        self.assertEqual(self.event_read.read(1), b"R", f"marker {marker.name} was not published")
+        self.assertEqual(read_event(self.event_read, f"marker {marker.name}"), b"R",
+                         f"marker {marker.name} was not published")
         numbers = marker.read_text().split()
         self.addCleanup(kill_group, int(numbers[-1]))
         return int(numbers[0])
@@ -595,14 +629,14 @@ class SanitySplit(unittest.TestCase):
             stdin=subprocess.PIPE if gated else subprocess.DEVNULL, start_new_session=True,
             env=env, pass_fds=pass_fds)
         self.close_event_writer()
-        self.addCleanup(proc.wait)
+        self.addCleanup(wait_process, proc, "reap supervisor")
         self.addCleanup(lambda: proc.stdin and proc.stdin.close())
         self.addCleanup(kill_group, proc.pid)
         self.addCleanup(lambda: pgid_file.exists() and kill_group(int(pgid_file.read_text())))
         return proc, exit_file, pgid_file
 
     def finished(self, proc):
-        return proc.wait()
+        return wait_process(proc, "supervisor finish")
 
     def test_lint_timeout_reaches_the_merge_as_lint_unavailable(self):
         out = self.run_split(None, None, None, "sprint/x", "develop", "--lint-timeout-seconds", "1",
@@ -670,7 +704,7 @@ class SanitySplit(unittest.TestCase):
         return f"{sys.executable} {helper} & wait", marker
 
     def wait_gone(self, pid):
-        self.supervisors[pid].wait()
+        wait_process(self.supervisors[pid], "supervisor exit")
 
     def test_lint_supervisor_cancellation_kills_a_term_resistant_descendant(self):
         lint, marker = self.resistant_descendant()
