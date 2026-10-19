@@ -260,12 +260,15 @@ class Linker:
                     'evidence': f"origin/{base} is not an ancestor of {self.values['commit']}"}
         if ancestor.returncode:
             raise StackError(f"git merge-base --is-ancestor [{ancestor.returncode}] {(ancestor.stderr or '').strip()}")
-        try:
-            quota = self.command(['gh', 'api', 'rate_limit', '--jq', '.resources.graphql'], check=False, allow_transport_failure=True)
-            available = quota.returncode == 0 and json.loads(quota.stdout)['remaining'] > 0
-        except (ValueError, KeyError, TypeError):
-            available = False
-        lean = self.values['budget'] == 'lean' or not available
+        if self.values['budget'] == 'lean':
+            lean = True
+        else:
+            try:
+                quota = self.command(['gh', 'api', 'rate_limit', '--jq', '.resources.graphql'], check=False, allow_transport_failure=True)
+                available = quota.returncode == 0 and json.loads(quota.stdout)['remaining'] > 0
+            except (ValueError, KeyError, TypeError):
+                available = False
+            lean = not available
         if (lean or not layers) and candidate['base'] != base:
             raise StackError(f"pull request base {candidate['base']} differs from stack top {base}")
         new = {'branch': self.values['branch'], 'pr': self.values['pr_number'], 'head': self.values['commit'], 'base': base, 'linked': False}

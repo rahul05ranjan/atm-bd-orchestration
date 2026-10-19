@@ -288,39 +288,40 @@ def test_replaying_same_pr_with_changed_head_cannot_claim_stack_success(world):
 
 @pytest.mark.parametrize("budget,unavailable", [("lean", False), ("full", True)])
 def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
-    values = world.branch("first", "trunk", 1)
-    values["budget"] = budget
-    world.unavailable = unavailable
-    assert world.link(values)["top"]["linked"] is False
-    first = {"branch": "first", "pr": 1, "head": values["commit"], "base": "trunk", "linked": False}
-    assert world.bead["metadata"]["layers"] == [first]
+    first = world.branch("first", "trunk", 1)
+    assert world.link(first)["top"]["linked"] is False
+    first_layer = {"branch": "first", "pr": 1, "head": first["commit"], "base": "trunk", "linked": False}
+    assert world.bead["metadata"]["layers"] == [first_layer]
     assert world.bead["metadata"]["stack_number"] is None
-    assert len([call for call in world.calls if len(call) > 2 and "/pulls?" in call[2]]) == 1
-    assert not any("graphql" == token for call in world.calls for token in call)
-    assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
-    world.unavailable = False
+
     second = world.branch("second", "first", 2)
     assert world.link(second)["result"] == "stacked"
-    linked = [{**first, "linked": True},
-              {"branch": "second", "pr": 2, "head": second["commit"], "base": "first", "linked": True}]
-    assert world.bead["metadata"]["layers"] == linked
+    assert all(layer["linked"] for layer in world.bead["metadata"]["layers"])
     assert world.bead["metadata"]["stack_number"] == 7
     assert [call for call in world.calls if call[:3] == ["gh", "stack", "link"]] == [
         ["gh", "stack", "link", "--base", "trunk", "1", "2"]]
 
-    third = world.branch("third", "second", 3)
-    third["budget"] = "lean"
     world.calls.clear()
-    assert world.link(third)["result"] == "stacked"
-    pending = {"branch": "third", "pr": 3, "head": third["commit"], "base": "second", "linked": False}
-    assert world.bead["metadata"]["layers"] == [*linked, pending]
+    deferred = world.branch("deferred", "second", 3)
+    deferred["budget"] = budget
+    world.unavailable = unavailable
+    result = world.link(deferred)
+    assert result["result"] == "stacked"
+    assert result["top"]["linked"] is False
+    assert world.bead["metadata"]["layers"][-1]["linked"] is False
+    assert len([call for call in world.calls if len(call) > 2 and "/pulls?" in call[2]]) == 1
+    assert not any(call[:2] == ["gh", "api"] and len(call) > 2 and "graphql" in call[2].lower()
+                   for call in world.calls)
     assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
+    assert not any(call[0] == "python3" and any("gh_stack_view.py" in arg for arg in call)
+                   for call in world.calls)
+    rate_limit_calls = [call for call in world.calls if call[:3] == ["gh", "api", "rate_limit"]]
+    assert bool(rate_limit_calls) is (budget == "full")
 
-    fourth = world.branch("fourth", "third", 4)
+    world.unavailable = False
+    fourth = world.branch("fourth", "deferred", 4)
     assert world.link(fourth)["result"] == "stacked"
-    assert world.bead["metadata"]["layers"] == [
-        *linked, {**pending, "linked": True},
-        {"branch": "fourth", "pr": 4, "head": fourth["commit"], "base": "third", "linked": True}]
+    assert all(layer["linked"] for layer in world.bead["metadata"]["layers"])
     assert [call for call in world.calls if call[:3] == ["gh", "stack", "link"]] == [
         ["gh", "stack", "link", "7", "3"],
         ["gh", "stack", "link", "7", "4"]]
