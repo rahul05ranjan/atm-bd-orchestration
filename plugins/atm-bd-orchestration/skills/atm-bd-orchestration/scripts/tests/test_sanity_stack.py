@@ -247,13 +247,38 @@ def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
     values["budget"] = budget
     world.unavailable = unavailable
     assert world.link(values)["top"]["linked"] is False
+    first = {"branch": "first", "pr": 1, "head": values["commit"], "base": "trunk", "linked": False}
+    assert world.bead["metadata"]["layers"] == [first]
+    assert world.bead["metadata"]["stack_number"] is None
     assert len([call for call in world.calls if len(call) > 2 and "/pulls?" in call[2]]) == 1
     assert not any("graphql" == token for call in world.calls for token in call)
     assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
     world.unavailable = False
     second = world.branch("second", "first", 2)
     assert world.link(second)["result"] == "stacked"
-    assert all(layer["linked"] for layer in world.bead["metadata"]["layers"])
+    linked = [{**first, "linked": True},
+              {"branch": "second", "pr": 2, "head": second["commit"], "base": "first", "linked": True}]
+    assert world.bead["metadata"]["layers"] == linked
+    assert world.bead["metadata"]["stack_number"] == 7
+    assert [call for call in world.calls if call[:3] == ["gh", "stack", "link"]] == [
+        ["gh", "stack", "link", "--base", "trunk", "1", "2"]]
+
+    third = world.branch("third", "second", 3)
+    third["budget"] = "lean"
+    world.calls.clear()
+    assert world.link(third)["result"] == "stacked"
+    pending = {"branch": "third", "pr": 3, "head": third["commit"], "base": "second", "linked": False}
+    assert world.bead["metadata"]["layers"] == [*linked, pending]
+    assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
+
+    fourth = world.branch("fourth", "third", 4)
+    assert world.link(fourth)["result"] == "stacked"
+    assert world.bead["metadata"]["layers"] == [
+        *linked, {**pending, "linked": True},
+        {"branch": "fourth", "pr": 4, "head": fourth["commit"], "base": "third", "linked": True}]
+    assert [call for call in world.calls if call[:3] == ["gh", "stack", "link"]] == [
+        ["gh", "stack", "link", "7", "3"],
+        ["gh", "stack", "link", "7", "4"]]
 
 
 def test_timeout_and_scoped_reclaim(world):
