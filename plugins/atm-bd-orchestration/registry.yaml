@@ -15,7 +15,6 @@ render:
   - agents/sc-sanity-llm.md
   - skills/atm-bd-orchestration/examples/arch-qa-assignment-vars.json
   - skills/atm-bd-orchestration/examples/dev-complete-vars.json
-  - skills/atm-bd-orchestration/examples/dev-fix-vars.json
   - skills/atm-bd-orchestration/examples/dev-sanity-assignment-context-vars.json
   - skills/atm-bd-orchestration/examples/dev-sanity-assignment-vars.json
   - skills/atm-bd-orchestration/examples/dev-sanity-complete-vars.json

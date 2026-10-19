@@ -97,14 +97,17 @@ class SanityMetadata(FamilyMetadata):
 
 
 class SanityBead(Bead):
-    """A sanity bead: it blocks on the bead it checks."""
+    """A sanity bead links once to the bead it checks."""
     metadata: SanityMetadata
 
     @model_validator(mode="after")
     def blocks_on_dev_bead(self) -> SanityBead:
         related = [d.depends_on_id for d in self.dependencies if d.type in ("blocks", "validates")]
-        if related.count(self.metadata.dev_bead) != 1:
+        count = related.count(self.metadata.dev_bead)
+        if count == 0:
             raise ValueError(f"missing blocks edge to its sprint {self.metadata.dev_bead}")
+        if count > 1:
+            raise ValueError(f"multiple blocks or validates edges to {self.metadata.dev_bead}")
         return self
 
 

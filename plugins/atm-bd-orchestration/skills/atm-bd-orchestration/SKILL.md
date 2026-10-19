@@ -97,7 +97,7 @@ them from that file (start each vars file from `.claude/skills/atm-beads/scripts
 one fails the render. Phase-specific variables come from
 `sprint_index_common.load_phase_config(repo, phase)`: supply `lead` from that
 phase's `lead`, and use its `templates` entry for the assignment purpose.
-The phase file requires exactly `dev`, `dev_fix`, `fix`, `sanity`, `qa`,
+The phase file requires `dev`, `fix`, `sanity`, `qa`,
 `plan_review` and `review`; each points to an existing repository-relative
 file inside `.claude/skills/atm-bd-orchestration/templates/`. The phase lead
 has no repository YAML, registry-role, CLI identity or environment fallback.
@@ -109,8 +109,8 @@ has no repository YAML, registry-role, CLI identity or environment fallback.
 | `qa_member` | `qa-bead.json.j2` (`qa_member`), a parallel quick fix's QA bead |
 | checked bead `metadata.sprint_bead` | required `sprint_bead` in `qa-bead.json.j2` for finding and quick-fix QA beads |
 | `worktree_base` | sprint bead `worktree` = `<worktree_base>/<branch>` |
-| `test_command` | `dev-template`, `fix-assignment`, `dev-fix` |
-| `lint_command` | `dev-template`, `fix-assignment`, `dev-fix`, `dev-sanity-template` |
+| `test_command` | `dev-template`, `fix-assignment` |
+| `lint_command` | `dev-template`, `fix-assignment`, `dev-sanity-template` |
 | `integration_branch_pattern` | the root's `integration_branch` (`plan-root.json.j2`), then `review-template` and `plan-review-template` (`integration_branch`) |
 | `plans_dir` | `sprint_index_common.py` (`phase_path`), `sprint-report`, `sprint-review`, `plan-review-template` |
 | `requirements_globs`, `adr_globs` | `plan-review-template`, `fix-assignment` |
@@ -314,7 +314,7 @@ or open; dev-sanity closes it on its next passing JEV child
 closes it too.
 For each ready bead, resolve the assignment path from the phase's `templates`
 table. Its purpose keys are: `plan_review` for
-plan review, `dev` for development, `dev_fix` for a reopened development task,
+plan review, `dev` for development,
 `fix` for fixes and findings, `sanity` for sanity checks, `qa` for QA, and
 `review` for phase-end review. This applies to every assignment example in
 this skill; use the configured path when the phase overrides a default.
@@ -327,8 +327,7 @@ this skill; use the configured path when the phase overrides a default.
 | QA (`stage:qa`) | `templates.qa` | quality-mgr |
 | fix (`stage:fix`) | `templates.fix` | the member the lead picks for its `difficulty` |
 | finding from a quick-fix QA (its `discovered-from` QA bead has `metadata.quick_fix` true) | `templates.fix`, no sanity bead; once every finding from that failed QA has closed, one more quick-fix QA bead (Parallel Quick Fix step 4) | an idle dev picked for its `difficulty`, by priority |
-| important or minor finding (`stage:finding`, no `metadata.sanity_finding`, not from a quick-fix QA) | `templates.fix`, in the same step as one `bd import` of its sanity bead (`atm-beads` [`dev-sanity-bead.json.j2`](../atm-beads/templates/dev-sanity-bead.json.j2), `dev_bead` = the finding) and its QA bead ([`qa-bead.json.j2`](templates/qa-bead.json.j2), `checked_bead` = the finding, `sprint_bead` = the finding's `metadata.sprint_bead`, `blocked_by` = the sanity bead), each with `parent` = the finding's parent; a minor finding left in the backlog gets neither until it is assigned | an idle dev, by priority |
-| sanity finding (`stage:finding` with `metadata.sanity_finding`) | its checked bead's `templates.dev_fix`, once per checked bead | the checked bead's assignee |
+| important or minor finding (`stage:finding`, no `metadata.sanity_finding`, not from a quick-fix QA) | `templates.fix`, in the same step as one `bd import` of its sanity bead (`atm-beads` [`dev-sanity-bead.json.j2`](../atm-beads/templates/dev-sanity-bead.json.j2), `dev_bead` = the finding) and its QA bead ([`qa-bead.json.j2`](templates/qa-bead.json.j2), `checked_bead` = the finding, `sprint_bead` = the finding's `metadata.sprint_bead`, `blocked_by` = the sanity bead), each with `parent` = the finding's parent and the cut layer's `branch`, `worktree`, `pr_target`, and `difficulty`; a minor finding left in the backlog gets neither until it is assigned | an idle dev, by priority |
 | review (`stage:review`) | `templates.review` | the phase-end reviewer |
 
 `difficulty` is a minimum. Pick a dev at that tier, or one tier up when none is idle (fast to terra/sonnet); never far
@@ -343,7 +342,7 @@ Then, on each task close:
 | plan-review FAIL | have the author fix the listed beads, run `validate-plan` again, then dispatch the next round |
 | dev-complete | verify the dev's PR and link it on top of the phase stack, fixing any stack problem yourself (Stack Discipline), record it on the checked bead (`bd update <bead> --append-notes "layer PR #<n> <url>"`, from which a later `layer_prs` is read), then assign the now-ready sanity check; after a dev-fix with `layer_prs` = the sprint's layer PRs, its first layer's (`gh pr view <metadata.pr_target> --json number`) first and the checked PR last |
 | sanity check PASS | verify the PR base is its `pr_target` or a descendant of it; the group's poured QA bead is now ready: dispatch it with `checked_bead` = its `metadata.checked_bead` and `sprint_bead` = its `metadata.sprint_bead`, and `base` = the PR base; for a sprint that had a dev-fix also `layer_prs` = the sprint's layer PRs, its first layer's (`gh pr view <metadata.pr_target> --json number`) first and the checked PR last, so the QA diff is the sprint's own layer ranges and never another sprint's layer between them. For a fix bead's QA, also `carry_forward` = the fix bead (it carries its own requirements and ADRs) and `round` = the fix bead's `metadata.round` + 1. For an important or minor finding bead, the group's QA bead is now ready: dispatch it with `checked_bead` and `carry_forward` = the finding |
-| sanity check FAIL | one coordinator runs LLM/JEV with shared lint, then `sanity-selected` chooses whole replies per deliverable and alone creates finding children. Sanity answers only whether a numbered deliverable is written; requirements and quality are QA. The sanity member creates one child finding bead for every selected undone deliverable under `<checked bead>` at `clamp(parent priority - 1, P1, P4)`, so it ranks ahead of the parent's peers, never one for lint; it does not edit the parent. It copies phase/sprint/stack/layer provenance and uses only `phase-<phase>`, `stage:finding`, and `stack:<stack>` labels. The hierarchy is the parent closure gate (`bd` rejects parent-to-child `blocks` edges); it adds `blocks` edges only between those new beads, where one fix depends on another. Each child stores the exact structured report data. dev-sanity has reopened the checked bead; on a first FAIL the lead assigns it with `templates.dev_fix` from the phase file on a new layer: cut its branch and worktree from the current top of the stack, record the sprint's first layer's branch as the checked bead's `metadata.pr_target` (`bd update <bead> --set-metadata pr_target=<branch>`; a later dev-fix keeps it) and pass it as `pr_target`; never rebase or re-target a linked layer. When the children are excessive, the lead first verifies against the branch that each one's work is really not done and closes, with a reason, any that judges correctness or quality (that is QA). The lead may overrule, amend, split, or reassign children, but does not recreate them. After the second FAIL for the same checked bead, before dispatching a fix the lead diffs flagged files versus the last PASS, checks the branch base for foreign commits, then rules; report `SANITY.ROUND_CAP` with undone deliverable numbers and do not run a third round without that ruling. The parent cannot close until every child closes. This applies to a finding bead too: its task id is the finding, and it closes with `dev-complete.md.j2` |
+| sanity check FAIL | The close hook reopens the checked bead and sends the undone deliverables to its dev on the existing task; no child finding or new dev assignment is created. At the configured round cap the lead receives `SANITY.ROUND_CAP` and rules on the next action. |
 | qa-complete | nothing: quality-mgr poured a fix group under the sprint per blocking finding (round n+1 for a failed fix verification) and filed the rest as finding beads before it closed the QA bead; the fix beads are now ready. A failed quick-fix QA (`metadata.quick_fix`) poured none: file and dispatch its blocking findings (Parallel Quick Fix step 4). When no step is open under the sprint, close it (below) |
 | fix-complete (`fixed`) | verify the dev's PR and link it on top of the phase stack, fixing any stack problem yourself (Stack Discipline), and record it on the fix bead (`bd update <bead> --append-notes "layer PR #<n> <url>"`). For a poured fix bead or an important or minor finding bead, nothing more: the group's sanity check is now ready. For a quick-fix finding, once every finding from that failed QA has closed, one more quick-fix QA bead (Parallel Quick Fix step 4) |
 | review-complete | file each finding with `finding-bead.json.j2` (`qa_bead` = the review bead) |
@@ -470,8 +469,7 @@ atm task assign <agent> --task-id <bead> \
 - For a dev or finding bead, create its branch and worktree from the current
   top of its stack (its `pr_target` or a descendant of it), passed as the
   assignment's `pr_target`: `git fetch origin && git worktree add -b <branch> <worktree>
-  origin/<top>`. A `templates.dev_fix` assignment's layer is cut the same way; its
-  `pr_target` is the sprint's first layer's branch.
+  origin/<top>`.
 - Set the bead's assignee to the recipient first:
   `bd update <bead> --assignee <agent>`. For a role, the recipient is
   `.claude/skills/atm-beads/scripts/resolve-role <role>`. A claim fails when the bead is
@@ -531,8 +529,7 @@ one of these defaults; close and package-internal data templates retain their pa
 | `plan-review-template.xml.j2` | assignment | lead → quality-mgr, the plan-review bead |
 | `plan-review-complete.md.j2` | close | quality-mgr, PASS or FAIL |
 | `dev-template.xml.j2` | assignment | lead → dev, a planned dev bead |
-| `dev-fix.xml.j2` | assignment | lead → dev, a dev bead reopened by a failed sanity check |
-| `dev-complete.md.j2` | close | dev, for `dev-template` and `dev-fix` |
+| `dev-complete.md.j2` | close | dev, for `dev-template` |
 | `dev-sanity-template.xml.j2` | assignment | lead → dev-sanity member |
 | `dev-sanity-assignment.json.j2` | fenced JSON | dev-sanity (`sanity-split`) → one `sc-sanity-llm` or `sc-sanity-jev` subagent per numbered deliverable |
 | `dev-sanity-complete.md.j2` | close | dev-sanity member, PASS or FAIL |

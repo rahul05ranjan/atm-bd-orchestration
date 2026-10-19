@@ -36,7 +36,7 @@ class PlanRootTests(unittest.TestCase):
 
     def test_stack_bead_uses_root_values(self):
         template = SKILL / "templates/stack-bead.json.j2"
-        bead = json.loads(sc_render.render(template, {"id": "atm-phase-bj", "phase": "bj",
+        bead = json.loads(sc_render.render(template, {**self.values, "id": "atm-phase-bj", "phase": "bj",
                                                       "integration_branch": "integrate/phase-bj"}))
         self.assertEqual(bead["id"], "atm-phase-bj.stack")
         self.assertEqual(bead["dependencies"][0]["depends_on_id"], "atm-phase-bj")

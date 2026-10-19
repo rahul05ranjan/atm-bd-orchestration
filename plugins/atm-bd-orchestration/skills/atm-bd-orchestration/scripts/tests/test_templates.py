@@ -42,7 +42,7 @@ class TemplateContractTests(unittest.TestCase):
         self.assertTrue((ROOT / "templates/workflow-issue-bead.json.j2").exists())
 
     def test_gate_commands_render_root_and_primary_checkout(self):
-        for name in ("dev-template", "fix-assignment", "dev-fix", "dev-sanity-template"):
+        for name in ("dev-template", "fix-assignment", "dev-sanity-template"):
             text = (ROOT / f"templates/{name}.xml.j2").read_text()
             with self.subTest(template=name):
                 self.assertNotIn("<phase>", text)
@@ -81,7 +81,7 @@ class TemplateContractTests(unittest.TestCase):
         self.assertTrue(bead["metadata"]["sprint_bead"].endswith("-d-4"))
 
     def test_every_dev_assignment_has_the_itemized_private_checklist(self):
-        for name in ("dev-template", "dev-fix", "fix-assignment"):
+        for name in ("dev-template", "fix-assignment"):
             text = (ROOT / f"templates/{name}.xml.j2").read_text()
             with self.subTest(template=name):
                 self.assertIn("create an itemized private checklist outside the tracked tree with every task identified, "
@@ -98,7 +98,7 @@ class TemplateContractTests(unittest.TestCase):
         self.assertLess(text.index("git rebase origin/"), text.index("assignment-gates.py dev"))
 
     def test_fix_step_a_on_a_branch_cut_from_the_top_only_checks_ancestry(self):
-        for name in ("fix-assignment", "dev-fix"):
+        for name in ("fix-assignment",):
             step = (ROOT / f"templates/{name}.xml.j2").read_text().split('<step id="a">', 1)[1].split("</step>", 1)[0]
             with self.subTest(template=name):
                 self.assertNotIn("git rebase", step)
@@ -395,7 +395,7 @@ class FixRoundReviewerScopeTests(unittest.TestCase):
 class BlockedRefusalTests(unittest.TestCase):
     """A task whose bead is not ready, or that meets a blocker mid-task, is refused with the bead left open; never held."""
 
-    NOT_READY_STEP = {"dev-template.xml.j2": "a1", "dev-fix.xml.j2": "a1", "fix-assignment.xml.j2": "a1",
+    NOT_READY_STEP = {"dev-template.xml.j2": "a1", "fix-assignment.xml.j2": "a1",
                       "dev-sanity-template.xml.j2": "a1", "qa-template.xml.j2": "a2",
                       "review-template.xml.j2": "a", "plan-review-template.xml.j2": "a"}
 
@@ -437,17 +437,17 @@ class BlockedRefusalTests(unittest.TestCase):
                 self.assertIn("never stay active waiting", text)
 
     def test_a_shared_change_the_dev_can_make_is_a_quick_fix_not_a_blocker(self):
-        for name, step in (("dev-template.xml.j2", "d1"), ("dev-fix.xml.j2", "b1"), ("fix-assignment.xml.j2", "d1")):
+        for name, step in (("dev-template.xml.j2", "d1"), ("fix-assignment.xml.j2", "d1")):
             with self.subTest(template=name):
                 text = self._rendered(name)
                 self.assertIn("Parallel Quick Fix", self._step(text, step))
                 self.assertIn(f"A shared change you can make yourself is not a blocker: it is a Parallel Quick Fix (step {step}) and the task continues.", text)
 
 class DevAssignmentTests(unittest.TestCase):
-    """Dev, dev-fix and fix assignments: the a1 trigger, actor-stamped bd writes, and the not_reproducible close."""
+    """Dev and fix assignments: the a1 trigger, actor-stamped bd writes, and the not_reproducible close."""
 
     def test_a1_fires_on_not_ready_and_every_bd_write_has_an_actor(self):
-        for name in ("dev-template.xml.j2", "dev-fix.xml.j2", "fix-assignment.xml.j2"):
+        for name in ("dev-template.xml.j2", "fix-assignment.xml.j2"):
             result = _render(name, _example(name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json"))
             with self.subTest(template=name):
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -472,7 +472,7 @@ class DevAssignmentTests(unittest.TestCase):
 
     def test_every_dev_lands_its_pr_on_the_current_stack_top(self):
         primary = "/repo/primary"  # the examples' primary_checkout holds an install-time placeholder only the installer renders
-        for name in ("dev-template.xml.j2", "dev-fix.xml.j2", "fix-assignment.xml.j2"):
+        for name in ("dev-template.xml.j2", "fix-assignment.xml.j2"):
             values = _example(name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json")
             result = _render(name, {**values, "primary_checkout": primary})
             with self.subTest(template=name):
@@ -490,15 +490,6 @@ class DevAssignmentTests(unittest.TestCase):
                 self.assertNotIn("Rebase only onto", result.stdout)
                 self.assertIn("`pr_target` is a lower bound", result.stdout)
                 self.assertNotIn("`metadata.pr_target` equals", result.stdout)
-
-    def test_a_sanity_fail_fix_is_a_new_layer_above_the_frozen_checked_layer(self):
-        values = _example("dev-fix-vars.json")
-        result = _render("dev-fix.xml.j2", values)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"The sprint's first layer `{values['pr_target']}` and any fix layer above it are linked and frozen: never rebase, re-target or push them.", result.stdout)
-        self.assertIn(f"`{values['branch']}` is a new layer cut from the top of stack", result.stdout)
-        self.assertNotIn("is not linked", result.stdout)
-        self.assertNotIn("confirm the open one", result.stdout)
 
     def test_after_a_dev_fix_sanity_and_qa_diff_only_the_sprints_own_layer_prs(self):
         values = _example("dev-sanity-template-vars.json")
@@ -618,7 +609,6 @@ class PlanFixRoundTests(unittest.TestCase):
 CONFIG_VARS = {
     "dev-template.xml.j2": ("test_command", "lint_command", "policy_path"),
     "fix-assignment.xml.j2": ("test_command", "lint_command", "policy_path", "requirements_globs", "adr_globs"),
-    "dev-fix.xml.j2": ("test_command", "lint_command"),
     "dev-sanity-template.xml.j2": ("lint_command",),
     "qa-template.xml.j2": ("policy_path", "reviewers_round1"),
     "plan-review-template.xml.j2": ("integration_branch", "plans_dir", "requirements_globs", "adr_globs"),
@@ -693,7 +683,7 @@ class ConfigVariableTests(unittest.TestCase):
         quick = _render("qa-bead.json.j2", {**_example("qa-bead-vars.json"), "quick_fix": True})
         self.assertEqual(quick.returncode, 0, quick.stderr)
         self.assertIs(json.loads(quick.stdout)["metadata"]["quick_fix"], True)
-        self.assertIsNone(json.loads(plain.stdout)["metadata"]["pr_target"])
+        self.assertEqual(json.loads(plain.stdout)["metadata"]["pr_target"], "integrate/phase-d")
         bounded = _render("qa-bead.json.j2", {**_example("qa-bead-vars.json"), "quick_fix": True, "pr_target": "sprint/d-2"})
         self.assertEqual(bounded.returncode, 0, bounded.stderr)
         self.assertEqual(json.loads(bounded.stdout)["metadata"]["pr_target"], "sprint/d-2")

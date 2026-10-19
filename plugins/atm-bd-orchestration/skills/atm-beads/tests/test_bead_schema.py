@@ -1,5 +1,6 @@
 """Phase-wide bead validation and stack metadata contracts."""
 import copy
+import importlib
 import sys
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import bead_schema  # noqa: E402
+bead_schema = importlib.import_module("bead_schema")
 
 
 FAMILY = {"branch": "sprint/bi-7", "worktree": "/work/bi-7", "pr_target": "main", "difficulty": "normal"}
@@ -47,3 +48,34 @@ def test_validate_phase_includes_qa_and_unknown_stage():
     errors = bead_schema.validate_phase([qa, {"id": "atm-bi-unexpected", "labels": ["stage:unexpected"]}])
     assert any(error.startswith("atm-phase-bi.18-qa: branch") for error in errors)
     assert "atm-bi-unexpected: no model" in errors
+
+
+@pytest.mark.parametrize("stage, bead_id, metadata", [
+    ("dev", "atm-bi-7.group-dev", {"role": "dev", "phase": "bi", "sprint": "bi-7", "sprint_bead": "atm-bi-7", "stack": "phase-bi", "layer": 7}),
+    ("qa", "atm-bi-7.group-qa", {"role": "qa", "phase": "bi", "sprint": "bi-7", "sprint_bead": "atm-bi-7", "stack": "phase-bi", "checked_bead": "atm-bi-7.group-dev", "round": 1}),
+    ("qa", "atm-phase-bi.18-qa", {"checked_bead": "atm-phase-bi.18", "phase": "bi", "sprint": "bi", "sprint_bead": "atm-phase-bi", "stack": "phase-bi", "round": 1, "layer": 40, "quick_fix": True}),
+    ("fix", "atm-bi-7.qa1-f1-r1-fix", {"finding_ref": "qa1-f1", "severity": "blocking", "reviewer": "qa", "found_at_commit": "abc1234"}),
+])
+def test_family_models_require_each_cut_field(stage, bead_id, metadata):
+    bead = {"id": bead_id, "labels": ["phase-bi", f"stage:{stage}"], "metadata": {**metadata, **FAMILY}}
+    assert bead_schema.validate_phase([bead]) == []
+    for field in FAMILY:
+        incomplete = copy.deepcopy(bead)
+        del incomplete["metadata"][field]
+        assert any(problem.startswith(f"{bead_id}: {field}") for problem in bead_schema.validate_phase([incomplete]))
+
+
+def test_sprint_finding_root_and_gate_models():
+    rows = [
+        {"id": "atm-bi-7", "labels": ["phase-bi", "stage:sprint"], "description": "## Deliverables\n1. Implement the work",
+         "acceptance_criteria": "- [ ] done", "metadata": {**FAMILY, "requirements": ["NONE"], "adrs": ["NONE"]}},
+        {"id": "atm-phase-bi.15", "labels": ["phase-bi", "stage:finding"], "metadata": {"severity": "minor", "reviewer": "qa", "found_at_commit": "abc1234"}},
+        {"id": "atm-phase-bi", "metadata": {"integration_branch": "integrate/phase-bi"}},
+        {"id": "atm-bi-gate", "issue_type": "gate"},
+        {"id": "atm-phase-bi.stack", "labels": ["stage:stack"], "metadata": {"trunk": "integrate/phase-bi", "stack_number": None, "layers": []}},
+    ]
+    assert bead_schema.validate_phase(rows) == []
+    for bead, key in ((rows[0], "requirements"), (rows[1], "reviewer"), (rows[2], "integration_branch"), (rows[4], "trunk")):
+        incomplete = copy.deepcopy(bead)
+        del incomplete["metadata"][key]
+        assert any(key in problem for problem in bead_schema.validate_phase([incomplete]))

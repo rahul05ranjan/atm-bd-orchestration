@@ -131,7 +131,7 @@ class PhaseConfigTests(unittest.TestCase):
         config.parent.mkdir(parents=True)
         config.write_text("bead_prefix: chosen\nplans_dir: work/plans\nintegration_branch_pattern: custom/{phase}\n")
 
-    def test_init_writes_explicit_lead_and_seven_defaults_without_overwrite(self):
+    def test_init_writes_explicit_lead_and_six_defaults_without_overwrite(self):
         self.configure_repo()
         result = self.init("--phase", "new", "--lead", "new-lead")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -144,6 +144,12 @@ class PhaseConfigTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("already exists", result.stderr)
         self.assertEqual(path.read_bytes(), original)
+
+    def test_legacy_dev_fix_is_ignored_even_if_its_file_is_missing(self):
+        data = copy.deepcopy(self.data)
+        data["templates"]["dev_fix"] = "deleted-dev-fix.xml.j2"
+        self.write(data)
+        self.assertEqual(load_phase_config(self.repo, "t"), data)
 
     def test_init_requires_lead_and_installed_templates_before_writing(self):
         self.configure_repo()

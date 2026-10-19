@@ -9,7 +9,7 @@ plan file, the phase root and the integration branch:
     lead = "appointed-phase-lead"
 
 The required `templates` table names the installed assignment template for
-each of dev, dev_fix, fix, sanity, qa, plan_review and review.
+each of dev, fix, sanity, qa, plan_review and review.
 
 The plan file holds one JSON object per sprint, `{"sprint": "<name>"}` with an
 optional `"depends_on": ["<sprint name>", ...]` (hard dependencies only). It
@@ -36,7 +36,6 @@ PHASE_KEYS = ("plan", "root", "integration_branch", "lead")
 TEMPLATE_DIR = Path(".claude/skills/atm-bd-orchestration/templates")
 DEFAULT_TEMPLATES = {
     "dev": str(TEMPLATE_DIR / "dev-template.xml.j2"),
-    "dev_fix": str(TEMPLATE_DIR / "dev-fix.xml.j2"),
     "fix": str(TEMPLATE_DIR / "fix-assignment.xml.j2"),
     "sanity": str(TEMPLATE_DIR / "dev-sanity-template.xml.j2"),
     "qa": str(TEMPLATE_DIR / "qa-template.xml.j2"),
@@ -93,7 +92,7 @@ def validate_phase_config(repo: Path, phase: str, data: dict[str, Any]) -> dict[
     if not isinstance(templates, dict):
         problems.append("templates: required table with keys " + ", ".join(DEFAULT_TEMPLATES))
     else:
-        extra = set(templates) - set(DEFAULT_TEMPLATES)
+        extra = set(templates) - set(DEFAULT_TEMPLATES) - {"dev_fix"}
         if extra:
             problems.append(f"templates: unknown key(s): {', '.join(sorted(extra))}")
         for key in DEFAULT_TEMPLATES:
@@ -120,7 +119,7 @@ def validate_phase_config(repo: Path, phase: str, data: dict[str, Any]) -> dict[
 
 
 def load_phase_config(repo: Path, phase: str) -> dict[str, Any]:
-    """Read the phase's explicit lead, plan, root, branch and seven template paths."""
+    """Read the phase's explicit lead, plan, root, branch and six template paths."""
     path = phase_config_path(repo, phase)
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))

@@ -100,10 +100,17 @@ class Workspace:
         name = f"{phase}-{n}"
         bead = f"t-{name}"
         meta = {"phase": phase, "sprint": name, "stack": f"phase-{phase}", "layer": n, "difficulty": "normal",
-                "requirements": ["REQ-1"], "adrs": ["NONE"]}
+                "requirements": ["REQ-1"], "adrs": ["NONE"], "branch": f"sprint/{name}",
+                "worktree": str(self.root / "worktrees" / name), "pr_target": f"integrate/phase-{phase}"}
         self.bd("create", f"{name}: sprint", "--id", bead, "--type", "feature",
                 "-l", f"phase-{phase},stage:sprint,stack:phase-{phase}",   # sprint-bead.json.j2's labels
+                "--description", "## Deliverables\n1. Implement the sprint", "--acceptance", "- [ ] done",
                 "--metadata", json.dumps(meta), "--silent")
+        stack = f"t-phase-{phase}.stack"
+        if self.show(stack) is None:
+            self.bd("create", f"phase-{phase}: stack", "--id", stack, "--type", "task",
+                    "-l", f"phase-{phase},stage:stack", "--metadata",
+                    json.dumps({"trunk": f"integrate/phase-{phase}", "stack_number": None, "layers": []}), "--silent")
         plan = self.root / "docs/plans" / f"phase-{phase}.jsonl"
         plan.parent.mkdir(parents=True, exist_ok=True)
         with plan.open("a") as fh:
@@ -196,7 +203,7 @@ def init_workspace(w: Workspace) -> None:
     shutil.copytree(ATM_BEADS, root / ".claude/skills/atm-beads", ignore=ignore)
     config = root / ".claude/project/atm-bd-orchestration.yaml"
     config.parent.mkdir(parents=True)
-    config.write_text("bead_prefix: t\ndev_sanity_member: dev-sanity\nqa_member: quality-mgr\nplans_dir: docs/plans\n")
+    config.write_text(f"bead_prefix: t\ndev_sanity_member: dev-sanity\nqa_member: quality-mgr\nplans_dir: docs/plans\nworktree_base: {root / 'worktrees'}\n")
 
 
 def group(sprint: str) -> tuple[str, str, str]:
@@ -278,13 +285,16 @@ class BeadPourMockTests(unittest.TestCase):
         assert ws.deps(dev) == {sprint: "parent-child"}
         assert ws.deps(sanity) == {sprint: "parent-child", dev: "blocks"}
         assert ws.deps(qa) == {sprint: "parent-child", sanity: "blocks", dev: "validates"}
-        assert set(ws.show(sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_graph"}   # N9: minimal sanity bead
+        assert set(ws.show(sanity)["metadata"]) == {"dev_bead", "difficulty", "branch", "worktree", "pr_target", "sc_compose_graph"}
         assert ws.show(sanity)["metadata"]["dev_bead"] == dev
         assert ws.show(qa)["metadata"]["checked_bead"] == dev
         assert ws.show(dev)["metadata"]["layer"] == 1
         # no assignment in advance: every poured bead carries difficulty, the lead picks the agent at dispatch
         assert [ws.show(b).get("assignee") for b in (dev, sanity, qa)] == [None] * 3
         assert [ws.show(b)["metadata"]["difficulty"] for b in (dev, sanity, qa)] == ["normal"] * 3
+        for bead in (dev, sanity, qa):
+            assert all(ws.show(bead)["metadata"][key] == ws.show(sprint)["metadata"][key]
+                       for key in ("branch", "worktree", "pr_target", "difficulty"))
         # stage labels route each poured bead in the lead's Loop
         assert [sorted(l for l in ws.show(b)["labels"] if l.startswith("stage:")) for b in (dev, sanity, qa)] == [
             ["stage:dev"], ["stage:dev-sanity"], ["stage:qa"]]
@@ -362,6 +372,72 @@ class BeadPourMockTests(unittest.TestCase):
         ws.unchanged(before)
         assert ws.deps(qa) == {sprint: "parent-child", sanity: "blocks", dev: "validates"}
 
+    def test_invalid_existing_bead_blocks_every_new_attach(self):
+        ws = self.ws
+        first = ws.sprint("w", 1)
+        ws.groups("--sprint", first)
+        sanity = group(first)[1]
+        ws.bd("update", sanity, "--unset-metadata", "branch")
+        second = ws.sprint("w", 2)
+        before = ws.snapshot(first, sanity, second)
+        for mode in (("--validate",), ()):
+            result = ws.groups(*mode, "--sprint", second, expect=5)
+            assert any(f"{sanity}: branch" in problem for entry in result["targets"] for problem in entry["problems"])
+            assert all(ws.show(bead) is None for bead in group(second))
+            ws.unchanged(before)
+        proc = ws.run(sys.executable, ws.root / ".claude/skills/atm-beads/scripts/bead_schema.py", "validate", "--phase", "w", check=False)
+        assert proc.returncode == 5 and f"{sanity}: branch" in proc.stdout
+
+    def test_invalid_rendered_bead_blocks_every_new_attach(self):
+        ws = self.ws
+        first = ws.sprint("x", 1)
+        second = ws.sprint("x", 2)
+        override = ws.root / ".atm-bd/formula"
+        override.mkdir(parents=True, exist_ok=True)
+        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
+        (override / "sprint-group.formula.toml.j2").write_text(source.replace('branch = "{{{ branch }}}"\n', ""))
+        wrapper_dir = ws.root / "sc-compose-log-bin"
+        wrapper_dir.mkdir()
+        log = ws.root / "sc-compose-operations.log"
+        wrapper = wrapper_dir / "sc-compose"
+        wrapper.write_text(f'#!/bin/sh\nprintf "%s %s\\n" "$1" "$2" >> "{log}"\nexec "{shutil.which("sc-compose")}" "$@"\n')
+        wrapper.chmod(0o755)
+        original_path = ws.env["PATH"]
+        ws.env["PATH"] = f"{wrapper_dir}:{original_path}"
+        try:
+            before = ws.snapshot(first, second)
+            for mode in (("--validate",), ()):
+                result = ws.groups(*mode, "--sprint", first, "--sprint", second, expect=5)
+                assert any(f"{first}.group-dev: branch" in problem for entry in result["targets"] for problem in entry["problems"])
+                assert all(ws.show(bead) is None for sprint in (first, second) for bead in group(sprint))
+                ws.unchanged(before)
+            assert "bead attach" not in log.read_text().splitlines()
+        finally:
+            ws.env["PATH"] = original_path
+            shutil.rmtree(override)
+
+    def test_finding_layer_fields_come_from_stack_ledger(self):
+        ws = self.ws
+        sprint = ws.sprint("z", 1)
+        _, _, qa = group(sprint)
+        ws.groups("--sprint", sprint)
+        stack = "t-phase-z.stack"
+        layers = [{"branch": "sprint/z-1", "pr": 1, "head": "abc1234", "base": "def1234", "linked": True},
+                  {"branch": "fix/z-1-first", "pr": 2, "head": "def1234", "base": "abc1234", "linked": True}]
+        ws.bd("update", stack, "--metadata", json.dumps({"trunk": "integrate/phase-z", "stack_number": 1, "layers": layers}))
+        path = findings_file(ws, sprint, qa, 1, {"ref": "RQA-001"})
+        ws.groups("--findings", path)
+        for bead in fix_group(sprint, "rqa-001"):
+            metadata = ws.show(bead)["metadata"]
+            assert metadata["branch"] == "fix/z-1-rqa-001"
+            assert metadata["worktree"] == str(ws.root / "worktrees/fix/z-1-rqa-001")
+            assert metadata["pr_target"] == "fix/z-1-first"
+        layers.append({"branch": "fix/z-1-later", "pr": 3, "head": "1234567", "base": "def1234", "linked": True})
+        ws.bd("update", stack, "--metadata", json.dumps({"trunk": "integrate/phase-z", "stack_number": 1, "layers": layers}))
+        before = ws.snapshot(*fix_group(sprint, "rqa-001"))
+        assert ws.groups("--findings", path)["outcome"] == "succeeded"
+        ws.unchanged(before)
+
 
     def test_conflicts_are_refused_before_any_write(self):
         ws = self.ws
@@ -435,6 +511,7 @@ class BeadPourMockTests(unittest.TestCase):
         entry = target(ws.groups("--validate", "--option", "B", "--sprint", sprint, expect=2), sprint)
         assert entry["error"]["code"] == "BEADS_GRAPH_EDGE_MISSING", entry
         assert f"bd dep add '{sanity}' '{dev}' --type 'validates'" in entry["error"]["message"]   # the error carries the repair
+        ws.bd("dep", "add", sanity, dev, "--type", "validates")
 
         # Under C the pour's own sanity -> dev blocks edge is checked too.
         other = ws.sprint("f", 2)
@@ -541,7 +618,10 @@ class BeadPourMockTests(unittest.TestCase):
             "remedy": "return the typed error", "filed_by": qa, "round": 1, "sprint_bead": sprint,
             "found_at_commit": "abc1234", "requirements": ["REQ-1"], "adrs": ["NONE"], "difficulty": "normal"}
         assert "Remedy: return the typed error" in ws.show(fix)["description"]
-        assert set(ws.show(fix_sanity)["metadata"]) == {"dev_bead", "difficulty", "sc_compose_graph"}
+        assert set(ws.show(fix_sanity)["metadata"]) == {"dev_bead", "difficulty", "branch", "worktree", "pr_target", "sc_compose_graph"}
+        for bead in (fix, fix_sanity, fix_qa):
+            assert {key: ws.show(bead)["metadata"][key] for key in ("branch", "worktree", "pr_target")} == {
+                "branch": "fix/g-1-qa1-f1", "worktree": str(ws.root / "worktrees/fix/g-1-qa1-f1"), "pr_target": "integrate/phase-g"}
         assert ws.show(fix_sanity)["metadata"]["dev_bead"] == fix
         assert ws.show(fix_qa)["metadata"]["checked_bead"] == fix
         assert [ws.show(b).get("assignee") for b in (fix, fix_sanity, fix_qa)] == [None] * 3
@@ -635,10 +715,10 @@ class BeadPourMockTests(unittest.TestCase):
         sprint = ws.sprint("j", 1)
         _, _, qa = group(sprint)
         ws.groups("--sprint", sprint)
-        path = findings_file(ws, sprint, qa, 1, {"ref": "qa1-f1", "severity": "minor"}, {"ref": "QA1_F2"}, {"ref": "qa1-f3"})
+        path = findings_file(ws, sprint, qa, 1, {"ref": "qa1-f1", "severity": "minor"}, {"ref": "!!!"}, {"ref": "qa1-f3"})
         result = ws.groups("--findings", path, expect=2)
         assert target(result, f"{sprint}.qa1-f1-r1")["error"]["code"] == "BEAD_GROUPS_NOT_BLOCKING"
-        assert target(result, f"{sprint}.QA1_F2-r1")["error"]["code"] == "BEAD_GROUPS_FINDINGS_INVALID"
+        assert target(result, f"{sprint}.!!!-r1")["error"]["code"] == "BEAD_GROUPS_FINDINGS_INVALID"
         assert target(result, f"{sprint}.qa1-f3-r1")["nodes"][0]["action"] == "created"   # the valid finding still pours
         assert ws.show(fix_group(sprint, "qa1-f1")[0]) is None
 
@@ -666,10 +746,12 @@ class BeadPourMockTests(unittest.TestCase):
         # The assignment: one import of both beads.
         sanity, qa = f"{finding}-sanity", f"{finding}-qa"
         rows = [self.render(ws.root / ".claude/skills/atm-beads/templates/dev-sanity-bead.json.j2", {
-                    "id": sanity, "parent": "t-phase-m", "dev_bead": finding, "phase": "m", "sprint": "m-1", "stack": "phase-m"}),
+                    "id": sanity, "parent": "t-phase-m", "dev_bead": finding, "phase": "m", "sprint": "m-1", "stack": "phase-m",
+                    "branch": "fix/m-1", "worktree": str(ws.root / "fix/m-1"), "pr_target": "main", "difficulty": "normal"}),
                 self.render(templates / "qa-bead.json.j2", {
                     "id": qa, "checked_bead": finding, "sprint_bead": sprint, "parent": "t-phase-m", "blocked_by": sanity, "phase": "m", "sprint": "m-1",
-                    "stack": "phase-m", "round": 1, "qa_member": "quality-mgr"})]
+                    "stack": "phase-m", "round": 1, "qa_member": "quality-mgr", "branch": "fix/m-1",
+                    "worktree": str(ws.root / "fix/m-1"), "pr_target": "main"})]
         assigned = ws.root / "assigned.jsonl"
         assigned.write_text("".join(json.dumps(r) + "\n" for r in rows))
         ws.bd("import", "-i", assigned)

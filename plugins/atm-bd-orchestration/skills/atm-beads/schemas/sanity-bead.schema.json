@@ -64,7 +64,7 @@
     }
   },
   "additionalProperties": true,
-  "description": "A sanity bead: it blocks on the bead it checks.",
+  "description": "A sanity bead links once to the bead it checks.",
   "properties": {
     "id": {
       "minLength": 1,

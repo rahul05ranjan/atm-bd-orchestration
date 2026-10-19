@@ -154,7 +154,7 @@ the Jev transport at `.claude/skills/atm-bd-orchestration/scripts/jev_client.py`
 ### Phase settings
 
 Each tracked `.atm-bd/phase-<x>.toml` owns its nonempty `lead` and mandatory
-`[templates]` table: `dev`, `dev_fix`, `fix`, `sanity`, `qa`, `plan_review`,
+`[templates]` table: `dev`, `fix`, `sanity`, `qa`, `plan_review`,
 and `review`. Paths must name existing repository-relative files inside
 `.claude/skills/atm-bd-orchestration/templates/`. Runtime readers report missing
 settings and dangling paths; they never fall back to the generated YAML,

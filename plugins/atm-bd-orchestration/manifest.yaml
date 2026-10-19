@@ -23,7 +23,6 @@ artifacts:
     - skills/atm-bd-orchestration/blocking-findings-guidelines.md
     - skills/atm-bd-orchestration/examples/arch-qa-assignment-vars.json
     - skills/atm-bd-orchestration/examples/dev-complete-vars.json
-    - skills/atm-bd-orchestration/examples/dev-fix-vars.json
     - skills/atm-bd-orchestration/examples/dev-sanity-assignment-context-vars.json
     - skills/atm-bd-orchestration/examples/dev-sanity-assignment-vars.json
     - skills/atm-bd-orchestration/examples/dev-sanity-complete-vars.json
@@ -99,6 +98,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/rendering.py
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
+    - skills/atm-bd-orchestration/scripts/tests/test_bead_groups.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_pour_mock.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_queues.py
     - skills/atm-bd-orchestration/scripts/tests/test_bv_analyze.py
@@ -118,7 +118,6 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/transitions.py
     - skills/atm-bd-orchestration/templates/arch-qa-assignment.json.j2
     - skills/atm-bd-orchestration/templates/dev-complete.md.j2
-    - skills/atm-bd-orchestration/templates/dev-fix.xml.j2
     - skills/atm-bd-orchestration/templates/dev-sanity-assignment.json.j2
     - skills/atm-bd-orchestration/templates/dev-sanity-complete.md.j2
     - skills/atm-bd-orchestration/templates/dev-sanity-template.xml.j2
@@ -154,8 +153,15 @@ artifacts:
     - skills/atm-beads/resources/orchestrating.md
     - skills/atm-beads/resources/planning.md
     - skills/atm-beads/resources/troubleshooting.md
+    - skills/atm-beads/schemas/dev-bead.schema.json
+    - skills/atm-beads/schemas/finding-bead.schema.json
+    - skills/atm-beads/schemas/fix-bead.schema.json
+    - skills/atm-beads/schemas/gate-bead.schema.json
+    - skills/atm-beads/schemas/qa-bead.schema.json
+    - skills/atm-beads/schemas/root-bead.schema.json
     - skills/atm-beads/schemas/sanity-bead.schema.json
     - skills/atm-beads/schemas/sprint-bead.schema.json
+    - skills/atm-beads/schemas/stack-bead.schema.json
     - skills/atm-beads/scripts/bead_schema.py
     - skills/atm-beads/scripts/check-phase-artifact
     - skills/atm-beads/scripts/phase-config
@@ -169,7 +175,9 @@ artifacts:
     - skills/atm-beads/templates/dev-sanity-bead.json.j2
     - skills/atm-beads/templates/plan-root.json.j2
     - skills/atm-beads/templates/sprint-bead.json.j2
+    - skills/atm-beads/templates/stack-bead.json.j2
     - skills/atm-beads/tests/phase_fixtures.py
+    - skills/atm-beads/tests/test_bead_schema.py
     - skills/atm-beads/tests/test_importing_docs.py
     - skills/atm-beads/tests/test_phase_config.py
     - skills/atm-beads/tests/test_plan_root.py

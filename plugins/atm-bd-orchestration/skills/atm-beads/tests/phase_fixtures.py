@@ -8,7 +8,6 @@ from pathlib import Path
 TEMPLATE_DIRECTORY = Path(".claude/skills/atm-bd-orchestration/templates")
 TEMPLATE_NAMES = {
     "dev": "dev-template.xml.j2",
-    "dev_fix": "dev-fix.xml.j2",
     "fix": "fix-assignment.xml.j2",
     "sanity": "dev-sanity-template.xml.j2",
     "qa": "qa-template.xml.j2",
