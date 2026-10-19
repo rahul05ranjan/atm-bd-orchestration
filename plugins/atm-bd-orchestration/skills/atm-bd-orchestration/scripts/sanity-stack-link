@@ -228,9 +228,14 @@ class Linker:
             raise StackError('stack claim or ledger changed during reconciliation')
         self.command(['git', 'fetch', 'origin'])
         if layers and layers[-1]['pr'] == self.values['pr_number']:
+            top = layers[-1]
+            actual = self.command(['git', 'rev-parse', 'refs/remotes/origin/' + top['branch']]).stdout.strip()
+            if (top['branch'] != self.values['branch'] or top['head'] != self.values['commit'] or
+                    actual != top['head'] or candidate['base'] != top['base']):
+                raise StackError('checked pull request conflicts with the recorded stack top')
             if metadata != original:
                 self.write(metadata)
-            return {'result': 'stacked', 'top': layers[-1], 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
+            return {'result': 'stacked', 'top': top, 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
         if any(layer['pr'] == self.values['pr_number'] or layer['branch'] == self.values['branch'] for layer in layers):
             raise StackError('checked layer is already below the stack top')
         base = layers[-1]['branch'] if layers else metadata['trunk']

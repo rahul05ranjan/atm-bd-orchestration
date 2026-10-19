@@ -174,6 +174,18 @@ def test_moved_ledger_top_fails_closed(world):
     assert world.bead["metadata"] == before
 
 
+def test_replaying_same_pr_with_changed_head_cannot_claim_stack_success(world):
+    values = world.branch("first", "trunk", 1)
+    assert world.link(values)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    world.git("commit", "--allow-empty", "--message", "new head")
+    world.git("push", "origin", "first")
+    values["commit"] = world.git("rev-parse", "HEAD")
+    world.pulls[0]["sha"] = values["commit"]
+    assert world.link(values)["result"] == "stack_failed"
+    assert world.bead["metadata"] == before
+
+
 @pytest.mark.parametrize("budget,unavailable", [("lean", False), ("full", True)])
 def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
     values = world.branch("first", "trunk", 1)
