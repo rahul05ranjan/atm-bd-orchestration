@@ -648,7 +648,7 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
                          {"reviewer": "arch-qa", "difficulty": "normal"})
         ws.groups("--findings", self.round_one(sprint, qa, ref="qa1-f2", difficulty="hard"))
         self.assertEqual(ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"]["difficulty"], "hard")
-        self.assertIn(ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"].get("found_on_layer"), (None, ""))
+        self.assertNotIn("found_on_layer", ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"])
         # planted negatives: the old key-list shape is not JSON, and a finding without its remedy is refused
         with self.assertRaises(ValueError):
             json.loads('{"findings": [{"ref": "qa1-f1", "severity": "blocking", "reviewer", "title", "remedy", '
