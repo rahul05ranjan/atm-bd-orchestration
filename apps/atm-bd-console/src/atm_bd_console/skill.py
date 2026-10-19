@@ -69,6 +69,9 @@ def run(argv: list[str] | None = None) -> int:
         overrides = installer.parse_set(args.set)
         with skill_source.resolve_source(version=args.version, latest=args.latest) as source:
             manifest = skill_integrity.load_manifest(source)
+            manifest_version = manifest["version"] if source.name == "bundled" else (
+                skill_source.validate_manifest_version(manifest, source.name)
+            )
             differing = [result for result in skill_integrity.verify_tree(source.pkg_dir, manifest) if result.status != "ok"]
             if differing:
                 for result in differing:
@@ -89,7 +92,7 @@ def run(argv: list[str] | None = None) -> int:
             changed = installer.apply_plan(plan, package_version)
             try:
                 skill_integrity.write_install_record(
-                    dest, manifest["version"], source.commit, manifest,
+                    dest, manifest_version, source.commit, manifest,
                     {key: data for key, (data, _executable) in plan.writes.items()}, source=source.name,
                 )
             except OSError as error:

@@ -215,7 +215,7 @@ def _sdist(member: str | None, data: bytes = PUBLISHED) -> bytes:
 
 
 @pytest.mark.parametrize(("response", "expected"), [
-    (_sdist("atm_bd-0.17.4/src/atm_bd_console/skill-manifest.json"), PUBLISHED),
+    (_sdist("atm_bd-0.17.4/src/atm_bd_console/skill-manifest.json", b'{"version":"0.17.4"}'), b'{"version":"0.17.4"}'),
     (_sdist("atm_bd-0.17.4/src/atm_bd_console/other.json"), None),
     (_sdist(None), None),
     (None, None),
@@ -243,6 +243,17 @@ def test_release_manifest_rejects_a_version_that_does_not_match_its_tag(monkeypa
     monkeypatch.setattr(skill_source, "_http_get", lambda _url: archive)
 
     with pytest.raises(skill_source.SkillSourceError, match="version '0.17.3' does not match release version '0.17.4'"):
+        skill_source.release_manifest("v0.17.4")
+
+
+@pytest.mark.parametrize("manifest", [b'{}', b'{"version":null}', b'{"version":17}', b'[]'],
+                         ids=["missing", "null", "number", "non-object"])
+def test_release_manifest_rejects_missing_or_invalid_version_with_tag(monkeypatch, manifest: bytes) -> None:
+    archive = _sdist("atm_bd-0.17.4/src/atm_bd_console/skill-manifest.json", manifest)
+    monkeypatch.undo()
+    monkeypatch.setattr(skill_source, "_http_get", lambda _url: archive)
+
+    with pytest.raises(skill_source.SkillSourceError, match=r"v0\.17\.4:.*version.*0\.17\.4"):
         skill_source.release_manifest("v0.17.4")
 
 

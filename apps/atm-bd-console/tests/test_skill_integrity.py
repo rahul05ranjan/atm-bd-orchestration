@@ -288,6 +288,42 @@ def test_release_install_verifies_the_tag_against_its_release_sdist_manifest(
     assert installer.calls[-1] == "apply_plan"
     assert capsys.readouterr().out.endswith(
         f"installed atm-bd-orchestration orchestration from v0.17.3 @ {COMMIT} (atm-bd {skill.__version__})\n")
+    assert json.loads((tmp_path / "consumer/.claude/atm-bd-install.json").read_text())["version"] == "0.17.3"
+
+
+@pytest.mark.parametrize("version", [None, 17, "0.17.2"], ids=["missing", "non-string", "mismatch"])
+@pytest.mark.parametrize("args", [["0.17.3"], ["--latest"]], ids=["version", "latest"])
+def test_bad_release_manifest_version_refuses_before_cloning_or_writing(
+    installer, upstream: Upstream, tmp_path: Path, capsys, args: list[str], version,
+) -> None:
+    tree = upstream.release("v0.17.3")
+    upstream.latest = "v0.17.3"
+    manifest = skill_integrity.build_manifest(tree, "0.17.3")
+    if version is None:
+        del manifest["version"]
+    else:
+        manifest["version"] = version
+    upstream.assets[f"{skill_source.RELEASES}/v0.17.3/atm_bd-0.17.3.tar.gz"] = sdist(
+        "0.17.3", json.dumps(manifest).encode())
+
+    assert run_cli(args, tmp_path) == 1
+    assert "v0.17.3" in capsys.readouterr().err
+    assert upstream.clones == [] and installer.calls == ["check_tools"]
+    assert consumer(tmp_path) == {}
+
+
+@pytest.mark.parametrize("args", [["0.17.3"], ["--latest"]], ids=["version", "latest"])
+def test_release_install_rechecks_manifest_version_before_writing_record(
+    installer, upstream: Upstream, tmp_path: Path, monkeypatch, capsys, args: list[str],
+) -> None:
+    tree = upstream.release("v0.17.3")
+    upstream.latest = "v0.17.3"
+    monkeypatch.setattr(skill_source, "release_manifest", lambda _tag: manifest_bytes(tree, "0.17.2"))
+
+    assert run_cli(args, tmp_path) == 1
+    assert "v0.17.3" in capsys.readouterr().err
+    assert "plan_install" not in installer.calls and "apply_plan" not in installer.calls
+    assert consumer(tmp_path) == {}
 
 
 def test_latest_installs_the_latest_published_release_not_main(installer, upstream: Upstream, tmp_path: Path) -> None:

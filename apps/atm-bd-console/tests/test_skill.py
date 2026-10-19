@@ -20,9 +20,9 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 PLUGIN = Path(__file__).resolve().parents[3] / "plugins" / "atm-bd-orchestration"
 
 
-def published(pkg_dir: Path) -> bytes:
+def published(pkg_dir: Path, version: str = "0.16.0") -> bytes:
     """The manifest a release of this tree publishes."""
-    return json.dumps(skill_integrity.build_manifest(pkg_dir, "0.16.0")).encode()
+    return json.dumps(skill_integrity.build_manifest(pkg_dir, version)).encode()
 
 
 @dataclass
@@ -169,7 +169,7 @@ def skill_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, 
     for tag in ("v0.16.0", "v0.16.1"):
         checkout = tmp_path / f"published-{tag}"
         git("clone", "-q", "--branch", tag, str(origin), str(checkout))
-        manifests[tag] = published(checkout / "plugins" / "atm-bd-orchestration")
+        manifests[tag] = published(checkout / "plugins" / "atm-bd-orchestration", tag.removeprefix("v"))
     monkeypatch.setattr(skill_source, "release_manifest", manifests.get)
     monkeypatch.setattr(skill_source, "latest_release_tag", lambda: "v0.16.1")
     return url, tag_commit, main_commit
@@ -375,7 +375,7 @@ def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path:
     remote = tmp_path / "remote"
     remote.mkdir()
     (remote / "install.py").write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()\n", encoding="utf-8")
-    source = skill_source.SkillSource("main", remote, COMMIT, published(remote))
+    source = skill_source.SkillSource("v0.16.0", remote, COMMIT, published(remote))
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
 
     assert skill.run(["--latest", "--dest", str(tmp_path / "consumer")]) == 0
