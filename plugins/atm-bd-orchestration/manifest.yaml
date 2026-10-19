@@ -180,6 +180,7 @@ artifacts:
     - skills/atm-beads/scripts/plan_contract.py
     - skills/atm-beads/scripts/repo_config.py
     - skills/atm-beads/scripts/resolve-role
+    - skills/atm-beads/scripts/sanity_shared.py
     - skills/atm-beads/scripts/sc_render.py
     - skills/atm-beads/scripts/sprint_index_common.py
     - skills/atm-beads/scripts/validate-plan

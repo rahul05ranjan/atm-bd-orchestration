@@ -536,7 +536,7 @@ def test_cron_reports_all_and_only_actions_from_this_tick(cli_runtime, monkeypat
     monkeypatch.setattr(runner, "datetime", FixedDateTime)
     monkeypatch.setattr(runner, "create_console_logger", lambda *_: Ok(Logger()))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, steps=())))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -573,7 +573,7 @@ def test_headless_held_lock_checks_snapshot_age_without_a_tick(cli_runtime, monk
 
     monkeypatch.setattr(cli.runner, "step", forbidden)
     for source, name in (
-        (runner.beads_source, "show"), (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
+        (runner.beads_source, "show"), (runner.beads_source, "open_rows"), (runner.beads_source, "ready"),
         (runner.atm_source, "members"), (runner.atm_source, "tasks"),
         (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
         (runner.github_source, "open_prs"),
@@ -859,7 +859,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(phase_file))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda ids: Ok(tuple(beads[item] for item in ids if item in beads)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok((sanity,)))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((sanity,), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok((sanity,)))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Err(TIMEOUT) if member_read_fails else Ok(()))
     monkeypatch.setattr(cli, "_notification_startup_error", lambda _: None)

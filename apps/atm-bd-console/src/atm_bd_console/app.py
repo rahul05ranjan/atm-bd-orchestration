@@ -26,9 +26,9 @@ from textual.widgets._markdown import MarkdownBlock
 from textual.widgets._tabbed_content import ContentTab
 from textual.widgets.option_list import Option
 
-from . import prs, render, runs, status, status_table
+from . import findings_renderer, prs, render, runs, status, status_table
 from .build import display_identity, identity
-from .enums import QaState, SprintState
+from .enums import SprintState
 from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
@@ -165,8 +165,9 @@ def _quality_run_label(
     run: runs.QaRun, findings: list[dict], *, local_zone: tzinfo | None = None,
 ) -> str:
     counts = [sum(f["severity"] == severity for f in findings) for severity in ("blocking", "important", "minor")]
+    verdict = run.verdict.name if run.verdict is not None else "—"
     return (f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  {run.bead.get('id', '')}  "
-            f"#{run.pr_number or '—'}  {run.round or '—'}  {run.verdict or '—'}  "
+            f"#{run.pr_number or '—'}  {run.round or '—'}  {verdict}  "
             f"{counts[0]}/{counts[1]}/{counts[2]}  {_duration(run.elapsed_s)}")
 
 
@@ -404,8 +405,11 @@ class ConsoleApp(App[int]):
         runs_error = None
         self._step_lock.acquire()
         try:
-            snapshot, state = self.step(self.config, self.state, force_github)
+            step_result = self.step(self.config, self.state, force_github)
+            snapshot, state = step_result
             self.state = state
+            run_data = getattr(step_result, "run_data", None)
+            runs_error = getattr(step_result, "runs_error", None)
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
         finally:
@@ -415,10 +419,6 @@ class ConsoleApp(App[int]):
                 text, error = status.status_text(snapshot)
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
-            try:
-                run_data = runs.collect(self.config.repo_root, self.config.phase)
-            except (OSError, ValueError, RuntimeError) as run_error:
-                runs_error = str(run_error)
         self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error)
 
     def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None,
@@ -491,7 +491,7 @@ class ConsoleApp(App[int]):
         try:
             findings = runs.run_findings(run.bead, self.finding_beads)
             agents = self.snapshot.agents if self.snapshot else ()
-            qa_state = {"PASS": QaState.PASS, "FAIL": QaState.FAIL, "running": QaState.RUNNING}.get(run.verdict)
+            qa_state = run.verdict
             colors: dict[str, str] = {}
             display_findings = []
             for finding in findings:
@@ -504,7 +504,7 @@ class ConsoleApp(App[int]):
                 _, color = icon_for(member)
                 if name and color:
                     colors[label.plain] = color
-            content = runs.render_findings(self.config.repo_root, display_findings)
+            content = findings_renderer.render_findings(self.config.repo_root, display_findings)
         except Exception as error:  # noqa: BLE001
             colors = {}
             content = f"Unable to render findings: {error}"

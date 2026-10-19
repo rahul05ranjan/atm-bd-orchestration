@@ -118,7 +118,8 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((BEAD,)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
+    monkeypatch.setattr(runner.beads_source, "closed_phase_rows", lambda *_args, **_kwargs: Ok([]))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(PHASE))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -221,13 +222,14 @@ def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch
             return Ok(())
         return Ok((sprint,))
 
-    def open_beads(_label):
-        return Ok((active_qa,) if active[0] else ())
+    def open_rows(_label):
+        values = (active_qa,) if active[0] else ()
+        return Ok(runner.beads_source.BeadRows(values, ()))
 
     monkeypatch.setattr(runner.atm_bd, "phase_file", phase_file)
     monkeypatch.setattr(runner.atm_bd, "repo_config", repo_config)
     monkeypatch.setattr(runner.beads_source, "show", show)
-    monkeypatch.setattr(runner.beads_source, "open_beads", open_beads)
+    monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     def members(*_args):
         return Ok((Member("quality-mgr", "active", NOW, agent_type="qa"),))
@@ -354,7 +356,8 @@ def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> No
         raise AssertionError("idle-stop must not poll this boundary")
 
     for source, name in (
-        (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
+        (runner.beads_source, "open_rows"), (runner.beads_source, "ready"),
+        (runner.beads_source, "closed_phase_rows"),
         (runner.atm_source, "members"), (runner.atm_source, "tasks"),
         (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
         (runner.git_source, "remote_refs"), (runner.git_source, "merge"),
@@ -374,7 +377,7 @@ def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(active))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -412,7 +415,7 @@ def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, steps=())))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -528,7 +531,7 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
@@ -1161,7 +1164,7 @@ def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, m
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
     fake_bin.make("atm", 'printf "{}"\n')

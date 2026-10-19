@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,6 +9,14 @@ from . import command
 from .atm_source import sprint_state_of
 from .result import Err, Ok, ParseFailed, Result
 from .types import Bead
+
+
+@dataclass(frozen=True)
+class BeadRows:
+    """One bd list response retained both as typed beads and raw rows for read-only projections."""
+
+    beads: tuple[Bead, ...]
+    rows: tuple[dict[str, Any], ...]
 
 
 def _bead(raw: dict[str, Any]) -> Bead:
@@ -23,14 +32,26 @@ def _bead(raw: dict[str, Any]) -> Bead:
     )
 
 
-def _run(argv: list[str]) -> Result[tuple[Bead, ...]]:
-    completed = command.run(argv, "inspect bd output")
+def _raw(argv: list[str], *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
+    completed = command.run(argv, "inspect bd output", cwd=cwd)
     if isinstance(completed, Err):
         return completed
     try:
         raw = json.loads(completed.value.stdout)
-        return Ok(tuple(_bead(item) for item in raw))
+        if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+            raise ValueError("expected an array of bead objects")
+        return Ok(raw)
     except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
+
+
+def _run(argv: list[str], *, cwd: str | None = None) -> Result[tuple[Bead, ...]]:
+    raw = _raw(argv, cwd=cwd)
+    if isinstance(raw, Err):
+        return raw
+    try:
+        return Ok(tuple(_bead(item) for item in raw.value))
+    except (KeyError, TypeError, ValueError) as error:
         return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
 
 
@@ -39,7 +60,18 @@ def show(ids: tuple[str, ...]) -> Result[tuple[Bead, ...]]:
 
 
 def open_beads(label: str) -> Result[tuple[Bead, ...]]:
-    return _run(["bd", "list", "-l", label, "--json"])
+    opened = open_rows(label)
+    return opened if isinstance(opened, Err) else Ok(opened.value.beads)
+
+
+def open_rows(label: str) -> Result[BeadRows]:
+    raw = _raw(["bd", "list", "-l", label, "--json"])
+    if isinstance(raw, Err):
+        return raw
+    try:
+        return Ok(BeadRows(tuple(_bead(item) for item in raw.value), tuple(raw.value)))
+    except (KeyError, TypeError, ValueError) as error:
+        return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
 
 
 def ready(label: str) -> Result[tuple[Bead, ...]]:
@@ -51,33 +83,29 @@ def run_beads(phase: str, stage: str, *, cwd: str | None = None) -> Result[list[
     rows: dict[str, dict[str, Any]] = {}
     # Default bd list excludes closed beads; explicit status includes history without --all.
     for status_args in ([], ["--status", "closed"]):
-        completed = command.run(["bd", "list", "-l", f"phase-{phase},stage:{stage}", *status_args, "-n", "0", "--json"],
-                                "inspect bd run output", cwd=cwd)
-        if isinstance(completed, Err):
-            return completed
-        try:
-            value = json.loads(completed.value.stdout)
-            if not isinstance(value, list) or not all(isinstance(row, dict) and isinstance(row.get("id"), str) for row in value):
-                raise ValueError("expected an array of bead objects with ids")
-            rows.update({row["id"]: row for row in value})
-        except ValueError as error:
-            return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
+        value = _raw(["bd", "list", "-l", f"phase-{phase},stage:{stage}", *status_args, "-n", "0", "--json"], cwd=cwd)
+        if isinstance(value, Err):
+            return value
+        if not all(isinstance(row.get("id"), str) for row in value.value):
+            return Err(ParseFailed("parse_failed", "bd", "expected bead objects with ids", "repair bd JSON"))
+        rows.update({row["id"]: row for row in value.value})
     return Ok(list(rows.values()))
 
 
 def raw_show(ids: tuple[str, ...], *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
     if not ids:
         return Ok([])
-    completed = command.run(["bd", "show", *ids, "--json"], "inspect checked beads", cwd=cwd)
-    if isinstance(completed, Err):
-        return completed
-    try:
-        value = json.loads(completed.value.stdout)
-        if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
-            raise ValueError("expected an array of bead objects")
-        return Ok(value)
-    except ValueError as error:
-        return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
+    return _raw(["bd", "show", *ids, "--json"], cwd=cwd)
+
+
+def closed_phase_rows(phase: str, *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
+    """Read the phase's closed rows once for the Quality tab; open rows come from the runner tick."""
+    result = _raw(["bd", "list", "-l", f"phase-{phase}", "--status", "closed", "-n", "0", "--json"], cwd=cwd)
+    if isinstance(result, Err):
+        return result
+    if not all(isinstance(row.get("id"), str) for row in result.value):
+        return Err(ParseFailed("parse_failed", "bd", "expected bead objects with ids", "repair bd JSON"))
+    return result
 
 
 def ancestors(beads: tuple[Bead, ...]) -> Result[tuple[Bead, ...]]:

@@ -53,6 +53,9 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads" / "scripts"))
+from sanity_shared import valid_elapsed_s  # noqa: E402
+
 # Tool lock and log files a clean worktree may hold; the same as `IGNORED_STATUS_PATHS` in assignment-gates.py.
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
 # The Jev transport, the sibling jev_client.py; it alone writes and verifies receipts.
@@ -167,8 +170,7 @@ def reply_status(result, index, manifest, sanity_bead, dev_bead):
     if (not isinstance(result, dict) or set(result) not in ({"success", "data", "error"}, {"success", "data", "error", "elapsed_s"})
             or not isinstance(result.get("success"), bool)):
         raise Reject(f"result {index}: not a success or failure envelope")
-    if "elapsed_s" in result and (type(result["elapsed_s"]) not in (int, float)
-                                  or not math.isfinite(result["elapsed_s"]) or result["elapsed_s"] < 0):
+    if "elapsed_s" in result and not valid_elapsed_s(result["elapsed_s"]):
         raise Reject(f"result {index}: elapsed_s must be a finite nonnegative number")
     if result["success"] is False:
         error = failure_envelope(result, index, manifest["deliverables_total"])
@@ -571,8 +573,7 @@ def main(argv):
                     or any(key not in result for key in ("success", "data", "error"))):
                 raise Reject(f"result {index}: not a success or failure envelope "
                              "(success must be true or false; success, data and error must all be present)")
-            if "elapsed_s" in result and (type(result["elapsed_s"]) not in (int, float)
-                                          or not math.isfinite(result["elapsed_s"]) or result["elapsed_s"] < 0):
+            if "elapsed_s" in result and not valid_elapsed_s(result["elapsed_s"]):
                 raise Reject(f"result {index}: elapsed_s must be a finite nonnegative number")
             if result["success"] is False:
                 envelope = failure_envelope(result, index, manifest["deliverables_total"])

@@ -10,6 +10,7 @@ from contract_fixtures import RUNNING
 from textual.worker import WorkerCancelled
 
 from atm_bd_console import app as console
+from atm_bd_console.runner import StepResult
 from atm_bd_console.types import Config, Snapshot, State
 
 
@@ -28,13 +29,14 @@ HANG_GUARD_S = 60
 
 
 class FakeStep:
-    def __init__(self, snapshot: Snapshot = RUNNING) -> None:
+    def __init__(self, snapshot: Snapshot = RUNNING, run_data=None) -> None:
         self.snapshot = snapshot
         self.calls: list[bool] = []
+        self.run_data = run_data
 
     def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
         self.calls.append(force_github)
-        return self.snapshot, state
+        return StepResult(self.snapshot, state, run_data=self.run_data)
 
 
 @pytest.fixture(autouse=True)

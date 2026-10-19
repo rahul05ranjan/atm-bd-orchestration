@@ -56,6 +56,19 @@ RECEIPT = jev_reply(1)["data"]["jev"]
 
 
 class SanityHistory(unittest.TestCase):
+    def test_shared_elapsed_validator_and_single_bead_read(self):
+        for value in (0, 1.25):
+            self.assertTrue(HISTORY.valid_elapsed_s(value))
+        for value in (True, -1, float("nan"), float("inf"), "1"):
+            self.assertFalse(HISTORY.valid_elapsed_s(value))
+        with patch.object(HISTORY.subprocess, "run", return_value=type("Completed", (), {
+            "stdout": '[{"assignee":"dev-one","metadata":{"phase":"phase-bj"}}]'
+        })()) as run:
+            bead = HISTORY.bead_data("dev-bj-4")
+            self.assertEqual(HISTORY.checked_dev(bead), "dev-one")
+            self.assertEqual(HISTORY.phase_from_bead(bead, "bj-4"), "bj")
+            self.assertEqual(run.call_count, 1)
+
     def test_jev_elapsed_uses_maximum_and_missing_is_null(self):
         self.assertEqual(HISTORY.reviewer_elapsed({"reviewer": "sanity-jev", "reviewer_results": [
             {"elapsed_s": 1.2}, {"elapsed_s": 4.2}, {"elapsed_s": 2.0}]}), 4.2)

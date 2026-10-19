@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import math
 import os
 import re
 import subprocess
@@ -17,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads" / "scripts"))
 import sc_render  # noqa: E402
+from sanity_shared import ledger_path, primary_root, valid_elapsed_s  # noqa: E402
 
 
 def fail(message: str) -> None:
@@ -52,27 +52,27 @@ SLOT_ERROR_KEYS = ("code", "message", "recoverable", "deliverable")
 LATER_FIELDS = ("errors", "jev_receipts", "dev", "jev_elapsed_s", "llm_elapsed_s", "kind")
 
 
-def elapsed_value(value):
-    return type(value) in (int, float) and math.isfinite(value) and value >= 0
-
-
 def reviewer_elapsed(value):
     """Concurrent Jev calls contribute their maximum wall time, not their sum."""
     if value.get("reviewer") != "sanity-jev":
         return None
     times = [result.get("elapsed_s") for result in value.get("reviewer_results") or []
-             if isinstance(result, dict) and elapsed_value(result.get("elapsed_s"))]
+             if isinstance(result, dict) and valid_elapsed_s(result.get("elapsed_s"))]
     return max(times) if times else None
 
 
-def checked_dev(bead):
+def bead_data(bead):
     try:
         result = subprocess.run(["bd", "show", bead, "--json"], check=True, capture_output=True, text=True)
         issues = json.loads(result.stdout)
-        assignee = issues[0].get("assignee") if isinstance(issues, list) and issues else None
-        return assignee if isinstance(assignee, str) and assignee else None
+        return issues[0] if isinstance(issues, list) and issues and isinstance(issues[0], dict) else {}
     except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, AttributeError):
-        return None
+        return {}
+
+
+def checked_dev(bead):
+    assignee = bead.get("assignee") if isinstance(bead, dict) else None
+    return assignee if isinstance(assignee, str) and assignee else None
 
 
 def result_kind(value):
@@ -118,31 +118,13 @@ def phase_from_sprint(sprint: str) -> str:
     return match.group(1)
 
 
-def phase_from_bead(bead: str, sprint: str) -> str:
-    try:
-        result = subprocess.run(
-            ["bd", "show", bead, "--json"], check=True, capture_output=True, text=True
-        )
-        issues = json.loads(result.stdout)
-        metadata = issues[0].get("metadata") if isinstance(issues, list) and issues else None
-        value = metadata.get("phase") if isinstance(metadata, dict) else None
-        match = re.fullmatch(r"(?:phase-)?([a-z][a-z0-9_-]*)", value.lower()) if isinstance(value, str) else None
-        if match:
-            return match.group(1)
-    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
-        pass
+def phase_from_bead(bead: dict, sprint: str) -> str:
+    metadata = bead.get("metadata") if isinstance(bead, dict) else None
+    value = metadata.get("phase") if isinstance(metadata, dict) else None
+    match = re.fullmatch(r"(?:phase-)?([a-z][a-z0-9_-]*)", value.lower()) if isinstance(value, str) else None
+    if match:
+        return match.group(1)
     return phase_from_sprint(sprint)
-
-
-def primary_root() -> Path:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            check=True, capture_output=True, text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        fail(f"cannot locate repository common directory: {exc}")
-    return Path(result.stdout.strip()).parent
 
 
 def load_log(path: Path) -> list[dict[str, object]]:
@@ -192,12 +174,13 @@ def main() -> None:
     vars = read_vars(args.vars)
     completed = utc_timestamp(vars["completed_at"])
     elapsed = max(0, round(completed.timestamp() - utc_timestamp(vars["started_at"]).timestamp()))
-    phase = phase_from_bead(args.bead, vars["sprint"])
+    checked = bead_data(args.bead)
+    phase = phase_from_bead(checked, vars["sprint"])
     record = {
         "run_id": vars["run_id"], "reviewer": vars["reviewer"], "commit": vars["commit"],
         "started_at": vars["started_at"], "duration_seconds": elapsed,
         "error": vars.get("error"),
-        "dev": checked_dev(args.bead),
+        "dev": checked_dev(checked),
         "jev_elapsed_s": reviewer_elapsed(vars),
         "llm_elapsed_s": vars.get("llm_elapsed_s") if vars["reviewer"] == "sanity-llm" else None,
         "kind": result_kind(vars),
@@ -212,7 +195,7 @@ def main() -> None:
         "duration": f"{elapsed // 60}m{elapsed % 60:02d}s",
     }
     record = render_record(record)
-    log_path = primary_root() / ".sc" / "sanity-log" / f"phase-{phase}.jsonl"
+    log_path = ledger_path(primary_root(), phase)
     append_record(log_path, record)
     print(log_path)
 
@@ -233,7 +216,7 @@ def validate_record(record):
     if record["dev"] is not None and (not isinstance(record["dev"], str) or not record["dev"]):
         fail("rendered record.dev must be a nonempty string or null")
     for field in ("jev_elapsed_s", "llm_elapsed_s"):
-        if record[field] is not None and not elapsed_value(record[field]):
+        if record[field] is not None and not valid_elapsed_s(record[field]):
             fail(f"rendered record.{field} must be a finite nonnegative number or null")
     if record["kind"] not in {"verdict", "API_FAILURE"}:
         fail("rendered record.kind must be verdict or API_FAILURE")

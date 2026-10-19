@@ -12,7 +12,7 @@ from rich.cells import cell_len
 from textual import events
 from textual.widgets._markdown import MarkdownBlock
 
-from atm_bd_console import render, runs
+from atm_bd_console import findings_renderer, render, runs
 from atm_bd_console.app import (
     ConsoleApp,
     _agent_name,
@@ -144,12 +144,12 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
                "metadata": {"severity": "important", "reviewer": "req-qa"},
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
     assert "13:14" in _quality_run_label(runs.qa_runs([qa])[0], [], local_zone=UTC)
-    monkeypatch.setattr(runs, "collect", lambda *_args: ([], runs.qa_runs([qa]), [finding]))
     rendered = []
-    monkeypatch.setattr(runs, "render_findings", lambda _root, findings: rendered.extend(findings) or "# Findings\n\nmissing test")
+    monkeypatch.setattr(findings_renderer, "render_findings", lambda _root, findings: rendered.extend(findings) or "# Findings\n\nmissing test")
 
     async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)), FakeStep(SNAPSHOT), STATE)
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(SNAPSHOT, ([], runs.qa_runs([qa]), [finding])), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             tabs = app.query_one("TabbedContent")
@@ -183,7 +183,6 @@ def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_pat
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
     reviewer = replace(RUNNING.agents[0], name="req-qa", agent_type="qa")
     snapshot = replace(SNAPSHOT, agents=(reviewer,))
-    monkeypatch.setattr(runs, "collect", lambda *_args: ([], runs.qa_runs([qa]), [finding]))
     monkeypatch.setattr(runs, "run_findings", lambda *_args: [finding])
     rendered = []
 
@@ -191,10 +190,11 @@ def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_pat
         rendered.extend(findings)
         return f"**Reviewer:** {findings[0]['reviewer_display']}"
 
-    monkeypatch.setattr(runs, "render_findings", render_findings)
+    monkeypatch.setattr(findings_renderer, "render_findings", render_findings)
 
     async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)), FakeStep(snapshot), STATE)
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(snapshot, ([], runs.qa_runs([qa]), [finding])), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             app.query_one("TabbedContent").active = "quality"
@@ -231,7 +231,6 @@ def test_quality_sanity_reviewer_display_uses_roster_icon_without_mutating_revie
                "issue": f"A separate issue mentions {display}.", "required_correction": "Preserve reviewer identity.",
                "reviewer": reviewer_name}
     snapshot = replace(SNAPSHOT, agents=(member,))
-    monkeypatch.setattr(runs, "collect", lambda *_args: ([], runs.qa_runs([qa]), [finding]))
     monkeypatch.setattr(runs, "run_findings", lambda *_args: [finding])
     rendered = []
 
@@ -239,10 +238,11 @@ def test_quality_sanity_reviewer_display_uses_roster_icon_without_mutating_revie
         rendered.extend(findings)
         return f"**Issue:** A separate issue mentions {display}.\n\n**Reviewer:** {findings[0]['reviewer_display']}"
 
-    monkeypatch.setattr(runs, "render_findings", render_findings)
+    monkeypatch.setattr(findings_renderer, "render_findings", render_findings)
 
     async def scenario() -> None:
-        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)), FakeStep(snapshot), STATE)
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(snapshot, ([], runs.qa_runs([qa]), [finding])), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             app.query_one("TabbedContent").active = "quality"

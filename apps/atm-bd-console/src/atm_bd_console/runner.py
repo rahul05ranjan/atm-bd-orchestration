@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Literal, Self
 
-from . import atm_bd, atm_source, beads_source, git_source, github_source, model
+from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
 from .dispatch import sprint_of, verification_reason
 from .enums import MergeState, SprintState
 from .log import TickLog, create_console_logger, error_message
@@ -20,10 +20,15 @@ class StepResult(tuple[Snapshot, State]):
     """A two-value compatible tick result with all actions reported this tick."""
 
     reported: tuple[Action, ...]
+    run_data: tuple[list, list, list[dict]] | None
+    runs_error: str | None
 
-    def __new__(cls, snapshot: Snapshot, state: State, reported: tuple[Action, ...] = ()) -> Self:
+    def __new__(cls, snapshot: Snapshot, state: State, reported: tuple[Action, ...] = (),
+                run_data: tuple[list, list, list[dict]] | None = None, runs_error: str | None = None) -> Self:
         result = super().__new__(cls, (snapshot, state))
         result.reported = reported
+        result.run_data = run_data
+        result.runs_error = runs_error
         return result
 
 
@@ -224,9 +229,9 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github)
     if not force_github and model.idle_stop_due(state, now):
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
-    opened = logger.result("beads.open", beads_source.open_beads(file.value.label), label=file.value.label)
+    opened = logger.result("beads.open", beads_source.open_rows(file.value.label), label=file.value.label)
     ready = logger.result("beads.ready", beads_source.ready(file.value.label), label=file.value.label)
-    known = opened.value if isinstance(opened, Ok) else ()
+    known = opened.value.beads if isinstance(opened, Ok) else ()
     shown_ids = atm_bd.closed_show_ids(file.value, known)
     shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
     if isinstance(opened, Err):
@@ -238,6 +243,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     else:
         phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
     logger.result("phase", phase)
+    run_data = None
+    runs_error = None
+    closed_rows = logger.result("beads.closed_runs", beads_source.closed_phase_rows(config.phase, cwd=config.repo_root), phase=config.phase)
+    if isinstance(closed_rows, Err):
+        runs_error = str(closed_rows.error)
+    else:
+        try:
+            run_data = ledger_source.collect(config.repo_root, config.phase,
+                                             opened.value.rows if isinstance(opened, Ok) else (), closed_rows.value)
+        except (OSError, ValueError, RuntimeError) as run_error:
+            runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
     worktrees = logger.result("git.worktrees", git_source.worktrees(config.repo_root))
@@ -332,5 +348,5 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return StepResult(persisted, durable, reported)
+            return StepResult(persisted, durable, reported, run_data, runs_error)
     return persist(store)

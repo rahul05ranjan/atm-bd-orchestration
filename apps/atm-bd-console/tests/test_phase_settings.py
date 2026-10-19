@@ -124,7 +124,7 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
     monkeypatch.setattr(cli.config_source, "repo_root", lambda: phase_repo)
     monkeypatch.chdir(phase_repo)
     monkeypatch.setattr(runner.beads_source, "show", lambda ids: Ok(tuple(beads[item] for item in ids if item in beads)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok((candidate,)))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((candidate,), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok((candidate,)))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok((WORKTREE,)))
     monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
