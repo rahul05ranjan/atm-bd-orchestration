@@ -42,17 +42,31 @@ def test_sanity_merges_reviewers_newest_first_and_accepts_old_rows() -> None:
 
 
 def test_quality_uses_real_bead_fields_and_discovered_from_only() -> None:
-    qa = {"id": "qa-1", "status": "closed", "closed_at": "2026-10-02T01:00:00Z", "close_reason": "FAIL: found bug",
+    qa = {"id": "qa-1", "status": "closed", "started_at": "2026-10-02T00:46:00Z",
+          "closed_at": "2026-10-02T01:00:00Z", "close_reason": "FAIL: found bug",
           "metadata": {"sprint": "bj-1", "round": 2}, "checked_bead_data": {"metadata": {"pr_number": 44}}}
     finding = {"id": "f1", "description": "issue\n\n## Evidence\napp.py:12 and src/thing.py:9", "design": "fix", "metadata": {"severity": "important", "reviewer": "req-qa"},
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
     other = {**finding, "id": "f2", "dependencies": [{"type": "parent-child", "depends_on_id": "qa-1"}]}
     run = runs.qa_runs([qa])[0]
-    assert (run.verdict, run.pr_number, run.round, run.elapsed_s) == ("FAIL", 44, 2, None)
+    assert (run.verdict, run.pr_number, run.round, run.elapsed_s) == ("FAIL", 44, 2, 840.0)
     selected = runs.run_findings(qa, [finding, other])
     assert [f["id"] for f in selected] == ["f1"]
     assert selected[0]["reviewer"] == "req-qa" and selected[0]["required_correction"] == "fix"
     assert selected[0]["refs"] == ["app.py:12", "src/thing.py:9"]
+
+
+@pytest.mark.parametrize(("started_at", "closed_at", "expected"), [
+    ("2026-10-02T00:46:00Z", "2026-10-02T01:00:00Z", 840.0),
+    (None, "2026-10-02T01:00:00Z", None),
+    ("invalid", "2026-10-02T01:00:00Z", None),
+    ("2026-10-02T01:00:00Z", "2026-10-02T00:46:00Z", None),
+    ("2026-10-02T00:46:00", "2026-10-02T01:00:00", None),
+])
+def test_quality_elapsed_requires_valid_ordered_timezone_aware_timestamps(started_at, closed_at, expected) -> None:
+    run = runs.qa_runs([{"id": "qa-1", "status": "closed", "started_at": started_at,
+                         "closed_at": closed_at, "close_reason": "PASS"}])[0]
+    assert run.elapsed_s == expected
 
 
 def test_quality_fixture_from_real_bead_templates() -> None:

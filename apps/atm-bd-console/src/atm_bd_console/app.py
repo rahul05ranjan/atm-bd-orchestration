@@ -7,7 +7,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import ClassVar, Protocol
 
@@ -51,10 +51,13 @@ class FindingsMarkdown(Markdown):
     def _parse_markdown(self, tokens: Iterable[Token]) -> Iterable[MarkdownBlock]:
         def color(block: MarkdownBlock) -> None:
             content = block._content
-            for label, style in self.reviewer_colors.items():
-                start = content.plain.find(label)
-                if start >= 0:
-                    content = content.stylize(style, start, start + 1)
+            source = (block.source or "").lstrip()
+            prefix = "Reviewer: "
+            if source.startswith("**Reviewer:**") and content.plain.startswith(prefix):
+                display = content.plain[len(prefix):]
+                style = self.reviewer_colors.get(display)
+                if style:
+                    content = content.stylize(style, len(prefix), len(content.plain))
             block.set_content(content)
             for child in block._blocks:
                 color(child)
@@ -87,7 +90,7 @@ def status_header(snapshot: Snapshot) -> Text:
 
 def _diagnostic_line(event: _DiagnosticEvent) -> str:
     """Add local display time and level to a stored message without interpreting it."""
-    return f"{render._clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
+    return f"{render.clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
 
 
 def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text:
@@ -102,9 +105,9 @@ def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text
     return Text("\n").join(lines)
 
 
-def _run_time(value: str) -> str:
+def _run_time(value: str, *, local_zone: tzinfo | None = None) -> str:
     try:
-        return render._clock(datetime.fromisoformat(value))
+        return render.clock(datetime.fromisoformat(value), local_zone=local_zone)
     except ValueError:
         return "—"
 
@@ -131,11 +134,13 @@ def _agent_name(name: str | None, agents: tuple[AgentView, ...]) -> Text:
     return result
 
 
-def sanity_text(items: list[runs.SanityRun], agents: tuple[AgentView, ...]) -> tuple[Text, Text]:
+def sanity_text(
+    items: list[runs.SanityRun], agents: tuple[AgentView, ...], *, local_zone: tzinfo | None = None,
+) -> tuple[Text, Text]:
     lines = [Text("Completed  Sprint  PR  Dev  JEV  Elapsed  LLM  Elapsed  Final  Iter")]
     errors = [Text("Sprint  Iter  Reviewer  Error")]
     for run in items:
-        line = Text(f"{_run_time(run.completed_at)}  {run.sprint}  #{run.pr_number or '—'}  ")
+        line = Text(f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  #{run.pr_number or '—'}  ")
         line.append_text(_agent_name(run.dev, agents))
         for row, field in ((run.jev, "jev_elapsed_s"), (run.llm, "llm_elapsed_s")):
             line.append("  ")
@@ -154,6 +159,15 @@ def sanity_text(items: list[runs.SanityRun], agents: tuple[AgentView, ...]) -> t
         line.append(f"  {run.final_verdict or '—'}  {run.iteration or '—'}")
         lines.append(line)
     return Text("\n").join(lines), Text("\n").join(errors)
+
+
+def _quality_run_label(
+    run: runs.QaRun, findings: list[dict], *, local_zone: tzinfo | None = None,
+) -> str:
+    counts = [sum(f["severity"] == severity for f in findings) for severity in ("blocking", "important", "minor")]
+    return (f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  {run.bead.get('id', '')}  "
+            f"#{run.pr_number or '—'}  {run.round or '—'}  {run.verdict or '—'}  "
+            f"{counts[0]}/{counts[1]}/{counts[2]}  {_duration(run.elapsed_s)}")
 
 
 def _lock_message(error: Error) -> str:
@@ -479,17 +493,18 @@ class ConsoleApp(App[int]):
             agents = self.snapshot.agents if self.snapshot else ()
             qa_state = {"PASS": QaState.PASS, "FAIL": QaState.FAIL, "running": QaState.RUNNING}.get(run.verdict)
             colors: dict[str, str] = {}
+            display_findings = []
             for finding in findings:
                 name = str(finding.get("reviewer") or "")
                 roster = tuple(replace(agent, qa_state=qa_state) if agent.name == name and agent.agent_type == "qa" else agent
                                for agent in agents)
                 label = _agent_name(name, roster)
-                finding["reviewer"] = label.plain
+                display_findings.append({**finding, "reviewer_display": label.plain})
                 member = next((agent for agent in roster if agent.name == name), None)
                 _, color = icon_for(member)
                 if name and color:
                     colors[label.plain] = color
-            content = runs.render_findings(self.config.repo_root, findings)
+            content = runs.render_findings(self.config.repo_root, display_findings)
         except Exception as error:  # noqa: BLE001
             colors = {}
             content = f"Unable to render findings: {error}"
@@ -566,10 +581,7 @@ class ConsoleApp(App[int]):
             options = []
             for run in self.quality_runs:
                 findings = runs.run_findings(run.bead, self.finding_beads)
-                counts = [sum(f["severity"] == severity for f in findings) for severity in ("blocking", "important", "minor")]
-                label = (f"{_run_time(run.completed_at)}  {run.sprint}  {run.bead.get('id', '')}  "
-                         f"#{run.pr_number or '—'}  {run.round or '—'}  {run.verdict or '—'}  "
-                         f"{counts[0]}/{counts[1]}/{counts[2]}  {_duration(run.elapsed_s)}")
+                label = _quality_run_label(run, findings)
                 options.append(Option(label, id=str(run.bead.get("id"))))
             quality.add_options(options)
             if options:

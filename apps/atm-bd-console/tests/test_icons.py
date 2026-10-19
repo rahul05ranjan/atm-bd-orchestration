@@ -22,8 +22,8 @@ from atm_bd_console.types import AgentView, Member
 
 def test_sanity_verdict_glyphs() -> None:
     assert SANITY_VERDICT_ICONS == {
-        "PASS": ("\U000f01a6", "#2EA043"),
-        "FAIL": ("\U000f01a6", "#F85149"),
+        "PASS": ("\U000f029b", "#2EA043"),
+        "FAIL": ("\U000f029b", "#F85149"),
         "API_FAILURE": ("\U000f0026", "#D29922"),
     }
 

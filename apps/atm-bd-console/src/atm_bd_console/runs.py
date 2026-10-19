@@ -20,6 +20,21 @@ def _when(value: Any) -> datetime:
         return datetime.min.replace(tzinfo=UTC)
 
 
+def _elapsed_s(started_at: Any, closed_at: Any) -> float | None:
+    """Return a recorded QA run's elapsed time when both UTC timestamps are valid."""
+    if not isinstance(started_at, str) or not isinstance(closed_at, str):
+        return None
+    try:
+        started = datetime.fromisoformat(started_at)
+        closed = datetime.fromisoformat(closed_at)
+    except ValueError:
+        return None
+    if started.tzinfo is None or closed.tzinfo is None:
+        return None
+    elapsed_s = (closed.astimezone(UTC) - started.astimezone(UTC)).total_seconds()
+    return elapsed_s if elapsed_s >= 0 else None
+
+
 @dataclass(frozen=True)
 class SanityRun:
     run_id: str
@@ -73,7 +88,8 @@ def qa_runs(qa_beads: list[dict[str, Any]]) -> list[QaRun]:
         checked = bead.get("checked_bead_data") or {}
         checked_metadata = checked.get("metadata") or {} if isinstance(checked, dict) else {}
         result.append(QaRun(bead, str(bead.get("closed_at") or ""), str(metadata.get("sprint") or ""),
-                            checked_metadata.get("pr_number"), metadata.get("round"), verdict, None))
+                            checked_metadata.get("pr_number"), metadata.get("round"), verdict,
+                            _elapsed_s(bead.get("started_at"), bead.get("closed_at"))))
     return sorted(result, key=lambda run: _when(run.completed_at), reverse=True)
 
 

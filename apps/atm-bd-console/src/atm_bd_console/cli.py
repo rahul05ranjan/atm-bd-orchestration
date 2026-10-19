@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 2 if snapshot.value.phase_data is None else 0
-        last = f" (last tick {render._clock(snapshot.value.generated_at)})" if isinstance(snapshot, Ok) else ""
+        last = f" (last tick {render.clock(snapshot.value.generated_at)})" if isinstance(snapshot, Ok) else ""
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
     md_table = getattr(args, "md_table", False)
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(lock.error)}"}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
-                text = f"{invocation}: console stopped updating (last tick {render._clock(snapshot.value.generated_at)})"
+                text = f"{invocation}: console stopped updating (last tick {render.clock(snapshot.value.generated_at)})"
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:
