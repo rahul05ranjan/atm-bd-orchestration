@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Append one PR under a bead claim, keeping bd's TTL alive with 120 s heartbeats."""
+"""Append one PR under a bead claim, keeping bd's TTL alive with 120 s heartbeats.
+
+ATM_STACK_VIEW_SCRIPT may override the default ~/.claude/scripts/gh_stack_view.py.
+"""
 from __future__ import annotations
 
 import argparse
@@ -258,6 +261,9 @@ class Linker:
             raise StackError(f"pull request base {candidate['base']} differs from stack top {base}")
         new = {'branch': self.values['branch'], 'pr': self.values['pr_number'], 'head': self.values['commit'], 'base': base, 'linked': False}
         if not lean and layers:
+            view = Path(os.environ.get('ATM_STACK_VIEW_SCRIPT', str(Path.home() / '.claude/scripts/gh_stack_view.py'))).expanduser()
+            if not view.is_file() or not os.access(view, os.R_OK):
+                raise StackError(f'stack view dependency is missing or unreadable: {view} (set ATM_STACK_VIEW_SCRIPT)')
             pending = [entry for entry in layers if not entry['linked']] + [new]
             stack_number = metadata.get('stack_number')
             if stack_number is None:
@@ -273,8 +279,7 @@ class Linker:
                     self.command(['gh', 'stack', 'link', str(stack_number), str(entry['pr'])])
             for entry in pending:
                 entry['linked'] = True
-            view = str(Path.home() / '.claude/scripts/gh_stack_view.py')
-            self.command(['python3', view, '--stack', str(stack_number), '--refresh', '--json'])
+            self.command(['python3', str(view), '--stack', str(stack_number), '--refresh', '--json'])
         layers.append(new)
         self.write(metadata)
         return {'result': 'stacked', 'top': new, 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}

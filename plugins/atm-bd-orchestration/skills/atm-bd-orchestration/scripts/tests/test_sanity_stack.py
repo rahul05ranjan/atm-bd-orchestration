@@ -34,6 +34,9 @@ class Clock:
 class World:
     def __init__(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ATM_IDENTITY", "sanity")
+        self.view_script = tmp_path / "gh_stack_view.py"
+        self.view_script.write_text("# controlled view tool\n")
+        monkeypatch.setenv("ATM_STACK_VIEW_SCRIPT", str(self.view_script))
         self.root = tmp_path / "repo"
         origin = tmp_path / "origin.git"
         subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
@@ -147,6 +150,53 @@ def test_three_passes_link_in_verdict_order(world):
     assert all(item["linked"] for item in metadata["layers"])
     assert metadata["stack_number"] == 7
     assert world.bead["assignee"] == ""
+    assert [call[1] for call in world.calls if call[0] == "python3"] == [str(world.view_script)] * 2
+
+
+@pytest.mark.parametrize("existing_stack", [False, True])
+def test_missing_view_tool_fails_before_link_and_preserves_ledger(world, monkeypatch, tmp_path, existing_stack):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    assert world.link(first)["result"] == "stacked"
+    if existing_stack:
+        assert world.link(second)["result"] == "stacked"
+        second = world.branch("third", "second", 3)
+    before = copy.deepcopy(world.bead["metadata"])
+    missing = tmp_path / "missing-view.py"
+    monkeypatch.setenv("ATM_STACK_VIEW_SCRIPT", str(missing))
+    world.calls.clear()
+    result = world.link(second)
+    assert result["result"] == "stack_failed"
+    assert "stack view" in result["evidence"].lower()
+    assert str(missing) in result["evidence"]
+    assert not any(call[:3] == ["gh", "stack", "link"] or "--metadata" in call for call in world.calls)
+    assert world.bead["metadata"] == before
+    assert world.bead["assignee"] == ""
+
+
+def test_default_view_tool_path_is_used_when_no_override(world, monkeypatch, tmp_path):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    assert world.link(first)["result"] == "stacked"
+    view = tmp_path / ".claude" / "scripts" / "gh_stack_view.py"
+    view.parent.mkdir(parents=True)
+    view.write_text("# controlled default view tool\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ATM_STACK_VIEW_SCRIPT")
+    world.calls.clear()
+    assert world.link(second)["result"] == "stacked"
+    assert any(call[:2] == ["python3", str(view)] for call in world.calls)
+
+
+def test_lean_run_does_not_require_view_tool(world, monkeypatch, tmp_path):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    assert world.link(first)["result"] == "stacked"
+    monkeypatch.setenv("ATM_STACK_VIEW_SCRIPT", str(tmp_path / "missing-view.py"))
+    second["budget"] = "lean"
+    world.calls.clear()
+    assert world.link(second)["result"] == "stacked"
+    assert not any(call[:3] == ["gh", "stack", "link"] or call[0] == "python3" for call in world.calls)
 
 
 def test_divergence_never_links_or_writes(world):
