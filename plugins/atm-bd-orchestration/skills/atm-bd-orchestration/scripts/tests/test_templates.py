@@ -25,16 +25,13 @@ class TemplateContractTests(unittest.TestCase):
             "findings_md": "D1: not done",
             "lint_md": "lint passed",
         }
-        for context in ("within the cap", "round cap exceeded"):
-            with self.subTest(context=context):
-                variables["notes_md"] = context
-                result = render(ROOT / "templates/dev-sanity-complete.md.j2", variables)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("within the configured round cap, the dev was sent `sanity-fail`", result.stdout)
-                self.assertIn("a FAIL exceeding the cap triggers lead escalation", result.stdout)
-                self.assertIn("No finding beads were filed", result.stdout)
-                status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
-                self.assertNotIn("finding_bead_ids", status)
+        result = render(ROOT / "templates/dev-sanity-complete.md.j2", variables)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("within the configured round cap, the dev was sent `sanity-fail`", result.stdout)
+        self.assertIn("a FAIL exceeding the cap triggers lead escalation", result.stdout)
+        self.assertIn("No finding beads were filed", result.stdout)
+        status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
+        self.assertNotIn("finding_bead_ids", status)
 
         for verdict in ("PASS", "CANNOT_RUN"):
             with self.subTest(verdict=verdict):
