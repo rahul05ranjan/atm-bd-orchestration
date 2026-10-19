@@ -50,6 +50,10 @@ def read_vars(path: Path) -> dict[str, object]:
 
 SLOT_ERROR_KEYS = ("code", "message", "recoverable", "deliverable")
 LATER_FIELDS = ("errors", "jev_receipts", "dev", "jev_elapsed_s", "llm_elapsed_s", "kind")
+API_FAILURE_MATCHERS = {
+    "sanity-llm": (lambda code: code == "SANITY.LLM_API_FAILURE",),
+    "sanity-jev": (lambda code: code.startswith("SANITY.JEV_"),),
+}
 
 
 def reviewer_elapsed(value):
@@ -78,9 +82,8 @@ def checked_dev(bead):
 def result_kind(value):
     error = value.get("error")
     code = error.get("code") if isinstance(error, dict) else None
-    if value.get("reviewer") == "sanity-llm" and code == "SANITY.LLM_API_FAILURE":
-        return "API_FAILURE"
-    return "API_FAILURE" if value.get("reviewer") == "sanity-jev" and isinstance(code, str) and code.startswith("SANITY.JEV_") else "verdict"
+    matchers = API_FAILURE_MATCHERS.get(value.get("reviewer"), ())
+    return "API_FAILURE" if isinstance(code, str) and any(matcher(code) for matcher in matchers) else "verdict"
 
 
 def valid_slot_error(error: object) -> bool:

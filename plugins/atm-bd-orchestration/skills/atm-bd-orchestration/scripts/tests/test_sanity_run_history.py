@@ -50,6 +50,26 @@ RECEIPT = jev_reply(1)["data"]["jev"]
 
 
 class SanityHistory(unittest.TestCase):
+    def test_result_kind_uses_extensible_reviewer_matchers(self):
+        cases = (
+            ("sanity-llm", "SANITY.LLM_API_FAILURE", "API_FAILURE"),
+            ("sanity-llm", "SANITY.LLM_API_FAILURE_EXTRA", "verdict"),
+            ("sanity-jev", "SANITY.JEV_UNAVAILABLE", "API_FAILURE"),
+            ("sanity-jev", "SANITY.JEV_REQUEST_TOO_LARGE", "API_FAILURE"),
+            ("sanity-llm", "SANITY.JEV_UNAVAILABLE", "verdict"),
+            ("sanity-jev", "SANITY.LLM_API_FAILURE", "verdict"),
+            ("sanity-jev", None, "verdict"),
+            ("other", "SANITY.LLM_API_FAILURE", "verdict"),
+        )
+        for reviewer, code, expected in cases:
+            with self.subTest(reviewer=reviewer, code=code):
+                self.assertEqual(HISTORY.result_kind({"reviewer": reviewer, "error": {"code": code}}), expected)
+        self.assertEqual(HISTORY.result_kind({"reviewer": "sanity-llm", "error": None}), "verdict")
+        matchers = HISTORY.API_FAILURE_MATCHERS["sanity-llm"] + (lambda code: code == "SANITY.LLM_OTHER",)
+        with patch.dict(HISTORY.API_FAILURE_MATCHERS, {"sanity-llm": matchers}):
+            self.assertEqual(HISTORY.result_kind({"reviewer": "sanity-llm", "error": {"code": "SANITY.LLM_OTHER"}}),
+                             "API_FAILURE")
+
     def test_non_git_cwd_reports_clean_failure(self):
         values = {"sprint": "bj-4", "run_id": "x", "reviewer": "sanity-llm", "commit": "a" * 40,
                   "started_at": "2026-10-02T00:00:00Z", "completed_at": "2026-10-02T00:01:00Z",
