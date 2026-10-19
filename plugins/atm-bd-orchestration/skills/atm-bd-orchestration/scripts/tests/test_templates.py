@@ -510,8 +510,8 @@ class DevAssignmentTests(unittest.TestCase):
             with self.subTest(template=name):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("Rebase onto the stack's current top (it may have moved since dispatch)", result.stdout)
-                self.assertRegex(result.stdout, r"the top is what `" + re.escape(primary) + r"/\.claude/skills/atm-bd-orchestration/scripts/assignment-gates\.py stack-top --pr-target \S+` prints on exit 0")
-                self.assertIn("any other exit prints a code (`STACK_AMBIGUOUS`, `GATE_CANNOT_RUN`): never guess, refuse with it by step ", result.stdout)
+                self.assertIn(f"{primary}/.claude/skills/atm-bd-orchestration/scripts/assignment-gates.py stack-top --root {values['phase_root']} --pr-target {values['pr_target']} --worktree {values['worktree_path']}` prints on exit 0", result.stdout)
+                self.assertIn("any other exit prints `GATE_CANNOT_RUN`: never guess, refuse with it by step ", result.stdout)
                 self.assertNotIn("no output means the top is", result.stdout)
                 self.assertNotIn("gh_stack_view.py", result.stdout)
                 self.assertIn("run `/sc-gh-stack-view` (read-only) and keep its output verbatim", result.stdout)

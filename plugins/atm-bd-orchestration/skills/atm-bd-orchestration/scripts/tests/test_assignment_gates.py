@@ -28,21 +28,7 @@ class FakeRunner:
         return subprocess.CompletedProcess(args, code, stdout, "".join(stderr))
 
 
-STACKS = (str(gates.PRIMARY), gates.STACKS)
-
-
-def HEADS(flag, ref):
-    return ("gh", "pr", "list", flag, ref, "--state", "open", "--json", "headRefName")
-
-
-def pr(number, head, state="open", merged_at=None):
-    return {"number": number, "state": state, "draft": False, "merged_at": merged_at, "head": {"ref": head, "sha": "s"}}
-
-
-def stacks(*prs, base="integrate", is_open=True, others=()):
-    """A faked `gh api repos/{owner}/{repo}/stacks --paginate --jq '.[]'`: one stack object per line, PRs bottom first."""
-    rows = [*others, {"number": 1, "base": {"ref": base}, "open": is_open, "pull_requests": list(prs)}]
-    return {STACKS: (0, "\n".join(json.dumps(row) for row in rows))}
+STACKS = (str(gates.PRIMARY), ("gh", "api", "repos/{owner}/{repo}/stacks", "--paginate", "--jq", ".[]"))
 
 
 def ns(kind, **overrides):
@@ -238,39 +224,40 @@ class AssignmentGateTests(unittest.TestCase):
     def stack_top(self, responses, target="integrate"):
         output = io.StringIO()
         with redirect_stdout(output):
-            code = gates.main(["stack-top", "--pr-target", target], FakeRunner(responses))
+            code = gates.main(["stack-top", "--root", "atm-phase-bj", "--pr-target", target, "--worktree", "/wt"], FakeRunner(responses))
         return output.getvalue().strip(), code
 
-    def test_stack_top_is_the_last_open_pr_of_the_one_matching_stack(self):
-        other = {"number": 9, "base": {"ref": "main"}, "open": True, "pull_requests": [pr(9, "elsewhere")]}
-        layers = (pr(5, "merged", "closed", "2026-10-01T00:00:00Z"), pr(6, "target"), pr(7, "branch"), pr(8, "dropped", "closed"))
+    def test_stack_top_reads_the_phase_ledger_and_rejects_invalid_data(self):
+        bead = ("bd", "show", "atm-phase-bj.stack", "--json")
+        head = ("git", "-C", "/wt", "rev-parse", "origin/integrate")
         cases = [
-            ("trunk match", stacks(*layers, others=[other]), "integrate", ("branch", 0)),
-            ("head match", stacks(*layers, others=[other]), "target", ("branch", 0)),
-            ("merged head match", stacks(*layers), "merged", ("branch", 0)),
-            ("no open PR left", stacks(pr(5, "merged", "closed", "2026-10-01T00:00:00Z")), "merged", ("integrate", 0)),
-            ("closed stack ignored", {**stacks(*layers, is_open=False), HEADS("--base", "integrate"): (0, "[]")}, "integrate", ("integrate", 0)),
-            ("empty", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, "[]")}, "integrate", ("integrate", 0)),
-            ("unlinked layer 0", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, dumped([{"headRefName": "layer-0"}])),
-                                  HEADS("--base", "layer-0"): (0, "[]")}, "integrate", ("layer-0", 0)),
-            ("unlinked layers 0 and 1", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, dumped([{"headRefName": "layer-0"}])),
-                                         HEADS("--base", "layer-0"): (0, dumped([{"headRefName": "layer-1"}])),
-                                         HEADS("--base", "layer-1"): (0, "[]")}, "integrate", ("layer-1", 0)),
-            ("unlinked chain branches", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, dumped([{"headRefName": "layer-0"}])),
-                                         HEADS("--base", "layer-0"): (0, dumped([{"headRefName": "a"}, {"headRefName": "b"}]))}, "integrate", ("STACK_AMBIGUOUS", 5)),
-            ("unlinked chain cycles", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, dumped([{"headRefName": "layer-0"}])),
-                                       HEADS("--base", "layer-0"): (0, dumped([{"headRefName": "integrate"}]))}, "integrate", ("STACK_AMBIGUOUS", 5)),
-            ("unlinked chain lookup fails", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, dumped([{"headRefName": "layer-0"}])),
-                                             HEADS("--base", "layer-0"): (1, "", "HTTP 502")}, "integrate", ("GATE_CANNOT_RUN", 2)),
-            ("several unlinked PRs", {STACKS: (0, ""), HEADS("--base", "integrate"): (0, dumped([{"headRefName": "a"}, {"headRefName": "b"}]))}, "integrate", ("STACK_AMBIGUOUS", 5)),
-            ("unlinked lookup fails", {STACKS: (0, ""), HEADS("--base", "integrate"): (1, "", "HTTP 502")}, "integrate", ("GATE_CANNOT_RUN", 2)),
-            ("several stacks on one trunk", stacks(*layers, others=[{**other, "base": {"ref": "integrate"}}]), "integrate", ("STACK_AMBIGUOUS", 5)),
-            ("API failure", {STACKS: (1, "", "gh: Not Found (HTTP 404)")}, "integrate", ("GATE_CANNOT_RUN", 2)),
-            ("not json", {STACKS: (0, "<html>")}, "integrate", ("GATE_CANNOT_RUN", 2)),
+            ("last layer", {bead: (0, dumped([{"metadata": {"layers": [{"branch": "first", "head": "a"}, {"branch": "last", "head": "b"}]}}]))}, ("last", 0)),
+            ("empty", {bead: (0, dumped([{"metadata": {"layers": []}}])), head: (0, "abc")}, ("integrate", 0)),
+            ("null metadata", {bead: (0, dumped([{"metadata": None}])), head: (0, "abc")}, ("integrate", 0)),
+            ("missing bead", {bead: (0, "[]")}, ("GATE_CANNOT_RUN", 2)),
+            ("multiple beads", {bead: (0, "[{}, {}]")}, ("GATE_CANNOT_RUN", 2)),
+            ("invalid json", {bead: (0, "not json")}, ("GATE_CANNOT_RUN", 2)),
+            ("bd fails", {bead: (1, "", "database down")}, ("GATE_CANNOT_RUN", 2)),
+            ("invalid metadata", {bead: (0, dumped([{"metadata": "bad"}]))}, ("GATE_CANNOT_RUN", 2)),
+            ("invalid layers", {bead: (0, dumped([{"metadata": {"layers": "bad"}}]))}, ("GATE_CANNOT_RUN", 2)),
+            ("missing head", {bead: (0, dumped([{"metadata": {"layers": [{"branch": "top"}]}}]))}, ("GATE_CANNOT_RUN", 2)),
+            ("missing fallback", {bead: (0, "[{}]"), head: (1, "", "unknown ref")}, ("GATE_CANNOT_RUN", 2)),
         ]
-        for name, responses, target, expected in cases:
+        for name, responses, expected in cases:
             with self.subTest(name):
-                self.assertEqual(self.stack_top(responses, target), expected)
+                self.assertEqual(self.stack_top(responses), expected)
+
+    def test_stack_top_requires_root(self):
+        with self.assertRaises(SystemExit):
+            gates.main(["stack-top", "--pr-target", "target"], FakeRunner({}))
+
+    def test_stack_top_reads_bead_in_primary_and_resolves_fallback_in_worktree(self):
+        runner = FakeRunner({("bd", "show", "phase.stack", "--json"): (0, "[{}]"),
+                             ("git", "-C", "/wt", "rev-parse", "origin/trunk"): (0, "abc")})
+        with redirect_stdout(io.StringIO()):
+            assert gates.main(["stack-top", "--root", "phase", "--pr-target", "trunk", "--worktree", "/wt"], runner) == 0
+        assert runner.calls == [(str(gates.PRIMARY), ("bd", "show", "phase.stack", "--json")),
+                                (None, ("git", "-C", "/wt", "rev-parse", "origin/trunk"))]
 
     def test_gate_kinds_still_require_root_and_bead(self):
         with self.assertRaises(SystemExit):

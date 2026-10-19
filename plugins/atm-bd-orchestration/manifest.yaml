@@ -79,6 +79,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/sanity-merge
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
+    - skills/atm-bd-orchestration/scripts/stack_top.py
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dev-ready.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dirty-tree.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/not-ready.json

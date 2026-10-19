@@ -162,8 +162,8 @@ is cut from the top of its stack; before dev-complete or fix-complete the dev re
 stack's current top, opens the PR against it and closes with the `/sc-gh-stack-view` output. The lead
 links the PR on top of the phase stack
 (`/sc-gh-stack`), before the sanity check. Layer 0 alone cannot form a stack:
-its PR waits unlinked on the trunk (sanity accepts it there, and `stack-top`
-returns its branch so the next root sprint lands on it), and the lead links
+its PR waits unlinked on the trunk (sanity accepts it there). The sanity stack
+writer records the layer in the phase stack bead on PASS before the next developer resolves `stack-top`; the lead links
 layers 0 and 1 together, `gh stack link --base <trunk> <pr0> <pr1>`, when
 layer 1's PR opens; a sanity refusal for no PR, not
 stacked or not rebased is the lead's (the stack writer) to fix: it opens,
@@ -207,7 +207,7 @@ on every restack and show up as out-of-scope work in that sprint's PR.
    integration branch for a bug in merged code, or the stack layer whose
    types the change uses.
 3. The finder cuts `fix/<thing>` from the stack's current top
-   (`.claude/skills/atm-bd-orchestration/scripts/assignment-gates.py stack-top --pr-target <pr_target>`) in its own worktree,
+   (`.claude/skills/atm-bd-orchestration/scripts/assignment-gates.py stack-top --root <phase-root> --pr-target <pr_target> --worktree <worktree>`) in its own worktree,
    with only the change, the implementors and call sites the compiler
    forces, and one test when it is a bug. The test command passes; push; PR
    against that top: a new layer, never a PR into a lower layer or the

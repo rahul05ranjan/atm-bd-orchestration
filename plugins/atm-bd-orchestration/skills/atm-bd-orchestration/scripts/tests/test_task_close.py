@@ -6,6 +6,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
+import shlex
 import subprocess
 
 import pytest
@@ -152,6 +154,39 @@ class World:
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     return World(tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize("template", ["dev-template", "fix-assignment"])
+@pytest.mark.parametrize("layers,expected", [
+    ([{"branch": "older", "head": "a" * 40}, {"branch": "ledger-top", "head": "b" * 40}], "ledger-top"),
+    ([], "lower-target"),
+])
+def test_template_rebase_and_hook_ancestry_use_the_same_stack_top(world, template, layers, expected):
+    spec = importlib.util.spec_from_file_location("assignment_gates_for_close", SCRIPTS / "assignment-gates.py")
+    gates = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gates)
+    world.beads["atm-phase-bj.stack"]["metadata"]["layers"] = layers
+    world.values["pr_target"] = "lower-target"
+    values = json.loads((EXAMPLES / f"{template}-vars.json").read_text())
+    values.update(primary_checkout=str(world.root), worktree_path=str(world.root),
+                  phase_root="atm-phase-bj", pr_target="lower-target")
+    rendered = hook.sc_render.render(SCRIPTS.parent / "templates" / f"{template}.xml.j2", values)
+    match = re.search(r"`([^`]*assignment-gates\.py stack-top [^`]*)`", rendered)
+    assert match
+    argv = shlex.split(match.group(1))[1:]
+
+    def gate_runner(command, **kwargs):
+        if command[:2] == ["git", "-C"]:
+            command = ["git", *command[3:]]
+        return world(command, **kwargs)
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        assert gates.main(argv, gate_runner) == 0
+    assert output.getvalue().strip() == expected
+    assert "ok" in world.run()
+    assert any(argv == ["git", "merge-base", "--is-ancestor", f"origin/{expected}", world.values["commit"]]
+               for argv, _kwargs in world.calls)
 
 
 def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):

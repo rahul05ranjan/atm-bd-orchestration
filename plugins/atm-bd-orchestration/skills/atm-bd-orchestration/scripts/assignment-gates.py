@@ -11,6 +11,8 @@ import sys
 from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stack_top import select_stack_top
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
@@ -18,8 +20,9 @@ PRIMARY = Path(__file__).resolve().parents[4]
 VALIDATE_PLAN = str(PRIMARY / ".claude/skills/atm-beads/scripts/validate-plan")
 
 
-def run(runner: Runner, *args: str) -> str:
-    result = runner(list(args), capture_output=True, text=True)
+def run(runner: Runner, *args: str, cwd: str | None = None) -> str:
+    options = {"cwd": cwd} if cwd is not None else {}
+    result = runner(list(args), capture_output=True, text=True, **options)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "command failed")
     return result.stdout.strip()
@@ -88,67 +91,15 @@ def descends(runner: Runner, lower: str, base: str, git: list[str] | None = None
     return result.returncode == 0
 
 
-STACKS = ("gh", "api", "repos/{owner}/{repo}/stacks", "--paginate", "--jq", ".[]")
-
-
-def open_stacks(runner: Runner) -> list[dict[str, Any]]:
-    """Every open stack from GitHub's stacks API, PRs bottom first; never local gh-stack tracking."""
-    result = runner(list(STACKS), capture_output=True, text=True, cwd=str(PRIMARY))
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "gh api stacks failed")
-    return [stack for stack in (json.loads(line) for line in result.stdout.splitlines() if line.strip()) if stack.get("open")]
-
-
-def is_open(pr: dict[str, Any]) -> bool:
-    return pr.get("state") == "open" and not pr.get("merged_at")
-
-
-def open_pr_heads(runner: Runner, flag: str, ref: str) -> list[str]:
-    """Head branches of the open PRs whose `--base` or `--head` is `ref`, linked into a stack or not."""
-    rows = json.loads(run_in(runner, str(PRIMARY), "gh", "pr", "list", flag, ref, "--state", "open", "--json", "headRefName"))
-    return [str(row["headRefName"]) for row in rows]
-
-
-def run_in(runner: Runner, cwd: str, *args: str) -> str:
-    result = runner(list(args), capture_output=True, text=True, cwd=cwd)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "command failed")
-    return result.stdout
-
-
-def stack_top(runner: Runner, target: str) -> str | None:
-    """The branch a new PR based on `target` lands on: the head of the last open PR of the one open stack whose base is
-    `target` or that has a PR from `target` (its base when none is open). When no stack matches, the top of the one
-    chain of open unlinked PRs based on `target` (layer 0 awaiting layer 1: a stack forms from layers 0 and 1
-    together, and layer 1 may open before the lead links them), else `target`. None when several stacks or unlinked
-    PRs match at any step (ambiguous: never guess)."""
-    matches = [stack for stack in open_stacks(runner)
-               if stack["base"]["ref"] == target or any(pr["head"]["ref"] == target for pr in stack["pull_requests"])]
-    if len(matches) > 1:
-        return None
-    if not matches:
-        top, seen = target, {target}
-        while (unlinked := open_pr_heads(runner, "--base", top)):
-            if len(unlinked) > 1 or unlinked[0] in seen:
-                return None
-            top = unlinked[0]
-            seen.add(top)
-        return top
-    heads = [pr["head"]["ref"] for pr in matches[0]["pull_requests"] if is_open(pr)]
-    return heads[-1] if heads else matches[0]["base"]["ref"]
-
-
-def stacked_base(runner: Runner, pr_number: str) -> str | None:
-    """The head branch of the open PR below PR `pr_number` in its open GitHub stack (the stack's base for its first
-    open PR), read from GitHub's stacks API, never from local gh-stack tracking; None when the PR is in no open stack."""
-    for stack in open_stacks(runner):
-        base = stack["base"]["ref"]
-        for pr in stack["pull_requests"]:
-            if str(pr["number"]) == str(pr_number):
-                return base
-            if is_open(pr):
-                base = pr["head"]["ref"]
-    return None
+def stack_top(runner: Runner, args: argparse.Namespace) -> str:
+    rows = json.loads(run(runner, "bd", "show", f"{args.root}.stack", "--json", cwd=str(PRIMARY)))
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise ValueError("stack bead lookup must return exactly one bead object")
+    branch, _head = select_stack_top(
+        rows[0], args.pr_target,
+        lambda target: run(runner, "git", *git_dir(args), "rev-parse", f"origin/{target}"),
+    )
+    return branch
 
 
 def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
@@ -240,13 +191,16 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
     if args.kind != "sanity" and not args.pr_target:
         parser.error(f"{args.kind} needs --pr-target")
     if args.kind == "stack-top":
+        if not args.root:
+            parser.error("stack-top needs --root")
         try:
-            top = stack_top(runner, args.pr_target)
-        except (RuntimeError, OSError, TypeError, ValueError, KeyError):
+            top = stack_top(runner, args)
+        except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+            print(f"assignment-gates: {exc}", file=sys.stderr)
             print("GATE_CANNOT_RUN")
             return 2
-        print(top or "STACK_AMBIGUOUS")
-        return 0 if top else 5
+        print(top)
+        return 0
     if args.kind == "sanity" and not args.bead:
         parser.error("sanity needs --bead")
     if args.kind != "sanity" and not (args.root and args.bead):

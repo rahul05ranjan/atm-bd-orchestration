@@ -16,8 +16,10 @@ import tomllib
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import repo_config
 import sc_render
+from stack_top import select_stack_top
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 ROLES = ("dev", "fix", "sanity", "qa")
@@ -304,12 +306,10 @@ class Hook:
 
     def stack_top(self):
         stack = f"{self.config['bead_prefix']}-phase-{self.values['phase']}.stack"
-        layers = (self.bead(stack).get("metadata") or {}).get("layers", [])
-        if layers:
-            return layers[-1]["branch"], layers[-1]["head"]
-        branch = self.values["pr_target"]
-        head = self.run(["git", "rev-parse", f"origin/{branch}"], git=True).stdout.strip()
-        return branch, head
+        return select_stack_top(
+            self.bead(stack), self.values["pr_target"],
+            lambda branch: self.run(["git", "rev-parse", f"origin/{branch}"], git=True).stdout.strip(),
+        )
 
     def checks(self):
         values = self.values
