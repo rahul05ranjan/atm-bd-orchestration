@@ -165,6 +165,21 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
             assert argv[argv.index("--vars") + 1] == str(world.path)
 
 
+def test_preview_and_native_send_use_identical_unmodified_vars(world, monkeypatch):
+    world.values.pop("carry_forward")
+    original_render = hook.sc_render.render
+    inputs = []
+
+    def render(template, values):
+        inputs.append(copy.deepcopy(values))
+        return original_render(template, values)
+
+    monkeypatch.setattr(hook.sc_render, "render", render)
+    assert "ok" in world.run()
+    assert inputs and all(values == world.values for values in inputs)
+    assert all(message["values"] == world.values for message in world.messages)
+
+
 @pytest.mark.parametrize("change,code", [({"commit": ""}, "VARS.EMPTY"), ({"extra": 1}, "VARS.UNKNOWN"),
                                       ({"verdict": "rebase_required"}, "VARS.INVALID")])
 def test_invalid_vars_have_no_commands(world, change, code):
@@ -241,6 +256,7 @@ def test_not_reproducible_assigns_runtime_top_without_rewriting_input(world):
     assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
     assert assignment["values"]["branch"] == "integrate/phase-bj"
     assert assignment["values"]["commit"] == "b" * 40
+    assert set(assignment["values"]) == set(world.values) | {"branch", "commit"}
     assert not any(argv[0] == "gh" for argv, _kwargs in world.calls)
 
 
@@ -379,6 +395,7 @@ def test_not_reproducible_replay_pins_first_handoff_when_top_moves(world, bounda
     assignments = [item for item in world.messages if item["type"] == "dev-sanity-task"]
     assert len(assignments) == 1
     assert assignments[0]["values"]["commit"] == "b" * 40
+    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == 1
 
 
 def test_shared_contract_covers_all_role_templates_and_ids(world):

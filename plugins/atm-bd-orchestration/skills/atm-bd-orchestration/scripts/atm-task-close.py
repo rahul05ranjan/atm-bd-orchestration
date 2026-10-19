@@ -105,7 +105,7 @@ class Hook:
         if not assignments:
             raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
         self.assignment = assignments[-1]
-        self.key = [self.task, self.assignment.get("message_id") or self.assignment["seq"], values["verdict"], values["commit"]]
+        self.key = [self.task, self.assignment.get("message_id") or self.assignment["seq"], values["verdict"], values.get("commit", "")]
 
     def run(self, argv, *, lead=False, git=False, check=True):
         try:
@@ -200,7 +200,9 @@ class Hook:
             argv.append(text)
         else:
             argv += ["--type", template_type, "--var", f"checked_bead={values['checked_bead']}",
-                     "--var", f"commit={values['commit']}", "--var", f"round={values['round']}"]
+                     "--var", f"round={values['round']}"]
+            if "commit" in values:
+                argv += ["--var", f"commit={values['commit']}"]
         argv += ["--from", sender or self.identity, "--since", self.assignment["at"], "--limit", "1", "--json"]
         if recipient:
             argv += ["--agent", recipient]
@@ -273,7 +275,7 @@ class Hook:
     def finish_dev(self, sanity, template, *, path=None):
         values = self.values
         assignment_values = json.loads(Path(path).read_text()) if path else values
-        self.metadata(values["checked_bead"], {"commit": assignment_values["commit"], "branch": assignment_values["branch"], "pr_number": values["pr_number"],
+        self.metadata(values["checked_bead"], {"commit": assignment_values["commit"], "branch": assignment_values["branch"], "pr_number": values.get("pr_number", ""),
                                              "pr_url": values["pr_url"], "task_close_key": self.key})
         assigned = self.delivered("dev-sanity-task", recipient=self.config["dev_sanity_member"],
                                   sender=self.lead, values=assignment_values)
@@ -307,9 +309,9 @@ class Hook:
             self.render("qa-template.xml.j2")
             checked = self.bead(values["checked_bead"])
             is_fix = (checked.get("metadata") or {}).get("role") == "fix" or "stage:fix" in checked.get("labels", [])
-            if is_fix and values["carry_forward"] != values["checked_bead"]:
+            if is_fix and values.get("carry_forward", "") != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "fix QA requires carry_forward", "Supply the checked fix bead as carry_forward.")
-            if values["carry_forward"] and values["carry_forward"] != values["checked_bead"]:
+            if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
             self.metadata(bead, {"task_close_key": self.key})
             self.close_bead(bead, f"PASS at {values['commit']}")
@@ -358,11 +360,10 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
         if not isinstance(values, dict):
             raise CloseError("VARS.INVALID", "vars must be an object", "Supply a shared JSON vars object.")
         validate(values, args.role)
-        values = {**header(TEMPLATES / "task-close-vars.j2")["defaults"], **values}
         hook = Hook(args.role, values, args.vars, runner, clock)
         started = clock()
         escalated = hook.dev(args.skip_checks) if args.role in ("dev", "fix") else hook.sanity() if args.role == "sanity" else hook.qa()
-        result = {"role": args.role, "bead": hook.task, "commit": values["commit"], "pr_number": values["pr_number"],
+        result = {"role": args.role, "bead": hook.task, "commit": values.get("commit", ""), "pr_number": values.get("pr_number", ""),
                   "github": hook.github, "assigned": hook.assigned, "closed": hook.closed, "elapsed_s": max(0, clock() - started)}
         if escalated:
             result["escalated"] = escalated
