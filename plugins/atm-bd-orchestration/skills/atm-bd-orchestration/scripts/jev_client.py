@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Bounded Jev transport and startup probe for the proposed sanity agent."""
 import argparse
+import copy
+from email.utils import parsedate_to_datetime
 import hashlib
 import hmac
 import http.client
@@ -31,7 +33,7 @@ class JevError(Exception):
 
 
 REPORT = "Report this error unchanged; the coordinator records the slot unavailable."
-RETRY = "Transient: wait 60 seconds and run the same command once more. If it fails again, " + REPORT[0].lower() + REPORT[1:]
+RETRY = "The client retry budget is exhausted. " + REPORT
 REBUILD = ("Rebuild `context` and rerun `--assignment <file>`: narrow each entry to the line ranges the deliverable "
            "needs (`path:start-end`, e.g. `docs/x.md:120-180`), drop entries the deliverable does not need, and never "
            "remove `deliverable.text` or `changed_files`. Drop `external_evidence` entries the deliverable does not need. "
@@ -61,10 +63,8 @@ FIXES = (  # message prefix -> what the calling agent does next
 
 
 def suggested_action(exc):
-    if exc.message.startswith("Request exceeds"):
-        return getattr(exc, "fix", None) or (
-            f"The request is {exc.size} bytes. Rebuild it under 96000 bytes: send only the state the question needs, "
-            "or run `--assignment <file>`, whose `context` entries may name line ranges (`path:start-end`).")
+    if exc.message.startswith("Jev request oversized"):
+        return getattr(exc, "fix", None) or REPORT
     if exc.message.startswith("Jev HTTP"):
         return RETRY if exc.recoverable else "Jev rejected the request or the key. " + REPORT
     return next((fix for prefix, fix in FIXES if exc.message.startswith(prefix)), REPORT)
@@ -133,12 +133,27 @@ def validate_request(request):
     return body
 
 
-def evaluate(request):
+def retry_delay(retry_after):
+    if retry_after is None:
+        return 1.0
+    try:
+        delay = float(retry_after)
+    except (TypeError, ValueError):
+        try:
+            delay = parsedate_to_datetime(retry_after).timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return 30.0
+    return min(30.0, max(0.0, delay)) if math.isfinite(delay) else 30.0
+
+
+def evaluate(request, *, sleep=None, max_attempts=4):
     key = api_key()
     body = validate_request(request)
-    for attempt in range(2):
-        conn = http.client.HTTPSConnection(HOST, timeout=20)
+    sleeper = sleep or time.sleep
+    for attempt in range(max_attempts):
+        conn = None
         try:
+            conn = http.client.HTTPSConnection(HOST, timeout=20)
             conn.request("POST", "/v1/systemone", body=body, headers={
                 "Authorization": "Bearer " + key, "Content-Type": "application/json",
             })
@@ -147,26 +162,38 @@ def evaluate(request):
             raw = response.read(MAX_RESPONSE_BYTES + 1)
             retry_after = response.getheader("Retry-After")
         except (OSError, socket.timeout, http.client.HTTPException):
+            if attempt + 1 < max_attempts:
+                continue
             raise JevError("SANITY.JEV_UNAVAILABLE", "Jev connection failed or timed out", True) from None
         finally:
-            conn.close()
-        if status in (429, 529) and attempt == 0:
-            try:
-                delay = float(retry_after) if retry_after is not None else 1.0
-            except ValueError:
-                delay = float("inf")  # Date/unknown format: do not retry too soon.
-            if math.isfinite(delay) and 0 <= delay <= 5:
-                time.sleep(delay)
-                continue
+            if conn is not None:
+                conn.close()
+        if status == 413:
+            exc = oversize(request)
+            exc.remaining_attempts = max_attempts - attempt - 1
+            raise exc
+        if (status == 429 or 500 <= status <= 599) and attempt + 1 < max_attempts:
+            delay = retry_delay(retry_after)
+            if delay:
+                sleeper(delay)
+            continue
         if status != 200:
-            raise JevError("SANITY.JEV_UNAVAILABLE", f"Jev HTTP {status}; response body withheld", status in (429, 529) or status >= 500)
+            raise JevError("SANITY.JEV_UNAVAILABLE", f"Jev HTTP {status}; response body withheld", status == 429 or status >= 500)
         if len(raw) > MAX_RESPONSE_BYTES:
+            if attempt + 1 < max_attempts:
+                continue
             raise JevError("SANITY.JEV_RESPONSE_INVALID", "Jev response exceeded size limit")
         try:
             value = json.loads(raw)
         except (ValueError, UnicodeError):
+            if attempt + 1 < max_attempts:
+                continue
             raise JevError("SANITY.JEV_RESPONSE_INVALID", "Jev response was not JSON") from None
-        return validate_response(value, request)
+        try:
+            return validate_response(value, request)
+        except JevError:
+            if attempt + 1 >= max_attempts:
+                raise
     raise JevError("SANITY.JEV_UNAVAILABLE", "Jev retry budget exhausted", True)
 
 
@@ -176,7 +203,7 @@ CLIENT_MESSAGES = re.compile("|".join([
     r"Unexpected Jev response model or shape", r"Missing or unexpected answer IDs", r"Answer must be an object",
     r"Invalid Choice answer", r"Expected pinned model, state and nonempty questions",
     r"Pilot supports well-formed Choice questions only", r"Request must contain finite JSON values",
-    r"Request exceeds 96000 bytes, the Jev state budget; no Jev evaluation ran",
+    r"Jev request oversized; no further split fits the remaining attempt budget",
     r"Jev connection failed or timed out", r"Jev HTTP \d{3}; response body withheld",
     r"Jev response exceeded size limit", r"Jev response was not JSON", r"Jev retry budget exhausted",
     r"Startup probe returned the wrong literal choice", r"Request file unavailable or invalid JSON",
@@ -246,7 +273,7 @@ def size(request):
 
 
 def oversize(request, fix=None):
-    exc = JevError("SANITY.JEV_REQUEST_TOO_LARGE", "Request exceeds 96000 bytes, the Jev state budget; no Jev evaluation ran", True)
+    exc = JevError("SANITY.JEV_REQUEST_TOO_LARGE", "Jev request oversized; no further split fits the remaining attempt budget", True)
     exc.size = size(request)
     exc.fix = fix and fix.format(size=exc.size)
     return exc
@@ -285,6 +312,103 @@ def diff_pieces(diff, budget):
         if chunk:
             pieces.append(prefix + chunk)
     return pieces
+
+
+def split_request(request, target, changed_files):
+    """Split evidence, context and external text into labelled requests without dropping content."""
+    state = request.get("state")
+    if not isinstance(state, dict) or not isinstance(state.get("deliverable"), str):
+        raise oversize(request)
+    base = copy.deepcopy(request)
+    base["state"] = {k: v for k, v in state.items() if k not in ("evidence", "context", "external_evidence", "part", "changed_files")}
+    base["state"].update(evidence="", part="999999 of 999999", changed_files=changed_files)
+    if size(base) >= target:
+        raise oversize(request)
+    pieces = []
+
+    def chunks(value, budget, is_diff=False):
+        if budget < 8:
+            raise oversize(request)
+        if not value:
+            return [""]
+        if is_diff:
+            proposed = diff_pieces(value, budget)
+            if proposed and all(len(json.dumps(p).encode()) - 2 <= budget for p in proposed):
+                return proposed
+        # JSON escaping can expand a character; binary search each maximal cut.
+        result = []
+        while value:
+            low, high = 1, len(value)
+            while low <= high:
+                middle = (low + high) // 2
+                if len(json.dumps(value[:middle]).encode()) - 2 <= budget:
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if not high:
+                raise oversize(request)
+            result.append(value[:high])
+            value = value[high:]
+        return result
+
+    def add_text(field, value, key=None, entry=None):
+        sample = copy.deepcopy(base)
+        if field == "context":
+            sample["state"][field] = {key: ""}
+        elif field == "external_evidence":
+            sample["state"][field] = [{**entry, "text": ""}]
+        budget = target - size(sample) - 16
+        for piece in chunks(value, budget, is_diff=field == "evidence"):
+            part = copy.deepcopy(sample)
+            if field == "context":
+                part["state"][field][key] = piece
+            elif field == "external_evidence":
+                part["state"][field][0]["text"] = piece
+            else:
+                part["state"][field] = piece
+            if size(part) > target:
+                raise oversize(request)
+            pieces.append(part)
+
+    evidence = state.get("evidence") or ""
+    if evidence:
+        add_text("evidence", evidence)
+    for key, value in (state.get("context") or {}).items():
+        add_text("context", value, key=key)
+    for entry in state.get("external_evidence") or []:
+        add_text("external_evidence", entry.get("text", ""), entry=entry)
+    if not pieces:
+        raise oversize(request)
+    for index, part in enumerate(pieces, 1):
+        part["state"]["part"] = f"{index} of {len(pieces)}"
+    return pieces
+
+
+def evaluate_parts(requests, key, changed_files=None):
+    """Evaluate every part; a 413 consumes an attempt before its smaller children."""
+    queue = [(request, 4) for request in requests]
+    done = []
+    while queue:
+        request, budget = queue.pop(0)
+        try:
+            response = evaluate(request, max_attempts=budget)
+        except JevError as exc:
+            if exc.code != "SANITY.JEV_REQUEST_TOO_LARGE" or getattr(exc, "remaining_attempts", 0) <= 0:
+                raise
+            files = request.get("state", {}).get("changed_files", changed_files or [])
+            smaller = split_request(request, size(request) // 2, files)
+            if len(smaller) < 2:
+                raise exc
+            queue[0:0] = [(part, exc.remaining_attempts) for part in smaller]
+            continue
+        done.append((request, response))
+    if len(done) == 1 and "part" not in done[0][0].get("state", {}):
+        request, response = done[0]
+        return {**response, "receipt": receipt(request, response, key)}
+    return {"model": MODEL, "parts": [
+        {"part": f"{index} of {len(done)}", "changed_files": request["state"]["changed_files"],
+         "response": response, "receipt": receipt(request, response, key)}
+        for index, (request, response) in enumerate(done, 1)]}
 
 
 EVIDENCE_REFS = {"bead_notes": ("bead",), "pr_body": ("repo", "pr"), "pr_comment": ("repo", "comment_id")}
@@ -363,7 +487,7 @@ def assignment_requests(assignment):
     if size(request) <= MAX_REQUEST_BYTES:
         return [request]
     if context or external:
-        raise oversize(request, "The request is {size} bytes, over the 96000-byte Jev budget. " + REBUILD)
+        return split_request(request, MAX_REQUEST_BYTES, changed)
     label = (f"{len(changed) * 1000} of {len(changed) * 1000}", changed)  # the widest part label, so every part fits
     budget = MAX_REQUEST_BYTES - size(written_request(text, "", part=label))
     if budget <= 0:
@@ -444,21 +568,29 @@ def main(argv=None):
         announce(f"dev-sanity Jev child failed: {args.error}. Selection takes the LLM reply for JEV slots until a Jev child succeeds.", phase_lead)
         print(json.dumps({"success": True, "data": {"announced": args.error}, "error": None}))
         return 0
+    elapsed_s = None
     try:
         if args.startup:
             request = startup_request()
         elif args.assignment:
             text = args.assignment.read_text()
             fenced = FENCED.fullmatch(text)
-            requests = assignment_requests(json.loads(fenced.group(1) if fenced else text))
+            assignment = json.loads(fenced.group(1) if fenced else text)
+            requests = assignment_requests(assignment)
             request = requests[0]
         else:
             request = json.loads(args.request.read_text())
-        if args.assignment and len(requests) > 1:
-            data = parts(requests, [evaluate(r) for r in requests], api_key())
-        else:
-            data = evaluate(request)
-        if not args.startup and len(request["questions"]) == 1 and "parts" not in data:
+        started = time.monotonic()
+        try:
+            if args.assignment:
+                data = evaluate_parts(requests, api_key(), assignment["changed_files"])
+            elif args.startup:
+                data = evaluate(request)
+            else:
+                data = evaluate_parts([request], api_key())
+        finally:
+            elapsed_s = max(0.0, time.monotonic() - started)
+        if not args.startup and len(request["questions"]) == 1 and "parts" not in data and "receipt" not in data:
             data = {**data, "receipt": receipt(request, data, api_key())}
         if args.startup:
             if data["answers"]["startup"]["choice"] != "ready":
@@ -469,6 +601,7 @@ def main(argv=None):
         result = failure(exc)
     except (OSError, ValueError, UnicodeError):
         result = failure(JevError("VALIDATION.INPUT", "Request file unavailable or invalid JSON"))
+    result["elapsed_s"] = elapsed_s if elapsed_s is not None else 0.0
     if args.announce and not result["success"]:
         error = result["error"]
         announce(f"dev-sanity Jev startup failed: {error['code']}: {error['message']}. No sc-sanity-jev checks run; dev-sanity records every JEV slot as unavailable until a startup probe passes.", phase_lead)

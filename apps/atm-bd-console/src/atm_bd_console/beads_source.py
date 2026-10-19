@@ -46,6 +46,40 @@ def ready(label: str) -> Result[tuple[Bead, ...]]:
     return _run(["bd", "ready", "-l", label, "--json"])
 
 
+def run_beads(phase: str, stage: str, *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
+    """Return unprojected QA/finding beads, including their dependency edges."""
+    rows: dict[str, dict[str, Any]] = {}
+    # Default bd list excludes closed beads; explicit status includes history without --all.
+    for status_args in ([], ["--status", "closed"]):
+        completed = command.run(["bd", "list", "-l", f"phase-{phase},stage:{stage}", *status_args, "-n", "0", "--json"],
+                                "inspect bd run output", cwd=cwd)
+        if isinstance(completed, Err):
+            return completed
+        try:
+            value = json.loads(completed.value.stdout)
+            if not isinstance(value, list) or not all(isinstance(row, dict) and isinstance(row.get("id"), str) for row in value):
+                raise ValueError("expected an array of bead objects with ids")
+            rows.update({row["id"]: row for row in value})
+        except ValueError as error:
+            return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
+    return Ok(list(rows.values()))
+
+
+def raw_show(ids: tuple[str, ...], *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
+    if not ids:
+        return Ok([])
+    completed = command.run(["bd", "show", *ids, "--json"], "inspect checked beads", cwd=cwd)
+    if isinstance(completed, Err):
+        return completed
+    try:
+        value = json.loads(completed.value.stdout)
+        if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
+            raise ValueError("expected an array of bead objects")
+        return Ok(value)
+    except ValueError as error:
+        return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
+
+
 def ancestors(beads: tuple[Bead, ...]) -> Result[tuple[Bead, ...]]:
     known = {bead.id: bead for bead in beads}
     frontier = {bead.parent for bead in beads if bead.parent and bead.parent not in known}

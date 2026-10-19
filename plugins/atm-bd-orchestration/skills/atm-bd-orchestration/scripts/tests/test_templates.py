@@ -210,6 +210,8 @@ class TemplateContractTests(unittest.TestCase):
         import importlib.util
         text = (ROOT.parents[1] / "agents" / "sc-sanity-jev.md").read_text()
         self.assertIn("python3 .claude/skills/atm-bd-orchestration/scripts/jev_client.py --assignment <file>", text)
+        self.assertIn("On a client API_FAILURE, return that result unchanged, with no retry and no context edit.", text)
+        self.assertNotIn("rebuild `context` and rerun", text)
         self.assertNotIn("--request", text)
         assignment = json.loads(re.search(r"## Inputs\n\n```json\n(.*?)\n```", text, re.S).group(1))
         spec = importlib.util.spec_from_file_location("jev_client", ROOT / "scripts" / "jev_client.py")

@@ -41,9 +41,16 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     class Node:
         size = SimpleNamespace(width=120, height=40)
         active = "dispatch"
+        highlighted = None
 
         def update(self, value):
             self.value = value
+
+        def clear_options(self):
+            pass
+
+        def add_options(self, _options):
+            pass
 
     nodes = {}
 
@@ -51,7 +58,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            config=replace(CONFIG, repo_root=str(tmp_path)),
+                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_runs=[], quality_runs=[], runs_error=None,
                             show_pr_history=False, status_error=None, status_text="",
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
@@ -251,11 +258,14 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             assert app.query_one("#dashboard").region.y == 2  # tabs, underline, content
             await pilot.resize_terminal(80, 30)
             await settle(pilot)
-            assert build.display and build.region.right == 80 and build.region.x > tabs_right
-            await pilot.resize_terminal(40, 30)  # no room right of the tab strip: hidden, every tab clickable
+            assert not build.display
+            assert all(tab.display and tab.region.right <= 80 for tab in app.query("ContentTab"))
+            await pilot.resize_terminal(40, 30)  # the overflowing tab strip remains keyboard navigable
             await settle(pilot)
             assert not build.display
-            await pilot.click("#--content-tab-diagnostics")
+            from textual.widgets import Tabs
+            app.query_one(Tabs).focus()
+            await pilot.press("left")  # wrap from Dispatch to Diagnostics
             await settle(pilot)
             assert app.query_one("TabbedContent").active == "diagnostics"
             shown = app.query_one("#diagnostics-text").render().plain

@@ -38,6 +38,7 @@ artifacts:
     - skills/atm-bd-orchestration/examples/plan-scope-reviewer-assignment-vars.json
     - skills/atm-bd-orchestration/examples/qa-bead-vars.json
     - skills/atm-bd-orchestration/examples/qa-complete-vars.json
+    - skills/atm-bd-orchestration/examples/qa-findings-vars.json
     - skills/atm-bd-orchestration/examples/qa-template-fix-round-vars.json
     - skills/atm-bd-orchestration/examples/qa-template-vars.json
     - skills/atm-bd-orchestration/examples/req-qa-assignment-vars.json
@@ -45,7 +46,6 @@ artifacts:
     - skills/atm-bd-orchestration/examples/review-template-vars.json
     - skills/atm-bd-orchestration/examples/ruthless-boundary-qa-assignment-vars.json
     - skills/atm-bd-orchestration/examples/sanity-run-record-vars.json
-    - skills/atm-bd-orchestration/examples/sanity-run-table-vars.json
     - skills/atm-bd-orchestration/examples/schema-reviewer-assignment-vars.json
     - skills/atm-bd-orchestration/examples/task-refused-vars.json
     - skills/atm-bd-orchestration/examples/workflow-issue-bead-vars.json
@@ -133,13 +133,13 @@ artifacts:
     - skills/atm-bd-orchestration/templates/plan-scope-reviewer-assignment.json.j2
     - skills/atm-bd-orchestration/templates/qa-bead.json.j2
     - skills/atm-bd-orchestration/templates/qa-complete.md.j2
+    - skills/atm-bd-orchestration/templates/qa-findings.md.j2
     - skills/atm-bd-orchestration/templates/qa-template.xml.j2
     - skills/atm-bd-orchestration/templates/req-qa-assignment.json.j2
     - skills/atm-bd-orchestration/templates/review-complete.md.j2
     - skills/atm-bd-orchestration/templates/review-template.xml.j2
     - skills/atm-bd-orchestration/templates/ruthless-boundary-qa-assignment.json.j2
     - skills/atm-bd-orchestration/templates/sanity-run-record.json.j2
-    - skills/atm-bd-orchestration/templates/sanity-run-table.md.j2
     - skills/atm-bd-orchestration/templates/schema-reviewer-assignment.json.j2
     - skills/atm-bd-orchestration/templates/task-refused.md.j2
     - skills/atm-bd-orchestration/templates/workflow-issue-bead.json.j2

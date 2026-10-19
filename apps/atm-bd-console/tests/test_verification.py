@@ -21,7 +21,7 @@ pytest_plugins = ("test_git_source",)
 def runtime(repo, tmp_path, monkeypatch):
     worktree = tmp_path / "clean-worktree"
     git(repo, "worktree", "add", "-q", str(worktree), "clean")
-    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, anchor=False, quick_fix=False,
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, assignee=None, anchor=False, quick_fix=False,
                         branch="clean", target="main", worktree=str(worktree))
     phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
     events, assigned = [], []

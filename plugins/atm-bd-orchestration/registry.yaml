@@ -37,7 +37,6 @@ render:
   - skills/atm-bd-orchestration/examples/review-template-vars.json
   - skills/atm-bd-orchestration/examples/ruthless-boundary-qa-assignment-vars.json
   - skills/atm-bd-orchestration/examples/sanity-run-record-vars.json
-  - skills/atm-bd-orchestration/examples/sanity-run-table-vars.json
   - skills/atm-bd-orchestration/examples/schema-reviewer-assignment-vars.json
   - skills/atm-bd-orchestration/examples/task-refused-vars.json
   - skills/atm-bd-orchestration/examples/workflow-issue-bead-vars.json

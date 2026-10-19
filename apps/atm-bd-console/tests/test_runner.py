@@ -592,6 +592,74 @@ def test_ready_is_read_before_tasks_each_active_tick(github_runtime, monkeypatch
     assert reads == ["ready", "tasks"]
 
 
+@pytest.mark.parametrize("interleaving", ["hook_before_read", "hook_after_read", "closed_only", "in_progress", "not_ready"])
+def test_controlled_hook_dispatch_interleavings(github_runtime, monkeypatch, interleaving) -> None:
+    # A stateful in-memory ATM models #1619: assigning an existing ID updates
+    # that one row and notifies it. No thread scheduling or sleeps are involved.
+    from test_dispatch import REPO
+    from test_dispatch import phase as dispatch_phase
+    from test_dispatch import step as dispatch_step
+
+    from atm_bd_console.dispatch import dispatch
+    from atm_bd_console.enums import MergeState
+    from atm_bd_console.types import DispatchSpec, Merge, Worktree
+
+    store, _, events, _ = github_runtime
+    candidate = dispatch_step(kind="sanity", bead_id="atm-bh-6.group-sanity")
+    if interleaving == "in_progress":
+        candidate = replace(candidate, status=SprintState.IN_PROGRESS, assignee="dev-sanity")
+    phase = dispatch_phase(candidate)
+    original = Task(candidate.bead_id, "dev-sanity", "closed", 0, ACTION.at, ACTION.at, "old round")
+    tasks = {candidate.bead_id: original}
+    operations = []
+
+    def assign(source):
+        existing = tasks.get(candidate.bead_id)
+        operation = "update+notify" if existing and existing.state != "closed" else "assign+notify"
+        operations.append((source, operation))
+        tasks[candidate.bead_id] = replace(original, state="assigned")
+
+    def ready(*_args):
+        if interleaving == "hook_before_read":
+            assign("hook")
+        return Ok((replace(BEAD, id=candidate.bead_id),) if candidate.status == SprintState.OPEN and interleaving != "not_ready" else ())
+
+    def read_tasks(*_args):
+        snapshot = tuple(tasks.values())
+        if interleaving == "hook_after_read":
+            assign("hook")
+        return Ok(snapshot)
+
+    def tick(value, state, now, _spec):
+        outcome = dispatch(value.phase.value, value.tasks.value,
+                           (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
+                           (RemoteRef("sprint/bh-6", "abc123"),),
+                           (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), now),),
+                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})))
+        return SNAPSHOT, outcome.actions, state
+
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda _file, _root, _opened, ready, _shown:
+                        Ok(replace(phase, steps=(replace(candidate, ready=any(bead.id == candidate.bead_id for bead in ready)),))))
+    monkeypatch.setattr(runner.beads_source, "ready", ready)
+    monkeypatch.setattr(runner.atm_source, "tasks", read_tasks)
+    monkeypatch.setattr(runner.model, "tick", tick)
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: (assign("dispatch"), Ok(None))[1])
+    runner.step(replace(CONFIG, dry_run=False, github="off"), RUNNING_STATE, False, store)
+
+    expected = {
+        "hook_before_read": [("hook", "assign+notify")],
+        "hook_after_read": [("hook", "assign+notify"), ("dispatch", "update+notify")],
+        "closed_only": [("dispatch", "assign+notify")],
+        "in_progress": [],
+        "not_ready": [],
+    }
+    assert operations == expected[interleaving]
+    assert len(tasks) == 1
+    assert sum(event == "action" and detail.get("effect") == "assign" for event, detail in events) == sum(
+        source == "dispatch" for source, _ in operations
+    )
+
+
 def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> None:
     store, calls, events, inputs = github_runtime
 

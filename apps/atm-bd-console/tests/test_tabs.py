@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, PHASE, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
 from textual import events
+from textual.widgets._markdown import MarkdownBlock
 
-from atm_bd_console.app import ConsoleApp, sprint_steps, status_header
+from atm_bd_console import runs
+from atm_bd_console.app import ConsoleApp, _agent_name, _run_time, sanity_text, sprint_steps, status_header
 from atm_bd_console.enums import PrState, SprintState
+from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _sprint_views
 from atm_bd_console.prs import render_prs
 from atm_bd_console.render import dashboard, status_bar
@@ -35,6 +39,92 @@ SNAPSHOT = replace(
     sprints=SPRINTS,
     mermaid=f"graph TD\n  {WIDE}",
 )
+
+
+def test_sanity_rows_show_local_time_icon_name_and_api_failure() -> None:
+    dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness="codex-cli", model="terra")
+    reviewer = replace(RUNNING.agents[0], name="sanity-jev", agent_type="sanity", harness="codex-cli", model="sol")
+    rows = [{"run_id": "r", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-4", "pr_number": 42,
+             "iteration": 1, "final_verdict": "PASS", "dev": "alice", "reviewer": "sanity-jev",
+             "kind": "API_FAILURE", "jev_elapsed_s": 4.2, "error": {"message": "Jev is unavailable"}},
+            {"run_id": "r", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-4", "reviewer": "sanity-llm",
+             "verdict": "PASS", "llm_elapsed_s": 1.2}]
+    main, errors = sanity_text(runs.sanity_runs(rows), (dev, reviewer))
+    assert _run_time("2026-10-02T13:14:00Z") in main.plain
+    assert "\U000f01e7 alice" in main.plain
+    assert "\U000f0026" in main.plain and "4.2s" in main.plain and "1.2s" in main.plain
+    assert "\U000f01a6 sanity-jev" in errors.plain and "Jev is unavailable" in errors.plain
+
+
+def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> None:
+    qa = {"id": "qa-1", "status": "closed", "closed_at": "2026-10-02T13:14:00Z", "close_reason": "FAIL found",
+          "metadata": {"sprint": "bj-4", "round": 1}, "checked_bead_data": {"metadata": {"pr_number": 42}}}
+    finding = {"id": "f1", "description": "missing test", "design": "add a test",
+               "metadata": {"severity": "important", "reviewer": "req-qa"},
+               "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
+    monkeypatch.setattr(runs, "collect", lambda *_args: ([], runs.qa_runs([qa]), [finding]))
+    rendered = []
+    monkeypatch.setattr(runs, "render_findings", lambda _root, findings: rendered.extend(findings) or "# Findings\n\nmissing test")
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)), FakeStep(SNAPSHOT), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            tabs = app.query_one("TabbedContent")
+            tabs.active = "sanity"
+            assert app.query_one("#sanity-list") and app.query_one("#sanity-errors")
+            tabs.active = "quality"
+            options = app.query_one("#quality-runs")
+            assert options.option_count == 1
+            label = str(options.get_option_at_index(0).prompt)
+            assert _run_time(qa["closed_at"]) in label and "bj-4" in label and "1/0" in label and "FAIL" in label
+            app._show_findings("qa-1")
+            await pilot.pause()
+            assert rendered and rendered[-1]["id"] == "f1"
+            assert app.query_one("#quality-findings")
+
+    run_scenario(scenario())
+
+
+@pytest.mark.parametrize(("status", "reason", "color"), [
+    ("open", None, "#4A5AF8"), ("closed", "PASS", "#2EA043"), ("closed", "FAIL", "#F85149"),
+])
+def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_path, status, reason, color) -> None:
+    qa = {"id": "qa-1", "status": status, "closed_at": "2026-10-02T13:14:00Z", "close_reason": reason,
+          "metadata": {"sprint": "bj-4", "round": 1}}
+    finding = {"id": "f1", "description": "issue", "design": "correction",
+               "metadata": {"severity": "important", "reviewer": "req-qa"},
+               "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
+    reviewer = replace(RUNNING.agents[0], name="req-qa", agent_type="qa")
+    snapshot = replace(SNAPSHOT, agents=(reviewer,))
+    monkeypatch.setattr(runs, "collect", lambda *_args: ([], runs.qa_runs([qa]), [finding]))
+    monkeypatch.setattr(runs, "render_findings", lambda _root, findings: f"**Reviewer:** {findings[0]['reviewer']}")
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)), FakeStep(snapshot), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "quality"
+            app._show_findings("qa-1")
+            widget = app.query_one("#quality-findings")
+            await widget.update(widget._markdown)
+            blocks = widget.query(MarkdownBlock)
+            content = next(block._content for block in blocks if "req-qa" in block._content.plain)
+            assert "\U000f029b req-qa" in content.plain
+            assert any(str(span.style) == color for span in content.spans)
+
+    run_scenario(scenario())
+
+
+@pytest.mark.parametrize(("harness", "model", "expected"), [
+    ("claude-code", "unknown", "\U000f0382"), ("codex-cli", "unknown", "\U000f01e7"),
+    ("claude-code", "HAIKU", "\U000f0156"), ("codex-cli", "SOL", "\U000f05a8"),
+])
+def test_run_dev_cell_uses_roster_model_and_fallback_icon(harness, model, expected) -> None:
+    dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness=harness, model=model)
+    label = _agent_name("alice", (dev,))
+    assert label.plain == f"{expected} alice"
+    assert (expected, label.style) == icon_for(dev)
 
 
 def lines(app: ConsoleApp, selector: str) -> list[str]:

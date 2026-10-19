@@ -59,15 +59,7 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    committed diff of `changed_files`, the `context` entries: a `path` sends
    the whole file, `path:start-end` only those lines, and the bead notes or PR
    text each `external_evidence` reference names, fetched by the client); never write one
-   yourself. If it exits 2, do what its `error.suggested_action` says. For
-   `SANITY.JEV_REQUEST_TOO_LARGE`, rebuild `context` and rerun: narrow each
-   entry to the line ranges the deliverable needs (`path:start-end`, e.g.
-   `docs/x.md:120-180`), drop entries it does not need, and never remove
-   `deliverable.text` or `changed_files`. Leave `context` empty only when
-   nothing in it is needed: the client then splits `changed_files`, by hunks
-   for a file too large alone, into requests that each fit and asks Jev once
-   per part, so an oversized request is never your result. Return its error
-   only once that says to report it. Its answer is
+   yourself. On a client API_FAILURE, return that result unchanged, with no retry and no context edit. Its answer is
    `data.answers.written.choice`: `no` means exactly one `skipped` finding;
    `yes` means none. A split request instead prints `data.parts`: every
    part's label, `changed_files`, full Jev `response` and own `receipt`.
@@ -78,7 +70,8 @@ Every field is present. `deliverable.text` is the only requirement you judge.
 4. Return the result with `commit_checked` exactly equal to `commit` and
    `jev` = the client's `data.receipt`, or for a split request its
    `data.parts` list, copied verbatim from its stdout. Receipts are keyed by
-   the client; one you write or edit fails the merge.
+   the client; one you write or edit fails the merge. Copy the client's outer
+   `elapsed_s` unchanged into the outer result on both success and failure.
 
 ## Output Format
 
@@ -96,7 +89,8 @@ Every field is present. `deliverable.text` is the only requirement you judge.
             "probabilities": {"yes": 0.08, "no": 0.92}, "response_id": null,
             "request_sha256": "<from the client>", "mac": "<from the client>"}
   },
-  "error": null
+  "error": null,
+  "elapsed_s": 4.2
 }
 ```
 

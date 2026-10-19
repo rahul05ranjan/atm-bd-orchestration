@@ -30,7 +30,8 @@ def record(**changes):
                  task='task-"quote"\nnext', sprint="d-4", phase="d", started_at="2026-09-30T16:00:00Z",
                  completed_at="2026-09-30T16:01:05Z", duration="1m05s", duration_seconds=65,
                  pr_number=42, iteration=1, verdict="PASS", final_verdict="PASS", findings=0,
-                 error=None, errors=[], jev_receipts=[], completed_local="09-30 09:01")
+                 error=None, errors=[], jev_receipts=[], completed_local="09-30 09:01",
+                 dev=None, jev_elapsed_s=None, llm_elapsed_s=None, kind="verdict")
     return dict(value, **changes)
 
 
@@ -43,6 +44,29 @@ RECEIPT = jev_reply(1)["data"]["jev"]
 
 
 class SanityHistory(unittest.TestCase):
+    def test_jev_elapsed_uses_maximum_and_missing_is_null(self):
+        self.assertEqual(HISTORY.reviewer_elapsed({"reviewer": "sanity-jev", "reviewer_results": [
+            {"elapsed_s": 1.2}, {"elapsed_s": 4.2}, {"elapsed_s": 2.0}]}), 4.2)
+        self.assertIsNone(HISTORY.reviewer_elapsed({"reviewer": "sanity-jev", "reviewer_results": [{}, {}]}))
+
+    def test_pre_new_fields_row_is_idempotent(self):
+        old = {k: v for k, v in record().items() if k not in ("dev", "jev_elapsed_s", "llm_elapsed_s", "kind")}
+        self.log.write_text(json.dumps(old) + "\n")
+        HISTORY.append_record(self.log, record(dev="alice", llm_elapsed_s=4.2))
+        self.assertEqual(json.loads(self.log.read_text()), old)
+
+    def test_new_fields_round_trip_and_conflicting_retry_fails(self):
+        row = record(dev="alice", llm_elapsed_s=1.2, jev_elapsed_s=4.2, kind="API_FAILURE", verdict="CANNOT_RUN", findings=None,
+                     error={"code": "SANITY.JEV_UNAVAILABLE", "message": "unavailable"})
+        rendered = HISTORY.render_record(row)
+        self.assertEqual({key: rendered[key] for key in ("dev", "jev_elapsed_s", "llm_elapsed_s", "kind", "error")},
+                         {key: row[key] for key in ("dev", "jev_elapsed_s", "llm_elapsed_s", "kind", "error")})
+        HISTORY.append_record(self.log, rendered)
+        HISTORY.append_record(self.log, rendered)
+        with self.assertRaises(SystemExit):
+            HISTORY.append_record(self.log, {**rendered, "dev": "bob"})
+        self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()], [row])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -206,21 +230,6 @@ class SanityHistory(unittest.TestCase):
         HISTORY.append_record(self.log, HISTORY.render_record(row))
         self.assertEqual(json.loads(self.log.read_text()), row)
 
-    def test_table_skips_pre_0_8_2_rows(self):
-        legacy = {key: value for key, value in record().items() if key not in ("completed_local", "final_verdict")}
-        runs = [dict(legacy, reviewer="sanity-selected"), legacy]
-        table = render(SCRIPTS.parent / "templates/sanity-run-table.md.j2", {"runs": runs})
-        self.assertEqual(table.returncode, 0, table.stderr)
-        self.assertEqual(table.stdout.splitlines()[2:],
-                         ["| d-4 | #42 | LLM | 0 | ✅ | — | 2026-09-30T16:01:05Z · 1m05s | 1 |"])
-
-
-CONSOLE = (  # agents/dev-sanity.md "Mandatory Console Report"
-    "set -o pipefail\n"
-    'test -s "$log" && tail -n 20 "$log" | jq -s \'{runs: .}\' | sc-compose render --strict '
-    "--file .claude/skills/atm-bd-orchestration/templates/sanity-run-table.md.j2 --var-file /dev/stdin")
-
-
 def fenced(task, bead, number, sha, findings=()):
     return "```json\n" + json.dumps(receipted({"success": True, "data": {
         "deliverable": number, "sanity_bead": task, "dev_bead": bead, "commit_checked": sha,
@@ -229,7 +238,7 @@ def fenced(task, bead, number, sha, findings=()):
 
 class ShippedFlow(unittest.TestCase):
     """Fenced replies -> sanity-split manifest -> sanity-merge (LLM, JEV, selected) ->
-    sanity-run-history -> the console command, all shipped scripts on a real pushed repo."""
+    sanity-run-history, all shipped scripts on a real pushed repo."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -250,14 +259,17 @@ class ShippedFlow(unittest.TestCase):
         (self.root / "bead.json").write_text(json.dumps(bead))
         split = subprocess.run([str(SCRIPTS / "sanity-split"), "--task", self.task, "--bead", self.bead,
                                 "--worktree", str(self.repo.wt), "--branch", "sprint/x", "--commit", self.repo.sha,
-                                "--base", "develop", "--lint-command", "true", "--scratch", str(self.root / "scratch"),
+                                "--base", "develop", "--lint-command", "true", "--split-only", "--scratch", str(self.root / "scratch"),
                                 "--bead-json", str(self.root / "bead.json")], capture_output=True, text=True)
         self.assertEqual(split.returncode, 0, split.stderr)
         self.manifest = self.root / "manifest.json"
-        self.manifest.write_text(split.stdout)
-        exit_file = Path(json.loads(split.stdout)["lint"]["exit_file"])
-        SPLIT_TESTS.wait_for(exit_file.exists, f"exit file {exit_file.name}")
-        self.assertEqual(exit_file.read_text().strip(), "0")
+        # The separate lint-supervisor tests cover process execution; this flow
+        # drives the merge with a controlled completed lint result.
+        manifest = json.loads(split.stdout)
+        exit_file = self.root / "lint.exit"
+        exit_file.write_text("0\n")
+        manifest["lint"] = {"command": "true", "exit_file": str(exit_file), "log": str(self.root / "lint.log")}
+        self.manifest.write_text(json.dumps(manifest))
 
     def merge(self, reviewer, *extra, stdin=None):
         now = time.time()
@@ -299,32 +311,21 @@ class ShippedFlow(unittest.TestCase):
         log = logs.pop()
         self.assertEqual(Path(log), self.repo.wt.resolve() / ".sc/sanity-log/phase-d.jsonl")
         rows = [json.loads(line) for line in Path(log).read_text().splitlines()]
-        table = subprocess.run(["bash", "-c", CONSOLE], cwd=self.primary, env=dict(self.env, log=log),
-                               capture_output=True, text=True)
-        self.assertEqual(table.returncode, 0, table.stderr)
-        return final, rows, table.stdout, log
-
-    def expected_table(self, rows, cells):
-        return ("| S | PR | R | Find | Result | Match | Done | Iter |\n"
-                "|:--|:--|:--|---:|:--|:--|:--|---:|\n" + "".join(
-                    f"| d-4 | #42 | {cell} | {row['completed_local']} · {row['duration']} | 1 |\n"
-                    for row, cell in zip(rows, cells)))
+        return final, rows, log
 
     def test_selected_verdict_differs_from_one_reviewer(self):
-        final, rows, table, _ = self.run_flow(lambda selection: None)
+        final, rows, _ = self.run_flow(lambda selection: None)
         self.assertEqual(final, "PASS")
         self.assertEqual([(r["reviewer"], r["verdict"], r["final_verdict"]) for r in rows],
                          [("sanity-llm", "PASS", "PASS"), ("sanity-jev", "FAIL", "PASS")])
-        self.assertEqual(table, self.expected_table(rows, ["LLM | 0 | ✅ | ✓", "JEV | 1 | ❌ | ✗"]))
 
     def test_selected_merge_cannot_run_keeps_reviewer_verdicts(self):
         def invalid(selection):
             selection[1]["reason"] = ""  # a disagreement without a reason: selected merge rejects it
-        final, rows, table, _ = self.run_flow(invalid)
+        final, rows, _ = self.run_flow(invalid)
         self.assertEqual(final, "CANNOT_RUN")
         self.assertEqual([(r["reviewer"], r["verdict"], r["final_verdict"]) for r in rows],
                          [("sanity-llm", "PASS", "CANNOT_RUN"), ("sanity-jev", "FAIL", "CANNOT_RUN")])
-        self.assertEqual(table, self.expected_table(rows, ["LLM | 0 | ✅ | ✗", "JEV | 1 | ❌ | ✗"]))
 
     def test_failed_jev_slot_error_is_logged_verbatim_while_llm_is_selected(self):
         error = {"code": "SANITY.JEV_UNAVAILABLE", "message": "TYPESAFE_API_KEY is missing; no Jev evaluation ran",
@@ -333,27 +334,18 @@ class ShippedFlow(unittest.TestCase):
 
         def take_llm(selection):
             selection[1].update(jev="cannot_run", reason="JEV unavailable: SANITY.JEV_UNAVAILABLE")
-        final, rows, table, _ = self.run_flow(take_llm, jev_failure=failure)
+        final, rows, _ = self.run_flow(take_llm, jev_failure=failure)
         self.assertEqual(final, "PASS")
         self.assertEqual([(r["reviewer"], r["verdict"], r["errors"]) for r in rows], [
             ("sanity-llm", "PASS", []),
             ("sanity-jev", "CANNOT_RUN", [{k: error[k] for k in ("code", "message", "recoverable", "deliverable")}])])
-        self.assertEqual(table, self.expected_table(rows, ["LLM | 0 | ✅ | ✓", "JEV | — | ⚠ unavailable | ✗"]))
+        self.assertEqual(rows[1]["kind"], "API_FAILURE")
+        self.assertEqual(rows[1]["error"]["message"], error["message"])
 
     def test_all_ok_rows_log_no_errors(self):
-        _, rows, _, _ = self.run_flow(lambda selection: None)
+        _, rows, _ = self.run_flow(lambda selection: None)
         self.assertEqual([r["errors"] for r in rows], [[], []])
         jev = [json.loads(text.split("\n", 1)[1].rsplit("\n", 1)[0])["data"]["jev"] for text in (
             fenced(self.task, self.bead, 1, self.repo.sha),
             fenced(self.task, self.bead, 2, self.repo.sha, [{"kind": "skipped", "file": "crates/types/src/retry.rs", "line": 1, "issue": "404 test not written"}]))]
         self.assertEqual([r["jev_receipts"] for r in rows], [[], jev])
-
-    def test_console_fails_on_a_wrong_ledger_path(self):
-        doc = (ROOT.parents[1] / "agents/dev-sanity.md").read_text()
-        self.assertIn(CONSOLE.replace("--strict --file", "--strict \\\n  --file"), doc)
-        *_, log = self.run_flow(lambda selection: None)
-        for wrong in (log + ".missing", str(self.root / "empty.jsonl")):
-            Path(self.root / "empty.jsonl").touch()
-            table = subprocess.run(["bash", "-c", CONSOLE], cwd=self.primary, env=dict(self.env, log=wrong),
-                                   capture_output=True, text=True)
-            self.assertNotEqual(table.returncode, 0, table.stdout)

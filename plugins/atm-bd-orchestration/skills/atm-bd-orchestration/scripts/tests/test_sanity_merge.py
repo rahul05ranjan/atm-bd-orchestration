@@ -107,6 +107,19 @@ class SanityMerge(unittest.TestCase):
         self.assertNotEqual(reports[0]["completed_at"], reports[1]["completed_at"])
         self.assertEqual([r["duration_seconds"] for r in reports], [3, 21])
 
+    def test_jev_envelopes_accept_optional_elapsed_and_preserve_it(self):
+        self.write_manifest(run_id="elapsed-run", reviewers=["sanity-jev"], operational_reviewer="sanity-jev")
+        self.lint(0)
+        results = [{**self.result(1), "elapsed_s": 4.2}, self.result(2)]
+        args = (str(self.manifest), TASK, DEV, SPRINT, "--reviewer", "sanity-jev",
+                "--started-at", "1700000000", "--completed-at", "1700000001")
+        out = self.merge(results, *args)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout)["reviewer_results"], results)
+        for value in (-1, True, "4.2"):
+            bad = [{**self.result(1), "elapsed_s": value}, self.result(2)]
+            self.assertNotEqual(self.merge(bad, *args).returncode, 0)
+
     def test_single_jev_and_cannot_run_are_never_relabelled(self):
         self.write_manifest(run_id="jev-run", reviewers=["sanity-jev"], operational_reviewer="sanity-jev")
         self.lint(0)

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -47,7 +48,36 @@ def read_vars(path: Path) -> dict[str, object]:
 
 
 SLOT_ERROR_KEYS = ("code", "message", "recoverable", "deliverable")
-LATER_FIELDS = ("errors", "jev_receipts")  # record fields added after rows were first logged
+LATER_FIELDS = ("errors", "jev_receipts", "dev", "jev_elapsed_s", "llm_elapsed_s", "kind")
+
+
+def elapsed_value(value):
+    return type(value) in (int, float) and math.isfinite(value) and value >= 0
+
+
+def reviewer_elapsed(value):
+    """Concurrent Jev calls contribute their maximum wall time, not their sum."""
+    if value.get("reviewer") != "sanity-jev":
+        return None
+    times = [result.get("elapsed_s") for result in value.get("reviewer_results") or []
+             if isinstance(result, dict) and elapsed_value(result.get("elapsed_s"))]
+    return max(times) if times else None
+
+
+def checked_dev(bead):
+    try:
+        result = subprocess.run(["bd", "show", bead, "--json"], check=True, capture_output=True, text=True)
+        issues = json.loads(result.stdout)
+        assignee = issues[0].get("assignee") if isinstance(issues, list) and issues else None
+        return assignee if isinstance(assignee, str) and assignee else None
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+def result_kind(value):
+    error = value.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    return "API_FAILURE" if value.get("reviewer") == "sanity-jev" and isinstance(code, str) and code.startswith("SANITY.JEV_") else "verdict"
 
 
 def valid_slot_error(error: object) -> bool:
@@ -166,6 +196,10 @@ def main() -> None:
         "run_id": vars["run_id"], "reviewer": vars["reviewer"], "commit": vars["commit"],
         "started_at": vars["started_at"], "duration_seconds": elapsed,
         "error": vars.get("error"),
+        "dev": checked_dev(args.bead),
+        "jev_elapsed_s": reviewer_elapsed(vars),
+        "llm_elapsed_s": vars.get("llm_elapsed_s") if vars["reviewer"] == "sanity-llm" else None,
+        "kind": result_kind(vars),
         "errors": slot_errors(vars),
         "jev_receipts": jev_receipts(vars),
         "task": args.task, "sprint": vars["sprint"], "phase": phase,
@@ -192,8 +226,15 @@ RECORD_TYPES = {
 
 
 def validate_record(record):
-    if not isinstance(record, dict) or set(record) != set(RECORD_TYPES) | {"findings", "error", "errors", "jev_receipts"}:
+    if not isinstance(record, dict) or set(record) != set(RECORD_TYPES) | {"findings", "error", "errors", "jev_receipts", "dev", "jev_elapsed_s", "llm_elapsed_s", "kind"}:
         fail("rendered record has incorrect fields")
+    if record["dev"] is not None and (not isinstance(record["dev"], str) or not record["dev"]):
+        fail("rendered record.dev must be a nonempty string or null")
+    for field in ("jev_elapsed_s", "llm_elapsed_s"):
+        if record[field] is not None and not elapsed_value(record[field]):
+            fail(f"rendered record.{field} must be a finite nonnegative number or null")
+    if record["kind"] not in {"verdict", "API_FAILURE"}:
+        fail("rendered record.kind must be verdict or API_FAILURE")
     for field, expected in RECORD_TYPES.items():
         exact_types = expected if isinstance(expected, tuple) else (expected,)
         if type(record[field]) not in exact_types or (expected is str and not record[field]):

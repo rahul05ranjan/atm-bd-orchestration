@@ -66,6 +66,11 @@ MARKER_HARD = "💎"
 MARKER_FAST = "⚡"
 MARKER_QA = "🔍"
 MARKER_FIX_QA = "🛠️"
+SANITY_VERDICT_ICONS: dict[str, Icon] = {
+    "PASS": ("\U000f01a6", "#2EA043"),
+    "FAIL": ("\U000f01a6", "#F85149"),
+    "API_FAILURE": ("\U000f0026", "#D29922"),
+}
 
 
 def icon(member: AgentIcon | SprintState | CiState | PrState) -> Icon:
