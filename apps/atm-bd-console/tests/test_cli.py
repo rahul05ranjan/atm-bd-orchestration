@@ -228,7 +228,7 @@ def test_installed_cron_command_runs_one_headless_tick(tmp_path) -> None:
 def test_ci_covers_minimum_latest_and_installed_cron_smoke() -> None:
     workflow = (PKG.parents[1] / ".github/workflows/tests.yml").read_text()
     console = workflow.split("  console-tests:\n", 1)[1].split("\n  package-tests:", 1)[0]
-    assert 'python-version: ["3.11", "3.x"]' in console
+    assert 'python-version: ["3.11", "3.14"]' in console
     assert "uv tool install --python '${{ steps.python.outputs.python-path }}' ./apps/atm-bd-console" in console
     assert "pytest -q\n" in console
     assert '"$ATM_BD_CONSOLE_BIN" --help' in console
