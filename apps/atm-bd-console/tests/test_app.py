@@ -58,7 +58,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_runs=[], quality_runs=[], runs_error=None,
+                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_runs=[], quality_runs=[], runs_error=None, _quality_error=None,
                             show_pr_history=False, status_error=None, status_text="",
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
@@ -82,6 +82,26 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     assert nodes["#quality-error"].display is True
     assert "open bead read failed" in nodes["#quality-error"].value.plain
     assert "open bead read failed" in nodes["#sanity-list"].value.plain
+
+
+def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
+    calls = []
+    active = SimpleNamespace(active="dispatch")
+    dummy = SimpleNamespace(
+        _trace_input=lambda *_: None,
+        _load_closed_quality=lambda: calls.append("quality"),
+        tick=lambda force: calls.append(("tick", force)),
+        query_one=lambda *_: active,
+    )
+    ConsoleApp.on_tabbed_content_tab_activated(dummy, SimpleNamespace(pane=SimpleNamespace(id="quality")))
+    assert calls == ["quality"]
+    calls.clear()
+    ConsoleApp.action_refresh(dummy)
+    assert calls == [("tick", True)]
+    calls.clear()
+    active.active = "quality"
+    ConsoleApp.action_refresh(dummy)
+    assert calls == [("tick", True), "quality"]
 
 
 class RaisingStep:

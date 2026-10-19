@@ -196,7 +196,12 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     logger.finish(actions=0)
     persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
-    return StepResult(snapshot, next_state)
+    try:
+        run_data = ledger_source.collect(config.repo_root, config.phase, (), [])
+        runs_error = None
+    except (OSError, ValueError, RuntimeError) as error:
+        run_data, runs_error = None, str(error)
+    return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error)
 
 
 def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
@@ -243,19 +248,13 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     logger.result("phase", phase)
     run_data = None
     runs_error = None
-    # bd list excludes closed rows by default; this one separate, bounded-by-phase
-    # history read avoids --all while the tick's open read supplies live rows.
     if isinstance(opened, Err):
         runs_error = str(opened.error)
     else:
-        closed_rows = logger.result("beads.closed_runs", beads_source.closed_phase_rows(config.phase, cwd=config.repo_root), phase=config.phase)
-        if isinstance(closed_rows, Err):
-            runs_error = str(closed_rows.error)
-        else:
-            try:
-                run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, closed_rows.value)
-            except (OSError, ValueError, RuntimeError) as run_error:
-                runs_error = str(run_error)
+        try:
+            run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, [])
+        except (OSError, ValueError, RuntimeError) as run_error:
+            runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
     code_root = config.code_root or config.repo_root

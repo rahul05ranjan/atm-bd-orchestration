@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import command, runs
-from .result import Err
+from . import beads_source, command, runs
+from .result import Err, Ok, Result
 from .skill_loader import load_skill
 
 
@@ -47,3 +47,26 @@ def collect(repo_root: str, phase: str, open_rows: tuple[dict[str, Any], ...], c
         elif "stage:finding" in labels:
             findings.append(row)
     return runs.sanity_runs(read_ledger(repo_root, phase)), runs.qa_runs(qa_rows), findings
+
+
+def closed_quality(repo_root: str, phase: str) -> Result[tuple[list[runs.QaRun], list[dict[str, Any]]]]:
+    """Load just the closed QA and finding stages when the user requests Quality."""
+    qa = beads_source.closed_stage_rows(phase, "qa", cwd=repo_root)
+    if isinstance(qa, Err):
+        return qa
+    findings = beads_source.closed_stage_rows(phase, "finding", cwd=repo_root)
+    if isinstance(findings, Err):
+        return findings
+    ids = tuple(sorted({checked for row in qa.value
+                        if isinstance((meta := row.get("metadata")), dict)
+                        if isinstance((checked := meta.get("checked_bead")), str) and checked}))
+    checked = beads_source.show_rows(ids, cwd=repo_root)
+    if isinstance(checked, Err):
+        return checked
+    by_id = {row.get("id"): row for row in checked.value}
+    enriched = []
+    for row in qa.value:
+        metadata = row.get("metadata")
+        checked_id = metadata.get("checked_bead") if isinstance(metadata, dict) else None
+        enriched.append({**row, "checked_bead_data": by_id.get(checked_id, {})})
+    return Ok((runs.qa_runs(enriched), findings.value))

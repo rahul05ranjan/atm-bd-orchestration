@@ -73,14 +73,18 @@ def ready(label: str) -> Result[tuple[Bead, ...]]:
     return _run(["bd", "ready", "-l", label, "--json"])
 
 
-def closed_phase_rows(phase: str, *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
-    """Read the phase's closed rows once for the Quality tab; open rows come from the runner tick."""
-    result = _raw(["bd", "list", "-l", f"phase-{phase}", "--status", "closed", "-n", "0", "--json"], cwd=cwd)
+def closed_stage_rows(phase: str, stage: str, *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
+    """Read one run-tab stage, on demand, never the full closed phase."""
+    result = _raw(["bd", "list", "-l", f"phase-{phase},stage:{stage}", "--status", "closed", "-n", "0", "--json"], cwd=cwd)
     if isinstance(result, Err):
         return result
     if not all(isinstance(row.get("id"), str) for row in result.value):
         return Err(ParseFailed("parse_failed", "bd", "expected bead objects with ids", "repair bd JSON"))
     return result
+
+
+def show_rows(ids: tuple[str, ...], *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
+    return Ok([]) if not ids else _raw(["bd", "show", *ids, "--json"], cwd=cwd)
 
 
 def ancestors(beads: tuple[Bead, ...]) -> Result[tuple[Bead, ...]]:

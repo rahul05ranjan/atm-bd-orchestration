@@ -15,17 +15,30 @@ ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "plugins/atm-bd-orchestration/skills/atm-bd-orchestration"
 
 
-def test_closed_phase_rows_uses_the_shared_bd_reader_once(monkeypatch) -> None:
+def test_closed_quality_reads_only_relevant_stages_and_checked_ids(monkeypatch) -> None:
     calls = []
 
     def run(argv, _fix, **kwargs):
         calls.append((argv, kwargs.get("cwd")))
-        return Ok(command.Output(0, json.dumps([{"id": "qa-1", "labels": ["phase-bj", "stage:qa"]}])))
+        if argv[1] == "show":
+            rows = [{"id": "dev-1", "metadata": {"pr_number": 42}}]
+        elif "stage:qa" in argv[3]:
+            rows = [{"id": "qa-1", "status": "closed", "labels": ["phase-bj", "stage:qa"],
+                     "metadata": {"checked_bead": "dev-1"}}]
+        else:
+            rows = [{"id": "f1", "labels": ["phase-bj", "stage:finding"]}]
+        return Ok(command.Output(0, json.dumps(rows)))
 
     monkeypatch.setattr(beads_source.command, "run", run)
-    result = beads_source.closed_phase_rows("bj", cwd="/repo")
-    assert isinstance(result, Ok) and result.value[0]["id"] == "qa-1"
-    assert calls == [(["bd", "list", "-l", "phase-bj", "--status", "closed", "-n", "0", "--json"], "/repo")]
+    result = ledger_source.closed_quality("/repo", "bj")
+    assert isinstance(result, Ok)
+    assert result.value[0][0].pr_number == 42
+    assert result.value[1][0]["id"] == "f1"
+    assert calls == [
+        (["bd", "list", "-l", "phase-bj,stage:qa", "--status", "closed", "-n", "0", "--json"], "/repo"),
+        (["bd", "list", "-l", "phase-bj,stage:finding", "--status", "closed", "-n", "0", "--json"], "/repo"),
+        (["bd", "show", "dev-1", "--json"], "/repo"),
+    ]
 
 
 def test_run_data_combines_tick_beads_without_mutating_bead_rows(monkeypatch) -> None:
