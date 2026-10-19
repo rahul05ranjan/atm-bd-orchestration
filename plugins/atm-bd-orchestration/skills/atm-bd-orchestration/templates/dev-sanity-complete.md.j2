@@ -1,6 +1,6 @@
 ---
 name: dev-sanity-complete
-version: 2.0.0
+version: 2.0.1
 description: Selected sanity verdict; FAIL within the round cap sends sanity-fail to the dev and creates no finding bead.
 format: markdown
 required_variables:
@@ -46,7 +46,7 @@ Bead: {{ task_id }} (sprint {{ sprint }})
 Checked: {{ checked_bead }} on `{{ branch }}` at `{{ commit }}`
 Verdict: **{{ verdict }}** ({{ findings_count }} findings)
 {% if verdict == "FAIL" %}
-For a FAIL within the configured round cap, the dev was sent `sanity-fail`; a FAIL exceeding the cap triggers lead escalation. No finding beads were filed.
+For a FAIL within the configured round cap, the dev was sent `sanity-fail`; a FAIL exceeding the cap triggers lead escalation; no finding beads were filed.
 {% endif %}
 
 ## Machine Status (JSON)

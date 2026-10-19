@@ -27,9 +27,11 @@ class TemplateContractTests(unittest.TestCase):
         }
         result = render(ROOT / "templates/dev-sanity-complete.md.j2", variables)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("within the configured round cap, the dev was sent `sanity-fail`", result.stdout)
-        self.assertIn("a FAIL exceeding the cap triggers lead escalation", result.stdout)
-        self.assertIn("No finding beads were filed", result.stdout)
+        self.assertIn(
+            "For a FAIL within the configured round cap, the dev was sent `sanity-fail`; "
+            "a FAIL exceeding the cap triggers lead escalation; no finding beads were filed.",
+            result.stdout,
+        )
         status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
         self.assertNotIn("finding_bead_ids", status)
 
@@ -40,7 +42,7 @@ class TemplateContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
                 self.assertNotIn("finding_bead_ids", status)
-                self.assertNotIn("No finding beads were filed", result.stdout)
+                self.assertNotIn("no finding beads were filed", result.stdout)
 
     def test_review_completion_timeout_reports_captured_output(self):
         command = ["check-review-completion.py", "vars.json"]
