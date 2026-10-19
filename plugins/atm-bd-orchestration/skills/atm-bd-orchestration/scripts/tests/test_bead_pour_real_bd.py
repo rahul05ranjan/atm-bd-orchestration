@@ -364,6 +364,17 @@ class BeadPourRealBdTests(unittest.TestCase):
         override_link.symlink_to(self.override.name, target_is_directory=True)
         self.addCleanup(override_link.unlink)
 
+    def test_bd_metadata_array_and_boolean_round_trip(self):
+        ws = self.ws
+        bead = ws.sprint("metadata", 1)
+        key = [bead, "assignment-1", "FAIL", "abc123"]
+        ws.bd("update", bead, "--set-metadata", f"sanity_round_key={json.dumps(key, separators=(',', ':'))}",
+              "--set-metadata", "enabled=true")
+        metadata = ws.show(bead)["metadata"]
+        assert isinstance(metadata["sanity_round_key"], str)
+        assert json.loads(metadata["sanity_round_key"]) == key
+        assert metadata["enabled"] is True
+
     def test_validate_reports_then_pour_creates_the_sprint_group(self):
         ws = self.ws
         sprint = ws.sprint("a", 1)

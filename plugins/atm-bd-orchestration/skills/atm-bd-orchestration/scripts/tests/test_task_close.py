@@ -59,7 +59,7 @@ class World:
         return dict(event="assigned", message_id=f"assignment-{number}", seq=number,
                     at=f"2026-10-19T00:{number:02d}:00Z", to_state="assigned")
 
-    def run(self, role="dev", *, command_timeout=hook.COMMAND_TIMEOUT, **changes):
+    def run(self, role="dev", *, command_timeout=hook.COMMAND_TIMEOUT, skip_checks=False, **changes):
         self.values.update(changes)
         task = self.values.get({"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role])
         if task in self.tasks and not self.tasks[task]:
@@ -67,7 +67,8 @@ class World:
         self.path.write_text(json.dumps(self.values))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            result = hook.main(["--role", role, "--vars", str(self.path)], runner=self, clock=lambda: 42,
+            args = ["--role", role, "--vars", str(self.path)] + (["--skip-checks"] if skip_checks else [])
+            result = hook.main(args, runner=self, clock=lambda: 42,
                                command_timeout=command_timeout)
         assert stdout.getvalue() == stderr.getvalue()
         output = json.loads(stdout.getvalue())
@@ -119,7 +120,7 @@ class World:
                 values = json.loads(Path(argv[argv.index("--vars") + 1]).read_text())
                 body = hook.sc_render.render(argv[argv.index("--template") + 1], values)
                 assert argv[3] in body
-            self.tasks[argv[3]].append(dict(event=argv[4], to_state=argv[4]))
+            self.tasks[argv[3]].append(dict(event=argv[4], to_state="complete", close_outcome=argv[4]))
         elif argv[:2] == ["atm", "send"] or argv[:3] == ["atm", "task", "assign"]:
             write = True
             recipient = argv[3] if argv[1] == "task" else argv[2]
@@ -137,7 +138,7 @@ class World:
                 events = self.tasks[task]
                 event = self.assignment(len(events) + 1)
                 if events:
-                    event["event"] = "reopened" if events[-1].get("to_state") in ("complete", "completed", "refused", "cancelled") else "reassigned"
+                    event["event"] = "reopened" if events[-1].get("to_state") in hook.TERMINAL_STATES else "reassigned"
                 events.append(event)
             self.messages.append(dict(type=template_type, values=values, sender=kwargs["env"]["ATM_IDENTITY"],
                                       recipient=recipient, body=body, at="2026-10-19T23:00:00Z"))
@@ -254,13 +255,10 @@ def test_invalid_vars_have_no_commands(world, change, code):
 
 
 def test_shared_contract_strict_render_precedes_task_event_reads(world):
-    # A strict-render error must win over an existing replay conflict without reading live state.
     world.values.pop("base")
-    world.beads[world.values["checked_bead"]]["metadata"].update(
-        task_close_key=[world.values["dev_task_id"], "FAIL", "old-head"],
-        task_close_assignment="assignment-1",
-    )
-    result = world.run()
+    world.beads[world.values["sanity_bead"]]["metadata"]["sanity_round_key"] = [
+        world.values["sanity_task_id"], "assignment-1", "FAIL", "old-head"]
+    result = world.run("sanity")
     assert result["err"]["code"] == "VARS.MISSING"
     assert "base" in result["err"]["message"]
     assert world.calls == []
@@ -385,6 +383,12 @@ def test_qa_does_not_require_stack_bead(world):
     assert "ok" in world.run("qa")
 
 
+def test_dev_skip_checks_does_not_read_stack_bead(world):
+    del world.beads[world.values["stack_bead"]]
+    assert "ok" in world.run("dev", skip_checks=True)
+    assert not any(argv[:3] == ["bd", "show", world.values["stack_bead"]] for argv, _ in world.calls)
+
+
 def test_unrelated_bead_layers_are_not_stack_schema_validated(world):
     world.beads[world.values["checked_bead"]]["metadata"]["layers"] = "unrelated data"
     assert "ok" in world.run()
@@ -497,10 +501,47 @@ def test_metadata_update_preserves_concurrent_keys_and_writes_fail_counter_atomi
     assert "--metadata" not in update
 
 
+@pytest.mark.parametrize("role,verdict", [("dev", "PASS"), ("fix", "PASS"), ("sanity", "PASS"),
+                                          ("sanity", "FAIL"), ("sanity", "CANNOT_RUN"), ("qa", "PASS")])
+def test_replay_state_is_snapshotted_before_writes(world, role, verdict):
+    assert "ok" in world.run(role, verdict=verdict, undone=[{"number": 1, "reason": "missing"}])
+    calls = [argv for argv, _ in world.calls]
+    first_write = next(index for index, argv in enumerate(calls) if argv[:2] in (["bd", "update"], ["bd", "close"], ["atm", "send"]) or argv[:3] in (["atm", "task", "assign"], ["atm", "task", "close"]))
+    reads = [argv for argv in calls[first_write + 1:] if argv[:2] in (["bd", "show"], ["bd", "list"]) or argv[:3] == ["atm", "task", "events"]]
+    expected = [["atm", "task", "events", world.values["sanity_task_id"], "--all", "--json"]] if role == "sanity" and verdict == "FAIL" else []
+    assert reads == expected
+
+
+@pytest.mark.parametrize("invalid", ["[invalid", "{}", "null", 3, ["too", "short"], ["task", True, "FAIL", "sha"]])
+def test_invalid_sanity_round_key_is_a_typed_error_before_writes(world, invalid):
+    bead = world.values["sanity_bead"]
+    world.beads[bead]["metadata"]["sanity_round_key"] = invalid
+    result = world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "missing"}])
+    assert result["err"]["code"] == "BEAD.INVALID"
+    assert bead in result["err"]["fix"]
+    assert world.writes == []
+
+
+def test_metadata_comparison_decodes_key_and_bool_is_json(world):
+    bead = world.values["sanity_bead"]
+    key = [bead, "assignment-1", "FAIL", world.values["commit"]]
+    world.beads[bead]["metadata"]["sanity_round_key"] = json.dumps(key, separators=(",", ":"))
+    world.tasks[bead].append(world.assignment(1))
+    world.values["verdict"] = "FAIL"
+    instance = hook.Hook("sanity", world.values, world.path, world, lambda: 42)
+    instance.snapshot()
+    instance.metadata(bead, {"sanity_round_key": key})
+    assert world.writes == []
+    instance.update(bead, metadata={"enabled": True})
+    assert "enabled=true" in world.writes[-1][0]
+    assert world.beads[bead]["metadata"]["enabled"] is True
+
+
 def test_cannot_run_resets_sanity_and_refuses_without_notice(world):
     assert "ok" in world.run("sanity", verdict="CANNOT_RUN")
     assert world.beads[world.values["sanity_bead"]]["status"] == "open"
-    assert world.tasks[world.values["sanity_bead"]][-1]["to_state"] == "refused"
+    assert world.tasks[world.values["sanity_bead"]][-1]["to_state"] == "complete"
+    assert world.tasks[world.values["sanity_bead"]][-1]["close_outcome"] == "refused"
     assert world.messages == []
 
 
@@ -575,7 +616,7 @@ def test_same_head_failures_on_distinct_assignments_increment_twice(world):
 
 def test_existing_four_part_state_allows_a_new_assignment(world):
     bead = world.values["sanity_bead"]
-    world.beads[bead]["metadata"]["task_close_key"] = [bead, "assignment-0", "FAIL", "old-head"]
+    world.beads[bead]["metadata"]["sanity_round_key"] = [bead, "assignment-0", "FAIL", "old-head"]
     assert "ok" in world.run("sanity")
     assert world.beads[bead]["close_reason"] == f"PASS at {world.values['commit']}"
 
@@ -625,7 +666,12 @@ def test_fix_pass_requires_its_own_carry_forward(world):
 def test_cannot_run_terminal_refusal_is_a_noop_until_new_assignment(world):
     assert "ok" in world.run("sanity", verdict="CANNOT_RUN")
     writes = list(world.writes)
-    assert "ok" in world.run("sanity", verdict="PASS", commit="c" * 40)
+    assert "ok" in world.run("sanity", verdict="CANNOT_RUN")
+    for verdict in ("PASS", "FAIL"):
+        error = world.run("sanity", verdict=verdict, commit="c" * 40,
+                          undone=[{"number": 1, "reason": "missing"}])["err"]
+        assert error["code"] == "REPLAY.CONFLICT"
+        assert "new same-id assignment" in error["fix"]
     assert world.writes == writes
     world.tasks[world.values["sanity_bead"]].append(world.assignment(2))
     assert "ok" in world.run("sanity", verdict="PASS")
@@ -679,7 +725,7 @@ def test_dev_replay_does_not_bypass_round_cap(world):
     world.beads[sanity]["metadata"]["sanity_round"] = 5
     assert world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "not implemented"}])["ok"]["escalated"] == "SANITY.ROUND_CAP"
     assert "ok" in world.run("dev", verdict="PASS", undone=[])
-    assert world.tasks[sanity][-1]["to_state"] == "completed"
+    assert world.tasks[sanity][-1]["to_state"] == "complete"
     assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 1
 
 
