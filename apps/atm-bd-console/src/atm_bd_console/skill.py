@@ -69,9 +69,7 @@ def run(argv: list[str] | None = None) -> int:
         overrides = installer.parse_set(args.set)
         with skill_source.resolve_source(version=args.version, latest=args.latest) as source:
             manifest = skill_integrity.load_manifest(source)
-            manifest_version = manifest["version"] if source.name == "bundled" else (
-                skill_source.validate_manifest_version(manifest, source.name)
-            )
+            manifest_version = manifest["version"]
             differing = [result for result in skill_integrity.verify_tree(source.pkg_dir, manifest) if result.status != "ok"]
             if differing:
                 for result in differing:

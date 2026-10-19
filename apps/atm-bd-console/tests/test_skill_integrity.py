@@ -136,6 +136,18 @@ def test_load_manifest_without_published_bytes_names_the_ref() -> None:
         skill_integrity.load_manifest(source)
 
 
+@pytest.mark.parametrize("version", [None, 17, "0.17.3"], ids=["missing", "number", "mismatch"])
+def test_integrity_parser_owns_release_version_validation(tmp_path: Path, version) -> None:
+    manifest = skill_integrity.build_manifest(make_tree(tmp_path / "plugin"), "0.17.4")
+    if version is None:
+        del manifest["version"]
+    else:
+        manifest["version"] = version
+
+    with pytest.raises(skill_integrity.IntegrityError, match="does not match release version '0.17.4'"):
+        skill_integrity.parse_manifest(json.dumps(manifest).encode(), "v0.17.4", expected_version="0.17.4")
+
+
 # --- atm-bd skill through the CLI -----------------------------------------------------------------------------------
 
 
@@ -274,6 +286,30 @@ def test_bare_install_verifies_the_packaged_manifest_with_the_network_disabled(
     assert out.endswith(f"installed atm-bd-orchestration orchestration from bundled @ unknown (atm-bd {skill.__version__})\n")
 
 
+@pytest.mark.parametrize("args", [[], ["0.17.4"], ["--latest"]], ids=["bundled", "version", "latest"])
+def test_install_parses_and_validates_the_manifest_once(
+    installer, upstream: Upstream, tmp_path: Path, monkeypatch, args: list[str],
+) -> None:
+    if args:
+        upstream.release("v0.17.4")
+        upstream.latest = "v0.17.4"
+    else:
+        bundle(tmp_path, monkeypatch)
+        no_network(monkeypatch)
+    parser = skill_integrity.parse_manifest
+    calls = []
+
+    def parse(data, ref, *, expected_version=None):
+        calls.append((ref, expected_version))
+        return parser(data, ref, expected_version=expected_version)
+
+    monkeypatch.setattr(skill_integrity, "parse_manifest", parse)
+
+    assert run_cli(args, tmp_path) == 0
+    assert calls == ([("v0.17.4", "0.17.4")] if args else [("bundled", None)])
+    assert installer.calls == ["check_tools", "plan_install", "apply_plan"]
+
+
 @pytest.mark.parametrize("args", [["0.17.3"], ["--latest"]], ids=["version", "latest"])
 def test_release_install_verifies_the_tag_against_its_release_sdist_manifest(
     installer, upstream: Upstream, tmp_path: Path, args: list[str], capsys,
@@ -293,7 +329,7 @@ def test_release_install_verifies_the_tag_against_its_release_sdist_manifest(
 
 @pytest.mark.parametrize("version", [None, 17, "0.17.2"], ids=["missing", "non-string", "mismatch"])
 @pytest.mark.parametrize("args", [["0.17.3"], ["--latest"]], ids=["version", "latest"])
-def test_bad_release_manifest_version_refuses_before_cloning_or_writing(
+def test_bad_release_manifest_version_refuses_before_planning_or_writing(
     installer, upstream: Upstream, tmp_path: Path, capsys, args: list[str], version,
 ) -> None:
     tree = upstream.release("v0.17.3")
@@ -308,12 +344,12 @@ def test_bad_release_manifest_version_refuses_before_cloning_or_writing(
 
     assert run_cli(args, tmp_path) == 1
     assert "v0.17.3" in capsys.readouterr().err
-    assert upstream.clones == [] and installer.calls == ["check_tools"]
+    assert upstream.clones == ["v0.17.3"] and installer.calls == ["check_tools"]
     assert consumer(tmp_path) == {}
 
 
 @pytest.mark.parametrize("args", [["0.17.3"], ["--latest"]], ids=["version", "latest"])
-def test_release_install_rechecks_manifest_version_before_writing_record(
+def test_version_mismatch_names_both_versions_instead_of_claiming_manifest_is_absent(
     installer, upstream: Upstream, tmp_path: Path, monkeypatch, capsys, args: list[str],
 ) -> None:
     tree = upstream.release("v0.17.3")
@@ -321,7 +357,9 @@ def test_release_install_rechecks_manifest_version_before_writing_record(
     monkeypatch.setattr(skill_source, "release_manifest", lambda _tag: manifest_bytes(tree, "0.17.2"))
 
     assert run_cli(args, tmp_path) == 1
-    assert "v0.17.3" in capsys.readouterr().err
+    assert capsys.readouterr().err == (
+        "atm-bd skill: v0.17.3: skill-manifest.json version '0.17.2' does not match release version '0.17.3'\n"
+    )
     assert "plan_install" not in installer.calls and "apply_plan" not in installer.calls
     assert consumer(tmp_path) == {}
 

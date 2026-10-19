@@ -86,16 +86,6 @@ def _http_get(url: str) -> bytes | None:
         raise RepositoryError(f"{url}: {getattr(error, 'reason', error)}") from error
 
 
-def validate_manifest_version(manifest: object, tag: str) -> str:
-    version = manifest.get("version") if isinstance(manifest, dict) else None
-    expected = tag.removeprefix("v")
-    if not isinstance(version, str) or version != expected:
-        raise SkillSourceError(
-            f"{tag}: skill-manifest.json version {version!r} does not match release version {expected!r}"
-        )
-    return version
-
-
 def release_manifest(tag: str) -> bytes | None:
     """skill-manifest.json from the `atm_bd-<version>.tar.gz` asset of release `tag`; None when any part is absent."""
     version = tag.removeprefix("v")
@@ -108,13 +98,7 @@ def release_manifest(tag: str) -> bytes | None:
             entry = sdist.extractfile(member)
             if entry is None:
                 return None
-            data = entry.read()
-            try:
-                manifest = json.loads(data)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                return data  # The integrity parser reports malformed manifests with the shared fail-closed error.
-            validate_manifest_version(manifest, tag)
-            return data
+            return entry.read()
     except KeyError:
         return None
     except (tarfile.TarError, OSError, EOFError) as error:

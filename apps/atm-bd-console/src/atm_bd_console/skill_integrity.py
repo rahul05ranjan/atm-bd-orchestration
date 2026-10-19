@@ -90,11 +90,21 @@ def build_manifest(root: Path, version: str) -> dict[str, Any]:
     return {"schema": SCHEMA, "version": version, "files": files, "aggregate": aggregate(files)}
 
 
-def parse_manifest(data: bytes, ref: str) -> dict[str, Any]:
+def _validate_manifest_version(manifest: object, ref: str, expected_version: str) -> None:
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    if version != expected_version:
+        raise IntegrityError(
+            f"{ref}: {MANIFEST_NAME} version {version!r} does not match release version {expected_version!r}"
+        )
+
+
+def parse_manifest(data: bytes, ref: str, *, expected_version: str | None = None) -> dict[str, Any]:
     try:
         manifest = json.loads(data)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise IntegrityError(f"{ref}: {MANIFEST_NAME} is not JSON: {error}") from error
+    if expected_version is not None:
+        _validate_manifest_version(manifest, ref, expected_version)
     files = manifest.get("files") if isinstance(manifest, dict) else None
     if (
         not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA or not isinstance(manifest.get("version"), str)
@@ -114,7 +124,8 @@ def load_manifest(source: ManifestSource) -> dict[str, Any]:
     """The published manifest of the release the source resolved; absent means the install cannot be verified."""
     if source.manifest is None:
         raise IntegrityError(no_manifest_message(source.name))
-    return parse_manifest(source.manifest, source.name)
+    expected_version = None if source.name == "bundled" else source.name.removeprefix("v")
+    return parse_manifest(source.manifest, source.name, expected_version=expected_version)
 
 
 def verify_tree(pkg_dir: Path, manifest: dict[str, Any]) -> list[PathResult]:
