@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 MODULE = Path(__file__).parents[1] / "assignment-gates.py"
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -83,6 +84,39 @@ def qa_runner(overrides=None):
 
 
 class AssignmentGateTests(unittest.TestCase):
+    def test_runner_timeouts_are_typed_and_name_command(self):
+        for timed_out in ((gates.VALIDATE_PLAN, "--root", "{{ bead_prefix }}-phase-d"),
+                          ("bd", "ready", "-n", "0", "--json"),
+                          ("git", "merge-base", "--is-ancestor", "origin/target", "HEAD")):
+            with self.subTest(command=timed_out):
+                delegate = dev_runner()
+                seen = []
+
+                def runner(argv, **kwargs):
+                    seen.append(kwargs["timeout"])
+                    if tuple(argv) == timed_out:
+                        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+                    return delegate(argv, **kwargs)
+
+                stderr, stdout = io.StringIO(), io.StringIO()
+                with patch.object(gates, "COMMAND_TIMEOUT", 7), redirect_stderr(stderr), redirect_stdout(stdout):
+                    exit_code = gates.main(["dev", "--root", "{{ bead_prefix }}-phase-d", "--bead", "bead",
+                                            "--pr-target", "target", "--identity", "terra"], runner)
+                self.assertEqual((exit_code, stdout.getvalue().strip()), (2, "GATE_CANNOT_RUN"))
+                self.assertIn(timed_out[0], stderr.getvalue())
+                self.assertIn("7s", stderr.getvalue())
+                self.assertTrue(seen and all(timeout == 7 for timeout in seen))
+
+    def test_stack_top_timeout_is_typed(self):
+        def timeout(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        stderr, stdout = io.StringIO(), io.StringIO()
+        with redirect_stderr(stderr), redirect_stdout(stdout):
+            exit_code = gates.main(["stack-top", "--root", "phase", "--pr-target", "target"], timeout)
+        self.assertEqual((exit_code, stdout.getvalue().strip()), (2, "GATE_CANNOT_RUN"))
+        self.assertIn("bd", stderr.getvalue())
+
     def expected(self, name): return json.loads((FIXTURES / name).read_text())["expected"]
 
     def assert_fixture(self, name, gate_args, runner):

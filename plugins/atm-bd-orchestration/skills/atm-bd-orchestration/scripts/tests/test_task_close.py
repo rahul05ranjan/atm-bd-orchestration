@@ -45,6 +45,7 @@ class World:
         self.fail_after = None
         self.github_failure = False
         self.git_network_failure = None
+        self.timeout_command = None
         self.overrides = {}
         monkeypatch.setenv("ATM_IDENTITY", "caller")
 
@@ -52,12 +53,13 @@ class World:
         return dict(event="assigned", message_id=f"assignment-{number}", seq=number,
                     at=f"2026-10-19T00:{number:02d}:00Z", to_state="assigned")
 
-    def run(self, role="dev", **changes):
+    def run(self, role="dev", *, command_timeout=hook.COMMAND_TIMEOUT, **changes):
         self.values.update(changes)
         self.path.write_text(json.dumps(self.values))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            result = hook.main(["--role", role, "--vars", str(self.path)], runner=self, clock=lambda: 42)
+            result = hook.main(["--role", role, "--vars", str(self.path)], runner=self, clock=lambda: 42,
+                               command_timeout=command_timeout)
         assert stdout.getvalue() == stderr.getvalue()
         output = json.loads(stdout.getvalue())
         assert result == int("err" in output)
@@ -65,6 +67,8 @@ class World:
 
     def __call__(self, argv, **kwargs):
         self.calls.append((argv, kwargs))
+        if self.timeout_command and argv[:len(self.timeout_command)] == self.timeout_command:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
         if tuple(argv) in self.overrides:
             code, stdout = self.overrides[tuple(argv)]
             return subprocess.CompletedProcess(argv, code, stdout, "injected failure" if code else "")
@@ -280,6 +284,22 @@ def test_github_retries_and_falls_back_without_requiring_pr_base(world, failure)
     world.github_failure = failure
     assert world.run()["ok"]["github"] == "unavailable"
     assert len([argv for argv, _kwargs in world.calls if argv[0] == "gh"]) == 3
+
+
+@pytest.mark.parametrize("command", [["gh", "api"], ["git", "ls-remote"], ["git", "fetch"]])
+def test_network_timeouts_retry_then_fall_back(world, command):
+    world.timeout_command = command
+    assert world.run(command_timeout=7)["ok"]["github"] == "unavailable"
+    calls = [(argv, kwargs) for argv, kwargs in world.calls if argv[:len(command)] == command]
+    assert len(calls) == 3
+    assert all(kwargs["timeout"] == 7 for _, kwargs in world.calls)
+
+
+def test_local_timeout_is_typed_and_names_command_and_deadline(world):
+    world.timeout_command = ["git", "rev-parse"]
+    error = world.run(command_timeout=7)["err"]
+    assert error["code"] == "COMMAND.FAILED"
+    assert "git" in error["message"] and "rev-parse" in error["message"] and "7s" in error["message"]
 
 
 @pytest.mark.parametrize("failed_command", ["ls-remote", "fetch"])

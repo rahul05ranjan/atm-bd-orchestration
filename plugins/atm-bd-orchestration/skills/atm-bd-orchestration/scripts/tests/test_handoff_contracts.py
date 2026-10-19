@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import rendering
@@ -25,6 +26,33 @@ ROOT = Path(__file__).parents[2]
 AGENTS = ROOT.parents[1] / "agents"
 TEMPLATES = ROOT / "templates"
 EXAMPLES = ROOT / "examples"
+COMMAND_TIMEOUT = 30
+
+
+def run_bounded(argv, **kwargs):
+    try:
+        return subprocess.run(argv, timeout=COMMAND_TIMEOUT, stdin=subprocess.DEVNULL, **kwargs)
+    except subprocess.TimeoutExpired as error:
+        raise AssertionError(f"{argv!r} timed out after {COMMAND_TIMEOUT}s; stdout={error.stdout!r}; stderr={error.stderr!r}") from error
+
+
+def jev_environment():
+    return {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
+
+
+class BoundedCommandTests(unittest.TestCase):
+    def test_timeout_reports_command_and_captured_output(self):
+        error = subprocess.TimeoutExpired(["script", "--arg"], 30, output=b"partial out", stderr=b"partial err")
+        with patch.object(subprocess, "run", side_effect=error) as runner:
+            with self.assertRaisesRegex(AssertionError, "script.*--arg.*partial out.*partial err"):
+                run_bounded(["script", "--arg"], capture_output=True, text=True)
+        self.assertEqual(runner.call_args.kwargs["timeout"], 30)
+        self.assertEqual(runner.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_jev_environment_excludes_ambient_settings(self):
+        with patch.dict(os.environ, {"PATH": "/test/bin", "HOME": "/test/home", "TYPESAFE_API_KEY": "secret",
+                                     "JEV_URL": "ambient"}, clear=True):
+            self.assertEqual(jev_environment(), {"PATH": "/test/bin", "HOME": "/test/home"})
 
 
 def render(template: str, variables: Path) -> str:
@@ -102,7 +130,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         repo.mkdir()
 
         def git(*args):
-            return subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            return run_bounded(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],
                                   check=True, capture_output=True, text=True).stdout.strip()
 
         git("init", "-q")
@@ -156,7 +184,7 @@ class DevSanityHandoffTests(unittest.TestCase):
         for context, read in ((["docs/retry.md"], {"docs/retry.md": "retry policy\n"}),
                               (["docs/limits.md:2-3"], {"docs/limits.md:2-3": "backoff 2s\njitter on\n"})):
             with self.subTest(context=context):
-                rerun = subprocess.run(["bash", "-c", jq], env={"CONTEXT": json.dumps(context), "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"},
+                rerun = run_bounded(["bash", "-c", jq], env={"CONTEXT": json.dumps(context), "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"},
                                        capture_output=True, text=True)
                 self.assertEqual(rerun.returncode, 0, rerun.stderr)
                 sent = json.loads(rerun.stdout)
@@ -191,12 +219,12 @@ class DevSanityHandoffTests(unittest.TestCase):
         runs `jev_client.py --assignment <file>`; the client must read past the fence. With no key set the call stops at
         the key check, so reaching it proves the assignment was parsed and its committed evidence read."""
         sent = self.assignment("dev-sanity-assignment-vars.json")
-        env = {k: v for k, v in os.environ.items() if k != "TYPESAFE_API_KEY"}
+        env = jev_environment()
 
         def run(body: str) -> dict:
             path = Path(self.tmp.name) / "assignment.md"
             path.write_text(body)
-            proc = subprocess.run([sys.executable, str(ROOT / "scripts/jev_client.py"), "--assignment", str(path)],
+            proc = run_bounded([sys.executable, str(ROOT / "scripts/jev_client.py"), "--assignment", str(path)],
                                   capture_output=True, text=True, env=env)
             self.assertEqual(proc.returncode, 2, proc.stderr)
             return json.loads(proc.stdout)["error"]
@@ -382,7 +410,7 @@ class FixRoundResultHandoffTests(unittest.TestCase):
 
             def run(body: str) -> subprocess.CompletedProcess:
                 result_path.write_text(body)
-                return subprocess.run([sys.executable, str(ROOT / "scripts/fix-round-scope"), "filter", "--carried",
+                return run_bounded([sys.executable, str(ROOT / "scripts/fix-round-scope"), "filter", "--carried",
                                        str(carried_path), "--reviewer", "arch-qa", "--result", str(result_path)],
                                       capture_output=True, text=True)
 
@@ -531,7 +559,7 @@ class PlanReviewHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:  # the reviewers step c dispatches: what `fix-round-scope owned --plan` prints
             carried = Path(tmp) / "carried.txt"
             carried.write_text(re.sub(r"\{\{[^}]*\}\}", "x", values["carry_forward"]))  # an install-time prefix
-            proc = subprocess.run([sys.executable, str(ROOT / "scripts/fix-round-scope"), "owned", "--plan", "--carried",
+            proc = run_bounded([sys.executable, str(ROOT / "scripts/fix-round-scope"), "owned", "--plan", "--carried",
                                    str(carried)], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         owned = {k: v for k, v in json.loads(proc.stdout).items() if k != "validate-plan"}  # step b re-checks those

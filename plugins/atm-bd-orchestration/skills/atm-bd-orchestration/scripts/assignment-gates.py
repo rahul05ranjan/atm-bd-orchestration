@@ -18,11 +18,19 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
 PRIMARY = Path(__file__).resolve().parents[4]
 VALIDATE_PLAN = str(PRIMARY / ".claude/skills/atm-beads/scripts/validate-plan")
+COMMAND_TIMEOUT = 30
+
+
+def invoke(runner: Runner, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    try:
+        return runner(argv, timeout=COMMAND_TIMEOUT, **kwargs)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"{argv!r} timed out after {COMMAND_TIMEOUT}s") from error
 
 
 def run(runner: Runner, *args: str, cwd: str | None = None) -> str:
     options = {"cwd": cwd} if cwd is not None else {}
-    result = runner(list(args), capture_output=True, text=True, **options)
+    result = invoke(runner, list(args), capture_output=True, text=True, **options)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "command failed")
     return result.stdout.strip()
@@ -80,11 +88,11 @@ def descends(runner: Runner, lower: str, base: str, git: list[str] | None = None
     has its merge commit in `base`."""
     if lower == base:
         return True
-    result = runner(["git", *(git or []), "merge-base", "--is-ancestor", f"origin/{lower}", f"origin/{base}"], capture_output=True, text=True)
+    result = invoke(runner, ["git", *(git or []), "merge-base", "--is-ancestor", f"origin/{lower}", f"origin/{base}"], capture_output=True, text=True)
     if result.returncode > 1:
-        if runner(["git", *(git or []), "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{lower}"], capture_output=True, text=True).returncode:
+        if invoke(runner, ["git", *(git or []), "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{lower}"], capture_output=True, text=True).returncode:
             for pr in run_json(runner, "gh", "pr", "list", "--head", lower, "--state", "merged", "--json", "mergeCommit"):
-                if runner(["git", *(git or []), "merge-base", "--is-ancestor", str((pr.get("mergeCommit") or {}).get("oid")), f"origin/{base}"],
+                if invoke(runner, ["git", *(git or []), "merge-base", "--is-ancestor", str((pr.get("mergeCommit") or {}).get("oid")), f"origin/{base}"],
                           capture_output=True, text=True).returncode == 0:
                     return True
         raise RuntimeError(result.stderr.strip() or "git merge-base failed")
@@ -103,7 +111,7 @@ def stack_top(runner: Runner, args: argparse.Namespace) -> str:
 
 
 def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
-    plan = runner([VALIDATE_PLAN, "--root", args.root], capture_output=True, text=True, cwd=str(PRIMARY))
+    plan = invoke(runner, [VALIDATE_PLAN, "--root", args.root], capture_output=True, text=True, cwd=str(PRIMARY))
     if plan.returncode == 5:
         print((plan.stdout + plan.stderr).strip(), file=sys.stderr)
         return "PLAN_INVALID"
@@ -118,7 +126,7 @@ def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
     declared = declared_pr_target(runner, bead)
     if declared is not None and not descends(runner, str(declared), args.pr_target, git_dir(args)):
         return "PR_TARGET_MISMATCH"
-    if runner(["git", *git_dir(args), "merge-base", "--is-ancestor", f"origin/{args.pr_target}", "HEAD"], capture_output=True, text=True).returncode:
+    if invoke(runner, ["git", *git_dir(args), "merge-base", "--is-ancestor", f"origin/{args.pr_target}", "HEAD"], capture_output=True, text=True).returncode:
         return "WRONG_BASE"
     return "READY"
 
