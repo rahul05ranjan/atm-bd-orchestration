@@ -107,6 +107,7 @@ has no repository YAML, registry-role, CLI identity or environment fallback.
 | `bead_prefix` | `sprint_index_common.py` when no root id is given (a root id `<prefix>-phase-<x>` wins) |
 | `dev_sanity_member` | the `dev-sanity` role (`.claude/skills/atm-beads/scripts/resolve-role dev-sanity`); a team member, which may have no `.claude/agents/<name>.md` |
 | `qa_member` | `qa-bead.json.j2` (`qa_member`), a parallel quick fix's QA bead |
+| checked bead `metadata.sprint_bead` | required `sprint_bead` in `qa-bead.json.j2` for finding and quick-fix QA beads |
 | `worktree_base` | sprint bead `worktree` = `<worktree_base>/<branch>` |
 | `test_command` | `dev-template`, `fix-assignment`, `dev-fix` |
 | `lint_command` | `dev-template`, `fix-assignment`, `dev-fix`, `dev-sanity-template` |
@@ -215,7 +216,8 @@ on every restack and show up as out-of-scope work in that sprint's PR.
    scope and test rule are the same.
 4. The lead links it on top of the stack (claiming the stack bead first) and dispatches one QA round on the
    fix PR (`templates.qa` from the phase file, `checked_bead` = the finder's bead, `layer` =
-   its layer; its QA bead from `qa-bead.json.j2` with `quick_fix` true, so QA
+   its layer; its QA bead from `qa-bead.json.j2` with `sprint_bead` from the
+   checked fix bead's `metadata.sprint_bead` and `quick_fix` true, so QA
    skips the sanity-PASS check a quick fix has no sanity for, and `pr_target`,
    which its PR base must descend from). No PR merges without QA. A failed
    quick-fix QA pours nothing and lists its blocking findings in the close's
@@ -324,7 +326,7 @@ this skill; use the configured path when the phase overrides a default.
 | QA (`stage:qa`) | `templates.qa` | quality-mgr |
 | fix (`stage:fix`) | `templates.fix` | the member the lead picks for its `difficulty` |
 | finding from a quick-fix QA (its `discovered-from` QA bead has `metadata.quick_fix` true) | `templates.fix`, no sanity bead; once every finding from that failed QA has closed, one more quick-fix QA bead (Parallel Quick Fix step 4) | an idle dev picked for its `difficulty`, by priority |
-| important or minor finding (`stage:finding`, no `metadata.sanity_finding`, not from a quick-fix QA) | `templates.fix`, in the same step as one `bd import` of its sanity bead (`atm-beads` [`dev-sanity-bead.json.j2`](../atm-beads/templates/dev-sanity-bead.json.j2), `dev_bead` = the finding) and its QA bead ([`qa-bead.json.j2`](templates/qa-bead.json.j2), `checked_bead` = the finding, `blocked_by` = the sanity bead), each with `parent` = the finding's parent; a minor finding left in the backlog gets neither until it is assigned | an idle dev, by priority |
+| important or minor finding (`stage:finding`, no `metadata.sanity_finding`, not from a quick-fix QA) | `templates.fix`, in the same step as one `bd import` of its sanity bead (`atm-beads` [`dev-sanity-bead.json.j2`](../atm-beads/templates/dev-sanity-bead.json.j2), `dev_bead` = the finding) and its QA bead ([`qa-bead.json.j2`](templates/qa-bead.json.j2), `checked_bead` = the finding, `sprint_bead` = the finding's `metadata.sprint_bead`, `blocked_by` = the sanity bead), each with `parent` = the finding's parent; a minor finding left in the backlog gets neither until it is assigned | an idle dev, by priority |
 | sanity finding (`stage:finding` with `metadata.sanity_finding`) | its checked bead's `templates.dev_fix`, once per checked bead | the checked bead's assignee |
 | review (`stage:review`) | `templates.review` | the phase-end reviewer |
 

@@ -12,7 +12,7 @@ through; when they always work, dev-sanity runs them itself.
 ### The stack bead (ledger and lock)
 
 1. One bead per stack, `<prefix>-phase-<x>.stack`, child of the phase epic, created by the lead with the integration branch and closed when the stack lands. Its metadata is the whole stack: `trunk`, `stack_number`, and `layers`, an ordered list of `{branch, pr, head, base, linked}`; the last entry is the top. It is the only record of layer order, and it works with GitHub unreachable.
-2. The claim is the lock: `bd update <stack bead> --claim` before any stack write, by sanity-stack and by the lead alike (unstack, restack, land). Release is the compare-and-set `bd update <stack bead> --if-assignee "$ATM_IDENTITY" --status open --assignee ""`. A claim older than the lease (a script constant, 900 s) with no event on the stack bead since is abandoned: `bd reclaim` it, re-derive `layers` from the REST chain (item 9), notice to the lead, proceed.
+2. The claim is the lock: `bd update <stack bead> --claim` before any stack write, by sanity-stack and by the lead alike (unstack, restack, land). Release is the compare-and-set `bd update <stack bead> --if-assignee "$ATM_IDENTITY" --status open --assignee ""`. The holder keeps its claim alive with `bd heartbeat` (lease: a script constant, 900 s). An abandoned claim of this stack bead is recovered only with `bd reclaim --id <stack bead> --older-than 1800s`; unscoped `bd reclaim` and event age as expiry are forbidden. After a reclaim: re-derive `layers` from the REST chain (item 9), notice to the lead, proceed.
 
 ### Input (fenced JSON from dev-sanity)
 

@@ -69,7 +69,7 @@ class SprintFacts:
     slug: str
     status: SprintState
     active: tuple[ActiveAgent, ...]
-    last_qa: AgentIcon | None
+    gavel: AgentIcon | None
     pr: PrFacts | None
     ci: CiFacts | None
     problems: tuple[str, ...]
@@ -114,24 +114,19 @@ def task_sprint(task: Task, snapshot: Snapshot, steps: dict[str, Step]) -> Sprin
     return None
 
 
-def _qa_result(steps: tuple[Step, ...]) -> AgentIcon | None:
-    """Select the sprint QA verdict, excluding fix-verification results.
+def _gavel(steps: tuple[Step, ...]) -> AgentIcon | None:
+    """The sprint gavel once its dev step is closed: red while any blocking child is open, green when none is.
 
-    Stored QA steps use kind ``qa``; ``carry_forward`` identifies a fix or
-    finding verification rather than a sprint review. The ``sprint_qa``
-    spelling is also accepted as the equivalent display-row vocabulary.
+    Blocking children are open fix steps of poured blocking groups and open blocking finding steps; a minor or
+    important finding does not block the sprint. A stored QA verdict is not read.
     """
-    from .model import qa_state_from_close
-
-    closed_qa = tuple(step for step in steps if step.kind in ("qa", "sprint_qa") and not step.carry_forward and step.closed_at)
-    if not closed_qa:
+    if not any(step.kind == "dev" and step.closed_at for step in steps):
         return None
-    newest = max(closed_qa, key=lambda step: step.closed_at or datetime.min)
-    if any(step.kind in ("dev", "fix") and step.closed_at and newest.closed_at
-           and step.closed_at > newest.closed_at for step in steps):
-        return None
-    verdict = qa_state_from_close(newest.close_reason)
-    return {QaState.PASS: AgentIcon.QA_PASS, QaState.FAIL: AgentIcon.QA_FAIL}.get(verdict) if verdict else None
+    blocking_open = any(
+        step.kind in ("fix", "finding") and step.severity == "blocking" and step.status != SprintState.CLOSED
+        for step in steps
+    )
+    return AgentIcon.QA_FAIL if blocking_open else AgentIcon.QA_PASS
 
 
 def _selected_pr(sprint: Sprint, steps: tuple[Step, ...], snapshot: Snapshot) -> PrRow | None:
@@ -190,5 +185,5 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
                 problems.append(f"merge check failed for {merge.branch} against {merge.target}")
         pr_facts = None if pr_state == PrState.NONE else PrFacts(pr_state, selected)
         result.append(SprintFacts(sprint.id, short_id(sprint.id, snapshot.bead_prefix), state, agents,
-                                  _qa_result(steps), pr_facts, CiFacts(ci), tuple(problems)))
+                                  _gavel(steps), pr_facts, CiFacts(ci), tuple(problems)))
     return tuple(result)

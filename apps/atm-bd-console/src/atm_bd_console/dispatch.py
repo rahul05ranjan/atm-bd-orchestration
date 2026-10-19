@@ -61,6 +61,39 @@ def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
     )
 
 
+def _gate_reasons(
+    step: Step,
+    target: str | None,
+    worktrees: tuple[Worktree, ...],
+    remote_by_branch: dict[str, str],
+    merge_by_pair: dict[tuple[str, str], Merge],
+    remote_error: Error | None,
+) -> list[str]:
+    """Why a ready step cannot dispatch yet. Only ready steps get these gates: a step that is not ready has no
+    branch or worktree yet, so the gates would only repeat as `<missing>` rows beside its `not ready` row."""
+    reasons: list[str] = []
+    if remote_error is not None:
+        reasons.append(f"origin verification unavailable: {verification_reason(remote_error)}")
+    elif not step.branch or step.branch not in remote_by_branch:
+        reasons.append(f"branch not on origin: {step.branch or '<missing>'}")
+    if not step.worktree or not any(
+        worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
+    ):
+        reasons.append(f"no worktree for {step.branch or '<missing>'}")
+    merge = merge_by_pair.get((step.branch, target)) if step.branch and target else None
+    if merge is not None and merge.state == MergeState.CONFLICT:
+        reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
+    elif step.branch in remote_by_branch and remote_error is None:
+        if target is None:
+            reasons.append("merge verification unavailable: set the step or sprint PR target")
+        elif merge is None:
+            reasons.append(f"merge verification unavailable for {target}: no current result; retry the merge check")
+        elif merge.state != MergeState.CLEAN:
+            detail = "; ".join(merge.messages) or "retry the merge check"
+            reasons.append(f"merge verification unavailable for {target}: {detail}")
+    return reasons
+
+
 def dispatch(
     phase: Phase,
     tasks: tuple[Task, ...],
@@ -85,28 +118,9 @@ def dispatch(
     for step in candidates(phase, tasks):
         sprint = sprint_of(step, phase, repo.bead_prefix)
         target = step.target or (sprint.target if sprint else None)
-        reasons: list[str] = []
-        if not step.ready:
-            reasons.append("not ready")
-        if remote_error is not None:
-            reasons.append(f"origin verification unavailable: {verification_reason(remote_error)}")
-        elif not step.branch or step.branch not in remote_by_branch:
-            reasons.append(f"branch not on origin: {step.branch or '<missing>'}")
-        if not step.worktree or not any(
-            worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
-        ):
-            reasons.append(f"no worktree for {step.branch or '<missing>'}")
-        merge = merge_by_pair.get((step.branch, target)) if step.branch and target else None
-        if merge is not None and merge.state == MergeState.CONFLICT:
-            reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
-        elif step.ready and step.branch in remote_by_branch and remote_error is None:
-            if target is None:
-                reasons.append("merge verification unavailable: set the step or sprint PR target")
-            elif merge is None:
-                reasons.append(f"merge verification unavailable for {target}: no current result; retry the merge check")
-            elif merge.state != MergeState.CLEAN:
-                detail = "; ".join(merge.messages) or "retry the merge check"
-                reasons.append(f"merge verification unavailable for {target}: {detail}")
+        reasons = ["not ready"] if not step.ready else _gate_reasons(
+            step, target, worktrees, remote_by_branch, merge_by_pair, remote_error,
+        )
 
         pr = pr_by_branch.get(step.branch or "")
         if reasons:

@@ -13,6 +13,9 @@ from .result import ConfigInvalid, Err, IoFailed, Ok, Result
 from .types import DEFAULT_NOTIFICATION_SENDER, Config
 
 _GITHUB = frozenset(("graphql", "rest", "off"))
+# The documented cron schedule (SKILL.md: every 15 minutes). A tick's snapshot is judged stale after twice its
+# interval, so the cron's cadence is the interval it records; the interval in console.toml is the TUI's.
+CRON_CADENCE_S = 900
 
 
 def repo_root() -> Path:

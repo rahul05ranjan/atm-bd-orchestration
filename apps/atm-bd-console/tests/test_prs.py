@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,9 +94,19 @@ def test_pr_assignee_uses_roster_icon_before_name() -> None:
 
 @pytest.mark.parametrize("phase", ("bh", "phase-current"))
 @pytest.mark.parametrize("mode", ("graphql", "rest"))
-def test_successful_empty_prs_name_actual_phase_and_checked_time(phase: str, mode: str) -> None:
-    empty = replace(snapshot(), phase=phase, prs=(), gh=GhStatus(mode, True, None, NOW, False))
-    assert render_prs(empty, 120).plain == f"No open PR for phase {phase} (checked 12:00)"
+def test_successful_empty_prs_name_actual_phase_and_checked_time(phase: str, mode: str, monkeypatch) -> None:
+    original_tz = os.environ.get("TZ")
+    monkeypatch.setenv("TZ", "Etc/GMT+8")
+    time.tzset()
+    try:
+        empty = replace(snapshot(), phase=phase, prs=(), gh=GhStatus(mode, True, None, NOW, False))
+        assert render_prs(empty, 120).plain == f"No open PR for phase {phase} (checked 04:00)"
+    finally:
+        if original_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", original_tz)
+        time.tzset()
 
 
 def test_empty_prs_distinguish_github_off_and_failure() -> None:
