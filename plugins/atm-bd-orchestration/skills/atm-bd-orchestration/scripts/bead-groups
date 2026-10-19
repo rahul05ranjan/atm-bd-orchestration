@@ -226,7 +226,9 @@ class Run:
                 if lacking:
                     raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"finding {ref} lacks {', '.join(lacking)}")
                 branch = f"fix/{meta['sprint']}-{slug}"
-                cut = {"branch": branch, "worktree": str(Path(self.config["worktree_base"]) / branch), "pr_target": pr_target}
+                # Layer records carry no difficulty, so the cut takes it from the finding or the sprint and the fix group carries all four keys together.
+                cut = {"branch": branch, "worktree": str(Path(self.config["worktree_base"]) / branch), "pr_target": pr_target,
+                       "difficulty": finding.get("difficulty") or meta["difficulty"]}
                 if finding["severity"] != "blocking":
                     raise TargetError("BEAD_GROUPS_NOT_BLOCKING", f"finding {ref} is {finding['severity']}; only blocking findings are poured, file it as a finding bead")
                 ids = {k: finding[k] if k in finding else meta.get(k) for k in ("requirements", "adrs")}
@@ -240,7 +242,7 @@ class Run:
                            **cut,
                            "found_on_layer": finding.get("found_on_layer", ""),
                            "has_found_on_layer": finding.get("found_on_layer") not in (None, ""),
-                           "difficulty": finding.get("difficulty") or meta["difficulty"], "priority": finding.get("priority", 1),
+                           "priority": finding.get("priority", 1),
                            "edge_option": option}
                 compose["ref"] = fmt(sidecar["ref"], {"vars": {**compose, "finding_ref": slug}})
                 existing = self.bd.show(attach_id(sprint, compose["ref"], "fix"))

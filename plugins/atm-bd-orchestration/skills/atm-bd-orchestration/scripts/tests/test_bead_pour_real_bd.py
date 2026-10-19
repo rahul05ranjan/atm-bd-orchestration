@@ -613,6 +613,46 @@ class BeadPourMockTests(unittest.TestCase):
             ws.env["PATH"] = original_path
             shutil.rmtree(override)
 
+    def test_injected_sc_compose_failure_stops_the_invalid_rendered_bead(self):
+        ws = self.ws
+        sprint = ws.sprint("y", 1)
+        override = Path(self.override.name)   # setUp points .atm-bd/formula at this directory
+        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
+        formula = override / "sprint-group.formula.toml.j2"
+        formula.write_text(source.replace('branch = "{{{ branch }}}"\n', ""))
+        wrapper_dir = ws.root / "sc-compose-fail-bin"
+        wrapper_dir.mkdir()
+        log = ws.root / "injected-sc-compose-operations.log"   # the workspace is shared by the class; keep this run's log apart
+        wrapper = wrapper_dir / "sc-compose"
+        wrapper.write_text(
+            f'#!/bin/sh\nprintf "%s %s\\n" "$1" "$2" >> "{log}"\n'
+            f'if [ "$1" = bead ] && [ "$2" = attach ]; then echo "injected sc-compose failure" >&2; exit 3; fi\n'
+            f'exec "{shutil.which("sc-compose")}" "$@"\n')
+        wrapper.chmod(0o755)
+        original_path = ws.env["PATH"]
+        ws.env["PATH"] = f"{wrapper_dir}:{original_path}"
+        try:
+            before = ws.snapshot(sprint)
+            result = ws.groups("--sprint", sprint, expect=5)
+            assert any(f"{sprint}.group-dev: branch" in problem for entry in result["targets"] for problem in entry["problems"])
+            assert "bead attach" not in log.read_text().splitlines()
+            assert all(ws.show(bead) is None for bead in group(sprint))
+            ws.unchanged(before)
+        finally:
+            ws.env["PATH"] = original_path
+            formula.unlink()
+        # with the rendered record valid again, the injected attach failure refuses the pour and leaves no bead
+        second = ws.sprint("y", 2)
+        before = ws.snapshot(sprint, second)
+        ws.env["PATH"] = f"{wrapper_dir}:{original_path}"
+        try:
+            entry = target(ws.groups("--sprint", second, expect=2), second)
+            assert entry["error"]["code"] == "BEAD_GROUPS_POUR_FAILED"
+            assert all(ws.show(bead) is None for bead in group(second))
+            ws.unchanged(before)
+        finally:
+            ws.env["PATH"] = original_path
+
     def test_finding_layer_fields_come_from_stack_ledger(self):
         ws = self.ws
         sprint = ws.sprint("z", 1)
@@ -629,6 +669,7 @@ class BeadPourMockTests(unittest.TestCase):
             assert metadata["branch"] == "fix/z-1-rqa-001"
             assert metadata["worktree"] == str(ws.root / "worktrees/fix/z-1-rqa-001")
             assert metadata["pr_target"] == "fix/z-1-first"
+            assert metadata["difficulty"] == ws.show(sprint)["metadata"]["difficulty"]
         layers.append({"branch": "fix/z-1-later", "pr": 3, "head": "1234567", "base": "def1234", "linked": True})
         ws.bd("update", stack, "--metadata", json.dumps({"trunk": "integrate/phase-z", "stack_number": 1, "layers": layers}))
         before = ws.snapshot(*fix_group(sprint, "rqa-001"))
