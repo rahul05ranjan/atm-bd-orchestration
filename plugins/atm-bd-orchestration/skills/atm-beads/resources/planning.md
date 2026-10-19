@@ -109,7 +109,7 @@ and `integration_branch` from the repository's `plans_dir`, `bead_prefix` and
 Review the resulting paths and branch before validation. All fields are required;
 template paths must name existing files inside the installed template directory. An older `dev_fix` key is ignored.
 
-Render `stack-bead.json.j2` with the root variables beside `plan-root.json.j2` and import both records in the plan JSONL. A hand-written `bd create` is forbidden for these beads: the rendered records are their only source.
+The lead renders `stack-bead.json.j2` with the root variables beside `plan-root.json.j2` and imports both records into the plan JSONL. A hand-written `bd create` is forbidden for these beads: the rendered records are their only source.
 Runtime readers never substitute defaults, repository YAML or environment identities
 for missing phase settings. A lead handoff updates this tracked file.
 
