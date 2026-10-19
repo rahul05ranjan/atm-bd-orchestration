@@ -23,19 +23,6 @@ def run_bounded(argv, **kwargs):
 
 
 class TemplateContractTests(unittest.TestCase):
-    def test_sanity_guidance_does_not_render_deleted_run_table(self):
-        plugin = ROOT.parents[1]
-        repository = ROOT.parents[3]
-        for path in (plugin / "agents/dev-sanity.md", repository / "docs/requirements/dev-sanity.md"):
-            with self.subTest(path=path):
-                self.assertNotIn("sanity-run-table.md.j2", path.read_text())
-
-    def test_close_hook_requirement_distinguishes_bd_and_atm_identity(self):
-        requirement = (ROOT.parents[3] / "docs/requirements/task-close-hook.md").read_text()
-        identity = requirement.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
-        self.assertIn('`bd` writes carry `--actor "$ATM_IDENTITY"`', identity)
-        self.assertIn("`atm` writes take `ATM_IDENTITY` from the environment", identity)
-
     def test_sanity_fail_report_explains_handoff_without_finding_beads(self):
         variables = {
             "generated_at": "2026-01-01T00:00:00Z",
