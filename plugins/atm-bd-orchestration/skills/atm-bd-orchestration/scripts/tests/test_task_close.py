@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import copy
 import importlib.util
+import inspect
 import io
 import json
 from pathlib import Path
@@ -190,6 +191,24 @@ def test_network_timeouts_retry_then_fall_back(world, command, monkeypatch):
     calls = [(argv, kwargs) for argv, kwargs in world.calls if argv[:len(command)] == command]
     assert len(calls) == 3
     assert all(kwargs["timeout"] == 7 for _, kwargs in world.calls)
+
+
+def test_deadline_injection_convention_matches_assignment_gates(world, monkeypatch):
+    spec = importlib.util.spec_from_file_location("assignment_gates_deadline_contract", SCRIPTS / "assignment-gates.py")
+    gates = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gates)
+    assert hook.COMMAND_TIMEOUT == gates.COMMAND_TIMEOUT == 30
+    for entry_point in (hook.main, hook.Hook.__init__, gates.main):
+        assert "command_timeout" not in inspect.signature(entry_point).parameters
+    instance = hook.Hook("dev", world.values, world.path, world, lambda: 42)
+    command = ["bd", "show", world.values["checked_bead"], "--json"]
+    for deadline in (7, 11):
+        monkeypatch.setattr(hook, "COMMAND_TIMEOUT", deadline)
+        monkeypatch.setattr(gates, "COMMAND_TIMEOUT", deadline)
+        world.calls.clear()
+        gates.invoke(world, command, capture_output=True, text=True)
+        instance.run(command)
+        assert [kwargs["timeout"] for _, kwargs in world.calls] == [deadline, deadline]
 
 
 def test_local_timeout_is_typed_and_names_command_and_deadline(world, monkeypatch):
