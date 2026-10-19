@@ -17,6 +17,8 @@ import sys
 import tempfile
 import time
 
+from stack_top import select_stack_top
+
 
 PULL_FILTER = '.[] | {number, base: .base.ref, head: .head.ref, sha: .head.sha, draft}'
 STACK_FILTER = '.[] | {number, base: .base.ref, prs: [.pull_requests[].number]}'
@@ -230,21 +232,25 @@ class Linker:
         if refreshed.get('assignee') != self.actor or refreshed.get('metadata') != original:
             raise StackError('stack claim or ledger changed during reconciliation')
         self.command(['git', 'fetch', 'origin'])
+
+        def resolve_head(branch):
+            return self.command(['git', 'rev-parse', 'refs/remotes/origin/' + branch]).stdout.strip()
+
+        base, recorded_head = select_stack_top({'metadata': metadata}, metadata['trunk'], resolve_head)
         if layers and layers[-1]['pr'] == self.values['pr_number']:
             top = layers[-1]
-            actual = self.command(['git', 'rev-parse', 'refs/remotes/origin/' + top['branch']]).stdout.strip()
-            if (top['branch'] != self.values['branch'] or top['head'] != self.values['commit'] or
-                    actual != top['head'] or candidate['base'] != top['base']):
+            actual = resolve_head(base)
+            if (base != self.values['branch'] or recorded_head != self.values['commit'] or
+                    actual != recorded_head or candidate['base'] != top['base']):
                 raise StackError('checked pull request conflicts with the recorded stack top')
             if metadata != original:
                 self.write(metadata)
             return {'result': 'stacked', 'top': top, 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
         if any(layer['pr'] == self.values['pr_number'] or layer['branch'] == self.values['branch'] for layer in layers):
             raise StackError('checked layer is already below the stack top')
-        base = layers[-1]['branch'] if layers else metadata['trunk']
         ancestor = self.command(['git', 'merge-base', '--is-ancestor', 'origin/' + base, self.values['commit']], check=False)
-        actual = self.command(['git', 'rev-parse', 'refs/remotes/origin/' + base]).stdout.strip()
-        if layers and actual != layers[-1]['head']:
+        actual = resolve_head(base) if layers else recorded_head
+        if actual != recorded_head:
             raise StackError('fetched stack top differs from its recorded head')
         if ancestor.returncode == 1:
             return {'result': 'rebase_required', 'top': {'branch': base, 'head': actual},

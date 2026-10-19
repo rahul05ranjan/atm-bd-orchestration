@@ -12,6 +12,7 @@ import subprocess
 
 import pytest
 
+from stack_top import select_stack_top
 from task_close_world import World as HookWorld, hook as close_hook
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -144,6 +145,37 @@ class World:
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     return World(tmp_path, monkeypatch)
+
+
+def test_stack_top_selector_drives_empty_and_populated_ledgers(world, monkeypatch):
+    selected = []
+
+    def capture(bead, fallback, resolve_head):
+        top = select_stack_top(bead, fallback, resolve_head)
+        selected.append((copy.deepcopy(bead['metadata']['layers']), fallback, top))
+        return top
+
+    monkeypatch.setattr(LINK, 'select_stack_top', capture)
+    first = world.branch('first', 'trunk', 1)
+    second = world.branch('second', 'first', 2)
+    assert world.link(first)['result'] == 'stacked'
+    assert world.link(second)['result'] == 'stacked'
+    assert selected[0] == ([], 'trunk', ('trunk', world.git('rev-parse', 'origin/trunk')))
+    assert selected[1][0][-1]['branch'] == 'first'
+    assert selected[1][1:] == ('trunk', ('first', first['commit']))
+
+
+@pytest.mark.parametrize('replay', [False, True])
+def test_recorded_head_check_uses_selected_head(world, monkeypatch, replay):
+    first = world.branch('first', 'trunk', 1)
+    second = world.branch('second', 'first', 2)
+    assert world.link(first)['result'] == 'stacked'
+    before = copy.deepcopy(world.bead['metadata'])
+    monkeypatch.setattr(LINK, 'select_stack_top', lambda bead, fallback, resolve: ('first', 'wrong-head'))
+    result = world.link(first if replay else second)
+    assert result['result'] == 'stack_failed'
+    assert ('recorded stack top' if replay else 'recorded head') in result['evidence']
+    assert world.bead['metadata'] == before
 
 
 def test_three_passes_link_in_verdict_order(world):
