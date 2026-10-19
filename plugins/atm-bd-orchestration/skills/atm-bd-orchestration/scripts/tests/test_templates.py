@@ -551,7 +551,7 @@ class DevAssignmentTests(unittest.TestCase):
                 self.assertIn("`pr_target` is a lower bound", result.stdout)
                 self.assertNotIn("`metadata.pr_target` equals", result.stdout)
 
-    def test_after_a_dev_fix_sanity_and_qa_diff_only_the_sprints_own_layer_prs(self):
+    def test_after_sanity_fail_reopens_dev_bead_sanity_and_qa_diff_only_own_layer_prs(self):
         values = _example("dev-sanity-template-vars.json")
         plain = _render("dev-sanity-template.xml.j2", values)
         self.assertEqual(plain.returncode, 0, plain.stderr)
