@@ -32,7 +32,6 @@ class PlanFixture:
         self.runner = object.__new__(groups.Run)
         self.runner.repo = root
         self.runner.option = None
-        self.runner.validate = False
         self.runner.config = {"worktree_base": str(root / "worktrees")}
         self.runner.plans = {}
         self.runner.sidecars = {}
@@ -79,12 +78,12 @@ class PlanFixture:
             payload = {"outcome": "failed", "error": error}
         return SimpleNamespace(returncode=2 if error else 0, stdout=json.dumps({"payload": payload}), stderr="")
 
-    def invoke(self, target, receipt):
+    def invoke(self, target, receipt, *, preview=False):
         template = self.root / "formula.toml.j2"
         template.write_text("fixed template input")
         with (patch.object(groups.bead_formulas, "template", return_value=template),
               patch.object(groups.subprocess, "run", return_value=receipt) as command):
-            attachment = self.runner.pour(target)
+            attachment = self.runner.pour(target, preview=preview)
         argv = command.call_args.args[0]
         request = json.loads(Path(argv[argv.index("--request") + 1]).read_text())
         return attachment, request, command
@@ -117,7 +116,7 @@ class PourPlanTests(unittest.TestCase):
                     self.assertNotIn("assignee", step)
                     for key in ("branch", "worktree", "pr_target", "difficulty"):
                         self.assertEqual(step["metadata"][key], self.fixture.rows[dependent]["metadata"][key])
-                relations, missing = self.runner.relations(target)
+                relations, missing = self.runner.relations(target, preview=False)
                 self.assertEqual(missing, [])
                 predecessor = f"{self.sprint}.group-{'dev' if option == 'A' else 'sanity'}"
                 self.assertIn({"from": "step:dev", "to": f"bead:{predecessor}", "type": "blocks"}, relations)
@@ -144,7 +143,7 @@ class PourPlanTests(unittest.TestCase):
                     self.assertEqual(step["metadata"]["pr_target"], "fix/x-previous")
                     self.assertEqual(step["metadata"]["branch"], "fix/x-1-qa1-f1")
                 self.assertEqual(steps[0]["metadata"]["requirements"], ["REQ-1"])
-                relations, _ = self.runner.relations(target)
+                relations, _ = self.runner.relations(target, preview=False)
                 self.assertIn({"from": "step:fix", "to": f"bead:{self.sprint}.group-qa", "type": "discovered-from"}, relations)
 
     def test_override_formula_wins_and_missing_variable_is_not_silently_filled(self):
@@ -285,16 +284,77 @@ class PourPlanTests(unittest.TestCase):
         self.assertEqual(code, groups.FAILED)
         self.assertEqual(json.loads(output.getvalue())["error"], {
             "code": "BEAD_GROUPS_CANNOT_RUN", "message": "invalid schema response"})
-        pour.assert_called_once_with(target)
-        self.assertTrue(self.runner.validate)
+        pour.assert_called_once_with(target, preview=True)
         self.runner.bd.run.assert_not_called()
 
     def test_preview_has_no_write_authorization_and_persists_exact_request(self):
-        self.runner.validate = True
-        _, request, command = self.fixture.invoke(self.runner.sprint_target(self.sprint), self.fixture.receipt())
+        _, request, command = self.fixture.invoke(self.runner.sprint_target(self.sprint), self.fixture.receipt(), preview=True)
         self.assertEqual(request["operation"], "preview_attach")
         self.assertNotIn("pour_authorization", request)
         self.assertEqual(command.call_args.args[0][:3], ["sc-compose", "bead", "preview-attach"])
+
+    def test_request_mode_does_not_leak_between_preview_and_apply(self):
+        target = self.runner.sprint_target(self.sprint)
+        for preview in (False, True, False, True):
+            with self.subTest(preview=preview):
+                _, request, _ = self.fixture.invoke(target, self.fixture.receipt(), preview=preview)
+                self.assertEqual(request["operation"], "preview_attach" if preview else "attach")
+                self.assertEqual("pour_authorization" in request, not preview)
+                self.assertFalse(hasattr(self.runner, "validate"))
+
+    def test_closed_qa_refusal_is_checked_once_before_preview_with_noop_and_validate_exceptions(self):
+        import bead_schema
+        qa = f"{self.sprint}.group-qa"
+        finding = {"ref": "qa1-f1", "severity": "blocking", "reviewer": "arch-qa", "title": "issue", "remedy": "fix"}
+        for option in ("A", "C"):
+            for closed in (False, True):
+                for presence in ("missing", "partial", "existing"):
+                    for validate in (False, True):
+                        with self.subTest(option=option, closed=closed, presence=presence, validate=validate):
+                            self.runner.option = option
+                            self.fixture.rows[qa]["status"] = "closed" if closed else "open"
+                            for step in ("fix", "sanity", "qa"):
+                                self.fixture.rows.pop(f"{self.sprint}.qa1-f1-r1-{step}", None)
+                            target = self.fixture.findings(self.sprint, qa, finding)[0]
+                            steps = self.runner.steps(target)
+                            present = [] if presence == "missing" else steps[:1] if presence == "partial" else steps
+                            for step in present:
+                                bead = groups.attach_id(self.sprint, target["compose"]["ref"], step)
+                                self.fixture.rows[bead] = {"id": bead}
+                            modes = []
+
+                            def pour(_target, *, preview):
+                                modes.append(preview)
+                                return {"ids": {}, "nodes": [], "edges": [], "missing": [],
+                                        "graph": {"nodes": [], "edges": []}}
+
+                            with (patch.object(groups, "Run", return_value=self.runner),
+                                  patch.object(groups.repo_config, "repo_root", return_value=self.fixture.root),
+                                  patch.object(self.runner, "finding_targets", return_value=[target]),
+                                  patch.object(self.runner, "pour", side_effect=pour),
+                                  patch.object(bead_schema, "load_phase", return_value=[]),
+                                  redirect_stdout(io.StringIO()) as output):
+                                code = groups.main(["--json", "--findings", "unused.json", *(["--validate"] if validate else [])])
+                            refused = closed and not validate and len(present) < len(steps)
+                            self.assertEqual(code, groups.FAILED if refused else groups.SUCCESS)
+                            self.assertEqual(modes, [] if refused else [True] if validate else [True, False])
+                            if refused:
+                                error = json.loads(output.getvalue())["targets"][0]["error"]
+                                self.assertEqual(error["code"], "BEAD_GROUPS_QA_CLOSED")
+                            self.assertFalse(hasattr(self.runner, "validate"))
+                            self.runner.bd.run.assert_not_called()
+
+    def test_missing_relation_handling_uses_the_explicit_preview_mode(self):
+        dependent = self.fixture.sprint(number=2, predecessors=("x-1",))
+        target = self.runner.sprint_target(dependent)
+        preview_relations, missing = self.runner.relations(target, preview=True)
+        applied_relations, applied_missing = self.runner.relations(target, preview=False)
+        relation = {"from": "step:dev", "to": f"bead:{self.sprint}.group-sanity", "type": "blocks"}
+        self.assertNotIn(relation, preview_relations)
+        self.assertIn(relation, applied_relations)
+        self.assertEqual(len(missing), 1)
+        self.assertIn(f"missing bead {self.sprint}.group-sanity", missing[0])
+        self.assertEqual(applied_missing, [])
 
     def test_prospective_json_plan_receives_its_dependencies(self):
         plan = self.fixture.root / "plan.json"
