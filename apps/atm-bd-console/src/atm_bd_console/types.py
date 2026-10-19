@@ -3,14 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 from .enums import CiState, MergeState, PrState, QaState, SprintState
 from .migrations import migrate_pull_request_ci, migrate_snapshot_ci
 from .result import Error, Result
-
-if TYPE_CHECKING:
-    from .runner import StepResult
+from .step_result import StepResult
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
 StepKind: TypeAlias = Literal["dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"]
@@ -428,4 +426,4 @@ class ActionLine:
 
 
 SpecFn: TypeAlias = Callable[[DispatchContext], Result[DispatchSpec]]
-StepFn: TypeAlias = Callable[[Config, State, bool], "StepResult"]
+StepFn: TypeAlias = Callable[[Config, State, bool], StepResult]

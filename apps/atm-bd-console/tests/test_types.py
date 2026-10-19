@@ -166,7 +166,7 @@ def test_type_aliases() -> None:
     assert get_args(types.SpecFn) == ([types.DispatchContext], result.Result[types.DispatchSpec])
     args, result_type = get_args(types.StepFn)
     assert args == [types.Config, types.State, bool]
-    assert result_type == "StepResult"
+    assert result_type is types.StepResult
 
 
 @pytest.mark.parametrize("module", ["result.py", "types.py"])

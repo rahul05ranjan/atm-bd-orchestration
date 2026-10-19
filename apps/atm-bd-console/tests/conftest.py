@@ -11,8 +11,7 @@ from contract_fixtures import RUNNING
 from textual.worker import WorkerCancelled
 
 from atm_bd_console import app as console
-from atm_bd_console.runner import StepResult
-from atm_bd_console.types import Config, Snapshot, State
+from atm_bd_console.types import Config, Snapshot, State, StepResult
 
 
 @pytest.fixture

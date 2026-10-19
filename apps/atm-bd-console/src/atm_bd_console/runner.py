@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Literal, Self
+from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
 from .dispatch import sprint_of, verification_reason
@@ -25,23 +25,8 @@ from .types import (
     PrsFile,
     Snapshot,
     State,
+    StepResult,
 )
-
-
-class StepResult(tuple[Snapshot, State]):
-    """Two-value compatible tick result carrying actions and run-tab state."""
-
-    reported: tuple[Action, ...]
-    run_data: tuple[list, list, list[dict]] | None
-    runs_error: str | None
-
-    def __new__(cls, snapshot: Snapshot, state: State, reported: tuple[Action, ...] = (),
-                run_data: tuple[list, list, list[dict]] | None = None, runs_error: str | None = None) -> Self:
-        result = super().__new__(cls, (snapshot, state))
-        result.reported = reported
-        result.run_data = run_data
-        result.runs_error = runs_error
-        return result
 
 
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:

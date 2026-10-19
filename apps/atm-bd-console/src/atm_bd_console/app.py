@@ -32,10 +32,9 @@ from .enums import SprintState
 from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
-from .runner import StepResult
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
-from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn
+from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn, StepResult
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
 

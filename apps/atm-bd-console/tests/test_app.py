@@ -23,9 +23,8 @@ from atm_bd_console.build import display_identity, identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.result import Ok
-from atm_bd_console.runner import StepResult
 from atm_bd_console.state import acquire_lock
-from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepView
+from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepResult, StepView
 
 
 def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
