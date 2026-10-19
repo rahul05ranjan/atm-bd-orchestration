@@ -33,8 +33,8 @@ class PhaseConfigTests(unittest.TestCase):
         for relative in self.data["templates"].values():
             self.assertTrue((self.repo / relative).is_file())
 
-    def test_every_missing_blank_or_non_string_value_names_its_key(self):
-        for key in ("plan", "root", "integration_branch", "lead", *TEMPLATE_NAMES):
+    def test_every_required_phase_key_and_template_value_is_validated(self):
+        for key in ("plan", "root", "integration_branch", *TEMPLATE_NAMES):
             for value in (None, "", " \t", 42):
                 with self.subTest(key=key, value=value):
                     data = copy.deepcopy(self.data)
@@ -83,12 +83,15 @@ class PhaseConfigTests(unittest.TestCase):
                         load_phase_config(self.repo, "t")
                     self.assertIn(data["templates"][key], str(caught.exception))
 
-    def test_missing_table_unknown_keys_and_retired_aliases_fail(self):
+    def test_phase_file_does_not_require_lead_or_templates_and_preserves_extra_keys(self):
         data = copy.deepcopy(self.data)
+        data.pop("lead")
         data.pop("templates")
+        data["code_checkout"] = "../product"
         self.write(data)
-        with self.assertRaisesRegex(RuntimeError, "templates: required table"):
-            load_phase_config(self.repo, "t")
+        self.assertEqual(load_phase_config(self.repo, "t"), data)
+
+    def test_unknown_template_keys_and_retired_aliases_fail(self):
         for key in ("dev_assign", "fix_review", "sanity_assign", "qa_assign", "unknown"):
             with self.subTest(key=key):
                 data = copy.deepcopy(self.data)
@@ -107,7 +110,7 @@ class PhaseConfigTests(unittest.TestCase):
             load_phase_config(self.repo, "t")
         self.assertIn(str(self.path), str(caught.exception))
 
-    def test_missing_lead_never_uses_environment_or_repository_yaml(self):
+    def test_missing_lead_is_not_required_by_the_shared_phase_reader(self):
         data = copy.deepcopy(self.data)
         data.pop("lead")
         self.write(data)
@@ -115,11 +118,10 @@ class PhaseConfigTests(unittest.TestCase):
         config.parent.mkdir(parents=True)
         config.write_text("lead: repository-fallback\n")
         code = ("from pathlib import Path; from sprint_index_common import load_phase_config; "
-                "load_phase_config(Path('.'), 't')")
+                "assert 'lead' not in load_phase_config(Path('.'), 't')")
         result = run_subprocess([sys.executable, "-c", code], cwd=self.repo, capture_output=True, text=True,
                                 env={**os.environ, "PYTHONPATH": str(SCRIPTS), "ATM_IDENTITY": "env-fallback"})
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("lead: required nonempty string", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def init(self, *arguments):
         return run_subprocess([sys.executable, str(SCRIPTS / "phase-config"), "init", *arguments],

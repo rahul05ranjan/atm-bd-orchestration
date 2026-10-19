@@ -32,7 +32,7 @@ SPRINT_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 # The sprint-group formula's attach ref (atm-bd-orchestration/formulas/sprint-group.relations.json).
 GROUP_REF = "group"
 PHASE_DIR = Path(".atm-bd")
-PHASE_KEYS = ("plan", "root", "integration_branch", "lead")
+PHASE_KEYS = ("plan", "root", "integration_branch")
 TEMPLATE_DIR = Path(".claude/skills/atm-bd-orchestration/templates")
 DEFAULT_TEMPLATES = {
     "dev": str(TEMPLATE_DIR / "dev-template.xml.j2"),
@@ -78,20 +78,23 @@ def phase_config_path(repo: Path, phase: str) -> Path:
     return Path(repo) / PHASE_DIR / f"phase-{phase}.toml"
 
 
-def validate_phase_config(repo: Path, phase: str, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate explicit phase settings and their installed assignment templates."""
+def validate_phase_config(repo: Path, phase: str, data: dict[str, Any], *, require_dispatch: bool = True) -> dict[str, Any]:
+    """Validate phase settings; readers may omit dispatch settings for queue inspection."""
     path = phase_config_path(repo, phase)
     problems = []
     for key in PHASE_KEYS:
         if not isinstance(data.get(key), str) or not data[key].strip():
             problems.append(f"{key}: required nonempty string")
-    unknown = set(data) - set(PHASE_KEYS) - {"templates"}
-    if unknown:
-        problems.append(f"unknown key(s): {', '.join(sorted(unknown))}")
+    if require_dispatch and (not isinstance(data.get("lead"), str) or not data["lead"].strip()):
+        problems.append("lead: required nonempty string")
     templates = data.get("templates")
-    if not isinstance(templates, dict):
+    if require_dispatch and templates is None:
         problems.append("templates: required table with keys " + ", ".join(DEFAULT_TEMPLATES))
-    else:
+    if templates is not None:
+        if not isinstance(templates, dict):
+            problems.append("templates: expected a table with keys " + ", ".join(DEFAULT_TEMPLATES))
+            templates = None
+    if isinstance(templates, dict):
         extra = set(templates) - set(DEFAULT_TEMPLATES) - {"dev_fix"}
         if extra:
             problems.append(f"templates: unknown key(s): {', '.join(sorted(extra))}")
@@ -118,8 +121,8 @@ def validate_phase_config(repo: Path, phase: str, data: dict[str, Any]) -> dict[
     return dict(data)
 
 
-def load_phase_config(repo: Path, phase: str) -> dict[str, Any]:
-    """Read the phase's explicit lead, plan, root, branch and six template paths."""
+def load_phase_config(repo: Path, phase: str, *, require_dispatch: bool = False) -> dict[str, Any]:
+    """Read the phase's plan, root and branch; preserve optional phase-specific keys."""
     path = phase_config_path(repo, phase)
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -127,7 +130,7 @@ def load_phase_config(repo: Path, phase: str) -> dict[str, Any]:
         raise RuntimeError(f"{path} does not exist; the planner commits it with the plan") from exc
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise RuntimeError(f"{path}: {exc}") from exc
-    return validate_phase_config(repo, phase, data)
+    return validate_phase_config(repo, phase, data, require_dispatch=require_dispatch)
 
 
 def phase_path(repo: Path, phase: str) -> Path:

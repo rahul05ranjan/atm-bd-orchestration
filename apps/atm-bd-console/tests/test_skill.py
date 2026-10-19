@@ -436,7 +436,7 @@ def test_skill_is_wired_into_cli_and_help(capsys) -> None:
     with pytest.raises(SystemExit) as top:
         cli.main(["--help"])
     assert top.value.code == 0
-    assert "{console,cron,show,snapshot,skill}" in capsys.readouterr().out
+    assert "{queues,console,cron,show,snapshot,skill}" in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as sub:
         cli.main(["skill", "--help"])
