@@ -152,7 +152,7 @@ follow.
 
 ## Stack Bead
 
-The phase stack bead is the ordered layer ledger and lock. Before a stack write, claim it with `bd update <stack bead> --claim`; keep its 900-second lease alive with `bd heartbeat`, and release it using `bd update <stack bead> --if-assignee "$ATM_IDENTITY" --status open --assignee ""`. Recover an abandoned claim only with `bd reclaim --id <stack bead> --older-than 1800s`, then re-derive `layers` from the hosted stack if the ledger disagrees. Unscoped reclaim and event-age lease expiry are forbidden.
+The phase stack bead is the ordered layer ledger and lock. Before a stack write, claim it with `bd update <stack bead> --claim`; keep its 900-second lease alive with `bd heartbeat <stack bead>`, and release it using `bd update <stack bead> --if-assignee "$ATM_IDENTITY" --status open --assignee ""`. Recover an abandoned claim only with `bd reclaim --id <stack bead> --older-than 1800s`, then re-derive `layers` from the hosted stack if the ledger disagrees. Unscoped reclaim and event-age lease expiry are forbidden.
 
 ## Lifecycle
 
