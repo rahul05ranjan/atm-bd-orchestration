@@ -50,7 +50,9 @@ class World:
         self.git("push", "origin", "trunk")
         self.clock = Clock()
         self.bead = {"id": "phase.stack", "assignee": "", "metadata": {"trunk": "trunk", "stack_number": None, "layers": []}}
-        self.other = {"assignee": "other"}
+        self.other = {"id": "other-bead", "assignee": "other", "started_at": "2027-01-01T00:00:00Z",
+                      "lease_expires_at": datetime.fromtimestamp(self.clock() - 1801, timezone.utc).isoformat()}
+        self.beads = {self.bead["id"]: self.bead, self.other["id"]: self.other}
         self.pulls = []
         self.stacks = []
         self.calls = []
@@ -81,12 +83,13 @@ class World:
             return self.hook(argv, **kwargs)
         output, error, status = "", "", 0
         if argv[:2] == ["bd", "show"]:
-            output = json.dumps([self.bead])
+            output = json.dumps([self.beads[argv[2]]])
         elif argv[:2] == ["bd", "heartbeat"]:
             assert self.bead["assignee"] == "sanity"
         elif argv[:2] == ["bd", "reclaim"]:
-            assert argv[2:6] == ["--id", "phase.stack", "--older-than", "1800s"]
-            self.bead["assignee"] = ""
+            assert "--id" in argv and argv[argv.index("--id") + 1] == self.bead["id"]
+            assert "--older-than" in argv and argv[argv.index("--older-than") + 1] == "1800s"
+            self.beads[argv[argv.index("--id") + 1]]["assignee"] = ""
         elif argv[:2] == ["bd", "update"]:
             if "--claim" in argv:
                 if self.bead["assignee"]:
@@ -338,7 +341,7 @@ def test_timeout_and_scoped_reclaim(world):
     world.bead["lease_expires_at"] = datetime.fromtimestamp(world.clock() - 1801, timezone.utc).isoformat()
     result = world.link(values)
     assert result["reclaimed"] == {"holder": "other", "claimed_at": "2027-01-01T00:00:00Z"}
-    assert world.other["assignee"] == "other"
+    assert world.beads["other-bead"]["assignee"] == "other"
 
 
 @pytest.mark.parametrize("failure", ["nonzero", "invalid-json", "invalid-schema", "timeout", "oserror"])
