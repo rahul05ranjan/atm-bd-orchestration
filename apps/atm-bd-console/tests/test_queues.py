@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+import sc_compose
 
 from atm_bd_console import queues
 from atm_bd_console.command import Output
@@ -103,6 +107,34 @@ def test_build_classifies_each_queue_from_fixed_json_and_uses_four_batched_reads
     assert calls[2][0] == ["atm", "task", "list", "--all", "--json"]
     assert calls[3][0] == ["bd", "list", "--status", "closed", "--id", "dev-closed", "--json"]
     assert all(cwd == Path("/fixture/product") for _, cwd in calls)
+
+
+@pytest.mark.parametrize("status,ready,task_state", [
+    ("open", True, None),
+    ("open", False, None),
+    ("in_progress", False, None),
+    ("in_progress", False, "active"),
+    ("closed", False, "active"),
+])
+def test_rendered_stack_ledger_never_appears_in_work_queues(status, ready, task_state):
+    template = (Path(__file__).resolve().parents[3] / "plugins/atm-bd-orchestration/skills/atm-beads"
+                / "templates/stack-bead.json.j2")
+    request = sc_compose.ComposeRequest(str(template.parent), sc_compose.ComposeMode.file(str(template)),
+                                       vars_input={"id": ROOT, "phase": "bj", "integration_branch": "integrate/phase-bj"},
+                                       policy=sc_compose.ComposePolicy(strict_undeclared_variables=True))
+    ledger = json.loads(sc_compose.compose_file(request).rendered_text)
+    ledger["status"] = status
+    root = bead(ROOT, "root", metadata={"integration_branch": "integrate/phase-bj"})
+    work = bead("ordinary-work", "dev", parent=ROOT)
+    open_rows = [root, work] + ([] if status == "closed" else [ledger])
+    ready_rows = [work] + ([ledger] if ready else [])
+    task_rows = [task(ledger["id"], state=task_state)] if task_state else []
+    run, _ = fixed_runner(open_rows=open_rows, ready_rows=ready_rows, task_rows=task_rows,
+                          closed_rows=[ledger] if status == "closed" else [])
+    result = queues.build(SimpleNamespace(phase=None, root=ROOT, stack=False), Path("/fixture"), now=NOW, runner=run)
+
+    assert [row["id"] for row in result["queues"]["needs_dev"]] == ["ordinary-work"]
+    assert all(row["id"] != ledger["id"] for rows in result["queues"].values() for row in rows)
 
 
 def test_all_mode_exposes_not_ready_reasons():

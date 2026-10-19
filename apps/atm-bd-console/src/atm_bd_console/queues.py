@@ -179,7 +179,7 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
 
     for task_id, task in task_by_id.items():
         bead = by_id.get(task_id) if task_id in scope else closed.get(task_id)
-        if bead is None:
+        if bead is None or _stage(bead) == "stage:stack":
             continue
         key = "task_bead_closed" if bead.get("status") == "closed" else "in_flight"
         if key == "in_flight" and task.get("state") == "active" and (task.get("reminder_count") or 0) >= STALL_REMINDERS:
@@ -190,7 +190,7 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
     for bead_id in sorted(scope):
         bead = by_id[bead_id]
         stage, metadata = _stage(bead), _meta(bead)
-        if bead_id in task_by_id:
+        if stage == "stage:stack" or bead_id in task_by_id:
             continue
         open_children = children.get(bead_id, [])
         since = bead.get("updated_at") or bead.get("created_at")
