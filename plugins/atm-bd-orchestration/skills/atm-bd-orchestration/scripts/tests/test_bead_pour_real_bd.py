@@ -197,18 +197,21 @@ def bounded_read(stream, method, process, root, on_timeout):
     return value
 
 
-def stop_owner(owner):
+def stop_owner(owner, root):
     try:
         os.killpg(owner.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    owner.wait(timeout=HANG_GUARD_SECONDS)
+    try:
+        owner.wait(timeout=HANG_GUARD_SECONDS)
+    except subprocess.TimeoutExpired as timeout:
+        raise AssertionError(f"owner {owner.pid} survived cleanup{Workspace(root).server_logs()}") from timeout
 
 
 def owner_port(owner, root):
-    ready = bounded_read(owner.stdout, "readline", owner, root, lambda: stop_owner(owner)).strip()
+    ready = bounded_read(owner.stdout, "readline", owner, root, lambda: stop_owner(owner, root)).strip()
     if not ready.isdecimal():
-        detail = bounded_read(owner.stderr, "read", owner, root, lambda: stop_owner(owner))
+        detail = bounded_read(owner.stderr, "read", owner, root, lambda: stop_owner(owner, root))
         raise AssertionError(f"owner {owner.pid} did not report a port ({ready!r}): {detail}{Workspace(root).server_logs()}")
     return int(ready)
 
@@ -407,6 +410,15 @@ class HarnessFailureTests(unittest.TestCase):
         self.assertIn("owner failed", str(caught.exception))
         self.assertIn("diagnostic tail", str(caught.exception))
 
+    def test_owner_cleanup_timeout_reports_owner_and_log(self):
+        owner = mock.Mock(pid=12345)
+        owner.wait.side_effect = subprocess.TimeoutExpired("owner-command", HANG_GUARD_SECONDS)
+        with mock.patch.object(os, "killpg") as kill_group:
+            with self.assertRaisesRegex(AssertionError, "(?s)owner 12345 survived cleanup.*diagnostic tail"):
+                stop_owner(owner, self.root)
+        kill_group.assert_called_once_with(owner.pid, signal.SIGKILL)
+        owner.wait.assert_called_once_with(timeout=HANG_GUARD_SECONDS)
+
 
 @unittest.skipIf(shutil.which("dolt") is None, "dolt not on PATH: server lifetime test not run")
 class ServerLifetimeTests(unittest.TestCase):
@@ -427,11 +439,11 @@ class ServerLifetimeTests(unittest.TestCase):
             try:
                 owner.wait(timeout=HANG_GUARD_SECONDS)
             except subprocess.TimeoutExpired as timeout:
-                stop_owner(owner)
+                stop_owner(owner, root)
                 raise AssertionError(f"owner {owner.pid} did not exit{Workspace(root).server_logs()}") from timeout
-            detail = bounded_read(owner.stderr, "read", owner, root, lambda: stop_owner(owner))
+            detail = bounded_read(owner.stderr, "read", owner, root, lambda: stop_owner(owner, root))
         except BaseException:
-            stop_owner(owner)
+            stop_owner(owner, root)
             raise
         alive = [] if any(line.startswith("SERVER_REAPED ") for line in detail.splitlines()) else [detail]
         self.assertEqual(alive, [], "dolt server outlived the killed test process")
