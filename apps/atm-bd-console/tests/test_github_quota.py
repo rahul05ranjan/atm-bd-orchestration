@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from test_github_source import RECORDED_REST, graphql
+from test_github_source import RECORDED_REST, TEST_REPO, graphql
 
 from atm_bd_console import github_source
 from atm_bd_console.codec import from_json, to_json
@@ -15,6 +15,13 @@ from atm_bd_console.types import GhStatus
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=UTC)
 RESET = NOW + timedelta(hours=1)
+GRAPHQL_ARGV = github_source.graphql_argv(TEST_REPO)
+REST_ARGV = github_source.rest_argv(TEST_REPO)
+QUOTA_ARGV = github_source.quota_argv(TEST_REPO)
+
+
+def open_prs(mode, code_root="/repo", branch_groups=(), budget=None):
+    return github_source.open_prs(mode, code_root, branch_groups, budget, TEST_REPO)
 
 
 def quota(remaining, resource="graphql"):
@@ -22,7 +29,7 @@ def quota(remaining, resource="graphql"):
 
 
 def budget(mode="graphql", previous=None, now=NOW):
-    return github_source.Budget(mode, "/repo", 50, 600, now, previous or GhStatus(mode, None, None, None, False))
+    return github_source.Budget(mode, "/code", 50, 600, now, previous or GhStatus(mode, None, None, None, False), TEST_REPO)
 
 
 @pytest.mark.parametrize("mode,active", (("graphql", "graphql"), ("rest", "core")))
@@ -35,20 +42,20 @@ def test_only_selected_resource_controls_pause(monkeypatch, mode, active, active
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = {"resources": resources} if argv == github_source.QUOTA_ARGV else graphql() if mode == "graphql" else []
+        body = {"resources": resources} if argv == QUOTA_ARGV else graphql() if mode == "graphql" else []
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs(mode, "/repo", (), budget(mode))
+    result, status = open_prs(mode, "/repo", (), budget(mode))
     assert status.paused is active_low
     assert status.quota_remaining == (2450 if active_low else 4000)
     assert (status.core_remaining, status.graphql_remaining) == (
         resources["core"]["remaining"], resources["graphql"]["remaining"])
     if active_low:
-        assert isinstance(result, Err) and calls == [github_source.QUOTA_ARGV]
+        assert isinstance(result, Err) and calls == [QUOTA_ARGV]
     else:
         assert isinstance(result, Ok)
-        assert calls == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV if mode == "graphql" else github_source.REST_ARGV]
+        assert calls == [QUOTA_ARGV, GRAPHQL_ARGV if mode == "graphql" else REST_ARGV]
 @pytest.mark.parametrize("mode", ("graphql", "rest"))
 def test_both_resources_come_from_existing_quota_request_and_survive_cache(monkeypatch, mode):
     calls = []
@@ -57,13 +64,13 @@ def test_both_resources_come_from_existing_quota_request_and_survive_cache(monke
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = {"resources": resources} if argv == github_source.QUOTA_ARGV else graphql() if mode == "graphql" else []
+        body = {"resources": resources} if argv == QUOTA_ARGV else graphql() if mode == "graphql" else []
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs(mode, "/repo", (), budget(mode))
+    result, status = open_prs(mode, "/repo", (), budget(mode))
     assert isinstance(result, Ok)
-    assert calls == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV if mode == "graphql" else github_source.REST_ARGV]
+    assert calls == [QUOTA_ARGV, GRAPHQL_ARGV if mode == "graphql" else REST_ARGV]
     assert (status.core_remaining, status.core_limit, status.core_reset) == (4999, 5000, RESET)
     assert (status.graphql_remaining, status.graphql_limit, status.graphql_reset) == (4997, 5000, RESET + timedelta(minutes=5))
     assert status.quota_at == NOW
@@ -74,8 +81,8 @@ def test_both_resources_come_from_existing_quota_request_and_survive_cache(monke
 
 def test_missing_other_resource_does_not_disable_selected_guard(monkeypatch):
     monkeypatch.setattr(github_source.command, "run", lambda argv, *_args, **_kwargs: Ok(Output(0, json.dumps(
-        quota(4000) if argv == github_source.QUOTA_ARGV else graphql()))))
-    result, status = github_source.open_prs("graphql", "/repo", (), budget())
+        quota(4000) if argv == QUOTA_ARGV else graphql()))))
+    result, status = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Ok) and status.graphql_remaining == 4000 and status.core_remaining is None
 
 
@@ -87,7 +94,7 @@ def test_latest_paginated_quota_is_retained_while_paused(monkeypatch):
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        if argv == github_source.QUOTA_ARGV:
+        if argv == QUOTA_ARGV:
             core, graphql_remaining = next(readings)
             body = {"resources": {"core": quota(core, "core")["resources"]["core"],
                                   "graphql": quota(graphql_remaining)["resources"]["graphql"]}}
@@ -96,14 +103,14 @@ def test_latest_paginated_quota_is_retained_while_paused(monkeypatch):
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs("graphql", "/repo", (), budget())
+    result, status = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and status.paused
     assert (status.core_remaining, status.graphql_remaining) == (4700, 2450)
-    assert calls == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV, github_source.QUOTA_ARGV]
-    result, retained = github_source.open_prs("graphql", "/repo", (), budget(previous=status, now=NOW + timedelta(minutes=20)))
+    assert calls == [QUOTA_ARGV, GRAPHQL_ARGV, QUOTA_ARGV]
+    result, retained = open_prs("graphql", "/repo", (), budget(previous=status, now=NOW + timedelta(minutes=20)))
     assert isinstance(result, Err) and retained.quota_at == NOW
     assert (retained.core_remaining, retained.graphql_remaining) == (4700, 2450)
-    assert calls == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV, github_source.QUOTA_ARGV]
+    assert calls == [QUOTA_ARGV, GRAPHQL_ARGV, QUOTA_ARGV]
 
 
 def test_graphql_paginates_and_checks_shared_quota_before_every_page(monkeypatch):
@@ -120,15 +127,15 @@ def test_graphql_paginates_and_checks_shared_quota_before_every_page(monkeypatch
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = quota(2500) if argv == github_source.QUOTA_ARGV else second if "cursor=page-one" in argv else first
+        body = quota(2500) if argv == QUOTA_ARGV else second if "cursor=page-one" in argv else first
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs("graphql", "/repo", (), budget())
+    result, status = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Ok) and len(result.value) == 101
     assert not status.truncated and not status.paused
-    assert calls[0] == calls[2] == github_source.QUOTA_ARGV
-    assert calls[1] == github_source.GRAPHQL_ARGV and "cursor=page-one" in calls[3]
+    assert calls[0] == calls[2] == QUOTA_ARGV
+    assert calls[1] == GRAPHQL_ARGV and "cursor=page-one" in calls[3]
 
 
 def test_pauses_at_49_percent_and_recovers_at_threshold(monkeypatch):
@@ -137,20 +144,20 @@ def test_pauses_at_49_percent_and_recovers_at_threshold(monkeypatch):
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = quota(remaining[0]) if argv == github_source.QUOTA_ARGV else graphql()
+        body = quota(remaining[0]) if argv == QUOTA_ARGV else graphql()
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs("graphql", "/repo", (), budget())
+    result, status = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and status.paused and status.quota_remaining == 2450
     assert status.quota_limit == 5000 and status.quota_reset == RESET
-    assert calls == [github_source.QUOTA_ARGV]
+    assert calls == [QUOTA_ARGV]
     remaining[0] = 2500
-    result, status = github_source.open_prs("graphql", "/repo", (), budget(previous=status))
-    assert isinstance(result, Err) and status.paused and calls == [github_source.QUOTA_ARGV]
-    result, status = github_source.open_prs("graphql", "/repo", (), budget(previous=status, now=RESET))
+    result, status = open_prs("graphql", "/repo", (), budget(previous=status))
+    assert isinstance(result, Err) and status.paused and calls == [QUOTA_ARGV]
+    result, status = open_prs("graphql", "/repo", (), budget(previous=status, now=RESET))
     assert isinstance(result, Ok) and not status.paused
-    assert calls[-2:] == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV]
+    assert calls[-2:] == [QUOTA_ARGV, GRAPHQL_ARGV]
 
 
 def test_quota_drop_during_pagination_discards_partial_result(monkeypatch):
@@ -161,13 +168,13 @@ def test_quota_drop_during_pagination_discards_partial_result(monkeypatch):
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = quota(next(remaining)) if argv == github_source.QUOTA_ARGV else first
+        body = quota(next(remaining)) if argv == QUOTA_ARGV else first
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs("graphql", "/repo", (), budget())
+    result, status = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and status.paused
-    assert calls == [github_source.QUOTA_ARGV, github_source.GRAPHQL_ARGV, github_source.QUOTA_ARGV]
+    assert calls == [QUOTA_ARGV, GRAPHQL_ARGV, QUOTA_ARGV]
 
 
 @pytest.mark.parametrize("failure", ["graphql", "rate limit", "HTTP 429"])
@@ -177,7 +184,7 @@ def test_rate_limit_error_locks_out_until_reset(monkeypatch, failure):
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        if argv == github_source.QUOTA_ARGV:
+        if argv == QUOTA_ARGV:
             return Ok(Output(0, json.dumps(quota(4000))))
         if fail[0]:
             if failure == "graphql":
@@ -186,13 +193,13 @@ def test_rate_limit_error_locks_out_until_reset(monkeypatch, failure):
         return Ok(Output(0, json.dumps(graphql())))
 
     monkeypatch.setattr(github_source.command, "run", run)
-    result, status = github_source.open_prs("graphql", "/repo", (), budget())
+    result, status = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and status.paused and status.rate_limited
     fail[0] = False
     calls.clear()
-    result, status = github_source.open_prs("graphql", "/repo", (), budget(previous=status, now=RESET - timedelta(seconds=1)))
+    result, status = open_prs("graphql", "/repo", (), budget(previous=status, now=RESET - timedelta(seconds=1)))
     assert isinstance(result, Err) and status.paused and calls == []
-    result, status = github_source.open_prs("graphql", "/repo", (), budget(previous=status, now=RESET))
+    result, status = open_prs("graphql", "/repo", (), budget(previous=status, now=RESET))
     assert isinstance(result, Ok) and not status.paused and not status.rate_limited
 
 
@@ -202,37 +209,37 @@ def test_rest_checks_quota_again_before_check_runs(monkeypatch):
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = quota(next(remaining), "core") if argv == github_source.QUOTA_ARGV else RECORDED_REST
+        body = quota(next(remaining), "core") if argv == QUOTA_ARGV else RECORDED_REST
         return Ok(Output(0, json.dumps(body)))
 
     monkeypatch.setattr(github_source.command, "run", run)
     group = ((RECORDED_REST[0]["head"]["ref"],),)
-    result, status = github_source.open_prs("rest", "/repo", group, budget("rest"))
+    result, status = open_prs("rest", "/repo", group, budget("rest"))
     assert isinstance(result, Err) and status.paused
-    assert calls == [github_source.QUOTA_ARGV, github_source.REST_ARGV, github_source.QUOTA_ARGV]
+    assert calls == [QUOTA_ARGV, REST_ARGV, QUOTA_ARGV]
 
 
 def test_invalid_quota_fails_closed(monkeypatch):
     calls = []
     monkeypatch.setattr(github_source.command, "run", lambda argv, *_args, **_kwargs:
                         calls.append(argv) or Ok(Output(0, '{}')))
-    result, _ = github_source.open_prs("graphql", "/repo", (), budget())
+    result, _ = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and result.error.kind == "parse_failed"
-    assert calls == [github_source.QUOTA_ARGV]
+    assert calls == [QUOTA_ARGV]
 
 
 def test_quota_command_failure_identifies_the_failed_command(monkeypatch):
     monkeypatch.setattr(github_source.command, "run", lambda argv, *_args, **_kwargs:
                         Err(CommandFailed("command_failed", argv, 1, "quota unavailable", "retry")))
-    result, _ = github_source.open_prs("graphql", "/repo", (), budget())
+    result, _ = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and isinstance(result.error, CommandFailed)
-    assert result.error.argv == github_source.QUOTA_ARGV
+    assert result.error.argv == QUOTA_ARGV
 
 
 def test_repeated_pagination_cursor_is_a_typed_failure(monkeypatch):
     page = graphql(total=101)
     page["data"]["repository"]["pullRequests"]["pageInfo"] = {"hasNextPage": True, "endCursor": "same"}
     monkeypatch.setattr(github_source.command, "run", lambda argv, *_args, **_kwargs: Ok(Output(0, json.dumps(
-        quota(4000) if argv == github_source.QUOTA_ARGV else page))))
-    result, _ = github_source.open_prs("graphql", "/repo", (), budget())
+        quota(4000) if argv == QUOTA_ARGV else page))))
+    result, _ = open_prs("graphql", "/repo", (), budget())
     assert isinstance(result, Err) and result.error.kind == "parse_failed"

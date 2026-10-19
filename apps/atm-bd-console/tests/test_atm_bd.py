@@ -100,6 +100,23 @@ def test_phase_file_reads_the_real_toml_and_its_plan() -> None:
     assert phase_file(str(REPO), "bh") == Ok(EXPECTED_PHASE_FILE)
 
 
+def test_phase_file_retains_optional_code_checkout_path(repo: Path) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace("[templates]", 'code_checkout = "../code"\n\n[templates]'))
+    result = phase_file(str(repo), "bh")
+    assert isinstance(result, Ok)
+    assert result.value.code_checkout == "../code"
+
+
+@pytest.mark.parametrize("value", ['""', "42", '"/absolute/path"'])
+def test_phase_file_rejects_invalid_code_checkout(repo: Path, value: str) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace("[templates]", f"code_checkout = {value}\n\n[templates]"))
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ConfigInvalid)
+    assert error.key == "code_checkout"
+
+
 def test_phase_file_root_comes_from_the_toml_and_sprints_from_the_plan(repo: Path) -> None:
     toml = repo / TOML
     toml.write_text(toml.read_text().replace('"atm-phase-bh"', '"zz-phase-bh"'))

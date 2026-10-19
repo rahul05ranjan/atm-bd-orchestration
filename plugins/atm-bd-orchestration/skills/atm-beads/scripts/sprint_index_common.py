@@ -85,6 +85,12 @@ def validate_phase_config(repo: Path, phase: str, data: dict[str, Any], *, requi
     for key in PHASE_KEYS:
         if not isinstance(data.get(key), str) or not data[key].strip():
             problems.append(f"{key}: required nonempty string")
+    unknown = set(data) - set(PHASE_KEYS) - {"lead", "templates", "code_checkout"}
+    if unknown:
+        problems.append(f"unknown key(s): {', '.join(sorted(unknown))}")
+    if "code_checkout" in data and (not isinstance(data["code_checkout"], str) or not data["code_checkout"].strip()
+                                     or Path(data["code_checkout"]).is_absolute()):
+        problems.append("code_checkout: optional repository-relative path to the code repository")
     if require_dispatch and (not isinstance(data.get("lead"), str) or not data["lead"].strip()):
         problems.append("lead: required nonempty string")
     templates = data.get("templates")

@@ -332,7 +332,7 @@ def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypa
 
 def test_closed_phase_forced_github_refresh_uses_sprint_groups(monkeypatch, tmp_path):
     closed = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
-    config = replace(CONFIG, repo_root=str(tmp_path), github="rest", dry_run=True)
+    config = replace(CONFIG, repo_root=str(tmp_path), code_root=str(tmp_path), github="rest", dry_run=True)
     calls = []
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -865,6 +865,59 @@ def test_fetch_replans_cycle_merges_from_refreshed_remote_refs(github_runtime, m
     assert due_states == [RUNNING_STATE.remotes, (fresh,)]
     assert merges == [("new-branch", "base")]
     assert inputs[0].remotes == Ok((fresh,))
+
+
+def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code", no_fetch=False)
+    calls = []
+    bead_roots = []
+
+    monkeypatch.setattr(runner.beads_source, "closed_phase_rows",
+                        lambda phase, *, cwd: bead_roots.append((phase, cwd)) or Ok([]))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda root: calls.append(("worktrees", root)) or Ok(()))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda root: calls.append(("fetch", root)) or Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs", lambda root: calls.append(("remote_refs", root)) or Ok((REMOTE_REF,)))
+    monkeypatch.setattr(runner.git_source, "merge",
+                        lambda root, branch, target: calls.append(("merge", root, branch, target)) or Ok(None))
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("feature/x", "main"),), False))
+
+    runner.step(config, RUNNING_STATE, False, store)
+
+    assert calls == [
+        ("worktrees", "/code-checkout"),
+        ("fetch", "/code-checkout"),
+        ("remote_refs", "/code-checkout"),
+        ("merge", "/code-checkout", "feature/x", "main"),
+    ]
+    assert bead_roots == [("bh", "/repo")]
+
+
+def test_refresh_github_uses_configured_code_checkout_and_repo_slug(monkeypatch) -> None:
+    from atm_bd_console import github_source
+
+    captured = {}
+    budget_instance = object()
+
+    def budget(*args):
+        captured["budget"] = args
+        return budget_instance
+
+    def open_prs(*args):
+        captured["open_prs"] = args
+        return Ok(()), GhStatus("graphql", True, None, NOW, False)
+
+    monkeypatch.setattr(github_source, "Budget", budget)
+    monkeypatch.setattr(github_source, "open_prs", open_prs)
+    config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code")
+
+    result, status = runner._refresh_github(config, NOW, GhStatus("graphql", None, None, None, False), (("branch",),))
+
+    assert isinstance(result, Ok) and status.ok
+    assert captured["budget"] == ("rest", "/code-checkout", config.github_quota_threshold,
+                                  config.github_poll_interval_s, NOW, GhStatus("graphql", None, None, None, False),
+                                  "sample/code")
+    assert captured["open_prs"] == ("rest", "/code-checkout", (("branch",),), budget_instance, "sample/code")
 
 
 def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:

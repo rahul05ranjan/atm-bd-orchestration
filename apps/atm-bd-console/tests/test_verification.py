@@ -45,7 +45,7 @@ def runtime(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "send", lambda *_: Ok(None))
     monkeypatch.setattr(runner.atm_source, "assign", lambda *args: assigned.append(args) or Ok(None))
-    config = replace(CONFIG, repo_root=str(repo), github="off", dry_run=False, no_fetch=False)
+    config = replace(CONFIG, repo_root=str(repo), code_root=str(repo), github="off", dry_run=False, no_fetch=False)
     state = replace(INITIAL_STATE, remotes=git_source.remote_refs(repo).value, last_cycle=datetime.now(UTC))
     with acquire_lock(repo, PHASE_FILE.root_id).value as store:
         clean = Merge("clean", "main", MergeState.CLEAN, (), (), datetime.now(UTC))

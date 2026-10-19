@@ -152,9 +152,10 @@ def _branch_groups(phase, repo) -> tuple[tuple[str, ...], ...]:
 def _refresh_github(config: Config, now: datetime, gh: GhStatus, groups=()):
     if config.github == "off":
         return Ok(()), _gh("off")
-    budget = github_source.Budget(config.github, config.repo_root, config.github_quota_threshold,
-                                  config.github_poll_interval_s, now, gh)
-    result, status = github_source.open_prs(config.github, config.repo_root, groups, budget)
+    code_root = config.code_root or config.repo_root
+    budget = github_source.Budget(config.github, code_root, config.github_quota_threshold,
+                                  config.github_poll_interval_s, now, gh, config.github_repo)
+    result, status = github_source.open_prs(config.github, code_root, groups, budget, config.github_repo)
     if status.paused and gh.mode == config.github:
         status = replace(status, ok=gh.ok, error=None, at=gh.at, truncated=gh.truncated)
     return result, status
@@ -272,7 +273,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
-    worktrees = logger.result("git.worktrees", git_source.worktrees(config.repo_root))
+    code_root = config.code_root or config.repo_root
+    worktrees = logger.result("git.worktrees", git_source.worktrees(code_root))
     task_ids = tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ()
     task_beads = logger.result("beads.show_tasks", beads_source.show(task_ids), task_ids=list(task_ids))
     if isinstance(task_beads, Ok) and task_beads.value:
@@ -287,10 +289,10 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     ) if isinstance(phase, Ok) else None
     remotes = None
     if due and due.fetch and not config.no_fetch:
-        fetched = logger.result("git.fetch", git_source.fetch(config.repo_root))
+        fetched = logger.result("git.fetch", git_source.fetch(code_root))
         remotes = fetched if isinstance(fetched, Err) else None
         if isinstance(fetched, Ok):
-            remotes = logger.result("git.remote_refs", git_source.remote_refs(config.repo_root))
+            remotes = logger.result("git.remote_refs", git_source.remote_refs(code_root))
             if isinstance(remotes, Ok) and isinstance(phase, Ok):
                 due = model.due(
                     replace(state, remotes=remotes.value), phase.value,
@@ -304,7 +306,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     if due:
         for branch, target in due.merges:
             checked = remotes if isinstance(remotes, Err) else logger.result(
-                "git.merge", git_source.merge(config.repo_root, branch, target), branch=branch, target=target,
+                "git.merge", git_source.merge(code_root, branch, target), branch=branch, target=target,
             )
             if not isinstance(remotes, Err):
                 merge_results.append(checked)

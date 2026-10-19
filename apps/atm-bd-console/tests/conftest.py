@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,8 @@ def phase_repo(tmp_path: Path) -> Path:
     root = tmp_path / "phase-repo"
     shutil.copytree(Path(__file__).parent / "fixtures/beads/repo", root)
     (root / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
+    subprocess.run(("git", "init", "-q", str(root)), check=True)
+    subprocess.run(("git", "-C", str(root), "remote", "add", "origin", "https://github.com/example/repo.git"), check=True)
     return root
 
 # Only the system directories a fake script or a source's own subprocess needs; never the caller's PATH.

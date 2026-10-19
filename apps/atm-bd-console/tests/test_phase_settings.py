@@ -154,7 +154,12 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
     monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok((REMOTE_REF,)))
     monkeypatch.setattr(runner.git_source, "merge", lambda *_: Ok(replace(MERGE, state=MergeState.CLEAN, files=(), messages=())))
     fake_bin.make("bd", "exit 97\n")
-    fake_bin.make("git", "exit 97\n")
+    fake_bin.make("git", '''case "$1:$2" in
+rev-parse:--show-toplevel) printf "%s\\n" "$PWD";;
+remote:get-url) printf "https://github.com/example/repo.git\\n";;
+*) exit 97;;
+esac
+''')
     fake_bin.make("atm", '''case "$1:$2" in
 members:--team) printf '{"members": []}';;
 task:list) printf '[]';;

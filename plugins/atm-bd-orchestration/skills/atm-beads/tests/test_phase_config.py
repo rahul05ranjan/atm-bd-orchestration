@@ -33,8 +33,23 @@ class PhaseConfigTests(unittest.TestCase):
         for relative in self.data["templates"].values():
             self.assertTrue((self.repo / relative).is_file())
 
-    def test_every_required_phase_key_and_template_value_is_validated(self):
-        for key in ("plan", "root", "integration_branch", *TEMPLATE_NAMES):
+    def test_optional_code_checkout_is_retained(self):
+        data = copy.deepcopy(self.data)
+        data["code_checkout"] = "../atm-bd-orchestration"
+        self.write(data)
+        self.assertEqual(load_phase_config(self.repo, "t"), data)
+
+    def test_code_checkout_must_be_a_nonempty_string_when_present(self):
+        for value in ("", " \t", 42, "/absolute/path"):
+            with self.subTest(value=value):
+                data = copy.deepcopy(self.data)
+                data["code_checkout"] = value
+                self.write(data)
+                with self.assertRaisesRegex(RuntimeError, "code_checkout: optional repository-relative path"):
+                    load_phase_config(self.repo, "t")
+
+    def test_every_missing_blank_or_non_string_value_names_its_key(self):
+        for key in ("plan", "root", "integration_branch", "lead", *TEMPLATE_NAMES):
             for value in (None, "", " \t", 42):
                 with self.subTest(key=key, value=value):
                     data = copy.deepcopy(self.data)
@@ -45,7 +60,7 @@ class PhaseConfigTests(unittest.TestCase):
                         target[key] = value
                     self.write(data)
                     with self.assertRaisesRegex(RuntimeError, f"{key}: required") as caught:
-                        load_phase_config(self.repo, "t")
+                        load_phase_config(self.repo, "t", require_dispatch=True)
                     self.assertIn(str(self.path), str(caught.exception))
 
     def test_each_dangling_template_path_names_its_key_and_path(self):

@@ -97,6 +97,11 @@ them from that file (start each vars file from `.claude/skills/atm-beads/scripts
 one fails the render. Phase-specific variables come from
 `sprint_index_common.load_phase_config(repo, phase)`: supply `lead` from that
 phase's `lead`, and use its `templates` entry for the assignment purpose.
+An optional `code_checkout` path in `.atm-bd/phase-<x>.toml` selects the code
+repository's primary checkout relative to the beads repository root. If absent,
+the code repository defaults to the beads repository. The console verifies that
+the selected path is a Git toplevel with a GitHub `origin`; phase data, beads,
+plans and console state remain in the beads repository.
 The phase file requires `dev`, `fix`, `sanity`, `qa`,
 `plan_review` and `review`; each points to an existing repository-relative
 file inside `.claude/skills/atm-bd-orchestration/templates/`. The phase lead
@@ -113,6 +118,7 @@ has no repository YAML, registry-role, CLI identity or environment fallback.
 | `lint_command` | `dev-template`, `fix-assignment`, `dev-sanity-template` |
 | `integration_branch_pattern` | the root's `integration_branch` (`plan-root.json.j2`), then `review-template` and `plan-review-template` (`integration_branch`) |
 | `plans_dir` | `sprint_index_common.py` (`phase_path`), `sprint-report`, `sprint-review`, `plan-review-template` |
+| `code_checkout` (optional) | console Git and GitHub reads; relative to the beads repository root |
 | `requirements_globs`, `adr_globs` | `plan-review-template`, `fix-assignment` |
 | `policy_path` | `qa-template`, `dev-template`, `fix-assignment`, `schema-reviewer-assignment` |
 | `reviewers_round1` | `qa-template` (sprint reviews) |

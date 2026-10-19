@@ -15,6 +15,7 @@ PRIORITIES = (
     (PrState.OPEN, 2), (PrState.DRAFT, 2), (PrState.MERGED, 1), (PrState.CLOSED, 0),
     (PrState.NONE, -1), (PrState.CONFLICT, -1), (PrState.UNKNOWN, -1),
 )
+TEST_REPO = "owner/repo"
 
 
 @pytest.mark.parametrize("first,second", tuple(product(PRIORITIES, repeat=2)))
@@ -58,7 +59,7 @@ def test_rest_routes_check_selection_through_shared_helper(monkeypatch):
 
     def run(argv, *_args, **_kwargs):
         calls.append(argv)
-        body = pulls if argv == github_source.REST_ARGV else {"total_count": 0, "check_runs": []}
+        body = pulls if argv == github_source.rest_argv(TEST_REPO) else {"total_count": 0, "check_runs": []}
         return Ok(Output(0, json.dumps(body)))
 
     def choose(candidates):
@@ -67,8 +68,8 @@ def test_rest_routes_check_selection_through_shared_helper(monkeypatch):
 
     monkeypatch.setattr(github_source.command, "run", run)
     monkeypatch.setattr(github_source, "select_pr", choose)
-    result, status = github_source.open_prs("rest", "/repo", (("branch",),))
+    result, status = github_source.open_prs("rest", "/repo", (("branch",),), None, TEST_REPO)
     assert isinstance(result, Ok) and status.ok
     assert [[pr.number for pr in candidates] for candidates in selections] == [[10, 20]]
     assert len(calls) == 2
-    assert calls[1][-1] == "repos/{owner}/{repo}/commits/sha-10/check-runs?per_page=100"
+    assert calls[1][-1] == f"repos/{TEST_REPO}/commits/sha-10/check-runs?per_page=100"

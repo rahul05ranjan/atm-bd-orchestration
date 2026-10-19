@@ -178,6 +178,11 @@ def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
     lead = raw.get("lead")
     if not isinstance(lead, str) or not lead.strip():
         return Err(ConfigInvalid("config_invalid", "lead", repr(lead), f"set lead in {path} to a nonempty ATM identity"))
+    code_checkout = raw.get("code_checkout")
+    if code_checkout is not None and (not isinstance(code_checkout, str) or not code_checkout.strip()
+                                      or Path(code_checkout).is_absolute()):
+        return Err(ConfigInvalid("config_invalid", "code_checkout", repr(code_checkout),
+                                 f"set code_checkout in {path} to a repository-relative path of the code repository"))
     templates = _phase_templates(Path(repo_root), raw.get("templates"))
     if isinstance(templates, Err):
         return templates
@@ -195,7 +200,8 @@ def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
         return rows
     ids = {name: sprint_bead_id(root_id, x, name) for name, _ in rows.value}
     depends_on = {ids[name]: tuple(ids[item] for item in items) for name, items in rows.value}
-    return Ok(PhaseFile(x, root_id, _phase_label(x), tuple(ids.values()), depends_on, lead=lead, templates=templates.value))
+    return Ok(PhaseFile(x, root_id, _phase_label(x), tuple(ids.values()), depends_on, lead=lead,
+                        templates=templates.value, code_checkout=code_checkout))
 
 
 def _yaml_scalars(text: str) -> dict[str, Any]:

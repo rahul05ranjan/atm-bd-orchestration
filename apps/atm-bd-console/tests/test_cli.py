@@ -186,7 +186,7 @@ def test_installed_cron_command_runs_one_headless_tick(tmp_path) -> None:
     scripts = {
         "bd": 'case "$1" in show|list) cat beads.json;; ready) printf "[]\\n";; *) exit 97;; esac\n',
         "atm": 'case "$1:$2" in members:--team) printf \'{"members": []}\\n\';; task:list) printf "[]\\n";; *) exit 97;; esac\n',
-        "git": 'case "$1" in fetch|for-each-ref) exit 0;; worktree) printf "worktree %s\\nHEAD %s\\nbranch refs/heads/main\\n" "$PWD" "0123456789abcdef";; *) exit 97;; esac\n',
+        "git": 'case "$1:$2" in rev-parse:--show-toplevel) printf "%s\\n" "$PWD";; remote:get-url) printf "https://github.com/example/repo.git\\n";; fetch:*|for-each-ref:*) exit 0;; worktree:*) printf "worktree %s\\nHEAD %s\\nbranch refs/heads/main\\n" "$PWD" "0123456789abcdef";; *) exit 97;; esac\n',
     }
     for name, script in scripts.items():
         executable = fake_bin / name

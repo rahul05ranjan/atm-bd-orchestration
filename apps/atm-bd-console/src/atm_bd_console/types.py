@@ -209,6 +209,8 @@ class Config:
     notification_sender: str = DEFAULT_NOTIFICATION_SENDER
     github_poll_interval_s: int = 600
     github_quota_threshold: int = 50
+    code_root: str = ""
+    github_repo: str = ""
 
 
 @dataclass(frozen=True)
@@ -399,6 +401,7 @@ class PhaseFile:
     depends_on: Mapping[str, tuple[str, ...]]
     lead: str
     templates: Mapping[str, str]
+    code_checkout: str | None = None
 
 
 @dataclass(frozen=True)
