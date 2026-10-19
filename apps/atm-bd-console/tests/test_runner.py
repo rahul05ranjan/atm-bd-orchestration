@@ -154,22 +154,34 @@ def test_tick_reports_open_read_failure_without_collecting_runs(monkeypatch, git
     assert result.runs_error == str(TIMEOUT)
 
 
-def test_tick_owns_exactly_one_open_and_one_closed_phase_list(monkeypatch, github_runtime):
+@pytest.mark.parametrize("open_failed", [False, True])
+def test_tick_owns_exactly_one_open_and_only_reads_closed_after_success(monkeypatch, github_runtime, open_failed):
     store, _, _, _ = github_runtime
     calls = []
 
     def run(argv, _fix, **_kwargs):
         calls.append(argv)
+        if open_failed:
+            return Err(TIMEOUT)
         return Ok(Output(0, "[]"))
 
     monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
     monkeypatch.setattr(runner.beads_source, "closed_phase_rows", closed_phase_rows)
     monkeypatch.setattr(runner.beads_source.command, "run", run)
-    monkeypatch.setattr(runner.ledger_source, "collect", lambda *_: ([], [], []))
+
+    def collect(*_args):
+        assert not open_failed, "must not collect incomplete rows"
+        return [], [], []
+
+    monkeypatch.setattr(runner.ledger_source, "collect", collect)
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
-    assert result.runs_error is None
-    assert calls == [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"],
-                     ["bd", "list", "-l", f"phase-{CONFIG.phase}", "--status", "closed", "-n", "0", "--json"]]
+    assert result.runs_error == (str(TIMEOUT) if open_failed else None)
+    expected = [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"]]
+    if not open_failed:
+        expected.append(["bd", "list", "-l", f"phase-{CONFIG.phase}", "--status", "closed", "-n", "0", "--json"])
+    assert calls == expected
+    if open_failed:
+        assert result.run_data is None
     assert all("--all" not in argv for argv in calls)
 
 

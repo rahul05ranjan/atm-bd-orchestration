@@ -259,16 +259,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     runs_error = None
     # bd list excludes closed rows by default; this one separate, bounded-by-phase
     # history read avoids --all while the tick's open read supplies live rows.
-    closed_rows = logger.result("beads.closed_runs", beads_source.closed_phase_rows(config.phase, cwd=config.repo_root), phase=config.phase)
     if isinstance(opened, Err):
         runs_error = str(opened.error)
-    elif isinstance(closed_rows, Err):
-        runs_error = str(closed_rows.error)
     else:
-        try:
-            run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, closed_rows.value)
-        except (OSError, ValueError, RuntimeError) as run_error:
-            runs_error = str(run_error)
+        closed_rows = logger.result("beads.closed_runs", beads_source.closed_phase_rows(config.phase, cwd=config.repo_root), phase=config.phase)
+        if isinstance(closed_rows, Err):
+            runs_error = str(closed_rows.error)
+        else:
+            try:
+                run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, closed_rows.value)
+            except (OSError, ValueError, RuntimeError) as run_error:
+                runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
     worktrees = logger.result("git.worktrees", git_source.worktrees(config.repo_root))
