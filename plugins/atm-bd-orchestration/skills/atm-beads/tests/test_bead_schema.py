@@ -1,6 +1,9 @@
 """Phase-wide bead validation and stack metadata contracts."""
 import copy
 import importlib
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +15,55 @@ bead_schema = importlib.import_module("bead_schema")
 
 
 FAMILY = {"branch": "sprint/bi-7", "worktree": "/work/bi-7", "pr_target": "main", "difficulty": "normal"}
+SCHEMA_CLI = Path(__file__).resolve().parents[1] / "scripts" / "bead_schema.py"
+
+
+@pytest.mark.parametrize("missing_branch, bd_exit, expected_code", [
+    (False, 0, 0),
+    (True, 0, 5),
+    (False, 7, 2),
+])
+def test_validate_phase_cli_with_controlled_bd(tmp_path, missing_branch, bd_exit, expected_code):
+    stub = tmp_path / "bd"
+    stub.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$BD_ARGS"\n'
+        'printf "%s" "$BD_OUTPUT"\nprintf "%s" "$BD_ERROR" >&2\nexit "$BD_EXIT"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    args_file = tmp_path / "bd-args"
+    metadata = {**FAMILY, "checked_bead": "atm-bi-7.group-dev", "round": 1}
+    if missing_branch:
+        del metadata["branch"]
+    bead = {"id": "atm-bi-7.group-qa", "labels": ["phase-bi", "stage:qa"], "metadata": metadata}
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+           "BD_ARGS": str(args_file), "BD_OUTPUT": json.dumps([bead]),
+           "BD_ERROR": "database unavailable" if bd_exit else "", "BD_EXIT": str(bd_exit)}
+    result = subprocess.run([sys.executable, str(SCHEMA_CLI), "validate", "--phase", "bi"],
+                            env=env, capture_output=True, text=True, timeout=60, check=False)
+    assert args_file.read_text(encoding="utf-8").splitlines() == [
+        "list", "-l", "phase-bi", "--status", "open,in_progress,blocked,deferred,closed",
+        "--include-gates", "-n", "0", "--json",
+    ]
+    assert result.returncode == expected_code
+    if missing_branch:
+        assert result.stdout.startswith("atm-bi-7.group-qa: branch:")
+    else:
+        assert result.stdout == ""
+    if bd_exit:
+        assert "bd list failed: database unavailable" in result.stderr
+        assert "Traceback" not in result.stderr
+    else:
+        assert result.stderr == ""
+
+
+def test_validate_phase_cli_rejects_invalid_phase_before_bd(tmp_path):
+    result = subprocess.run([sys.executable, str(SCHEMA_CLI), "validate", "--phase", "../bad"],
+                            env={**os.environ, "PATH": str(tmp_path)},
+                            capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode == 2
+    assert "invalid phase" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 @pytest.mark.parametrize("edge", ["blocks", "validates"])
