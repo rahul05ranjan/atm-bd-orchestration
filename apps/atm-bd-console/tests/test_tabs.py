@@ -22,7 +22,7 @@ from atm_bd_console.app import (
     sprint_steps,
     status_header,
 )
-from atm_bd_console.enums import PrState, SprintState
+from atm_bd_console.enums import PrState, QaState, SprintState
 from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _sprint_views
 from atm_bd_console.prs import render_prs
@@ -95,32 +95,31 @@ def test_sanity_verdict_uses_layout_c_glyph_and_color(verdict: str, glyph: str, 
     ("claude-code", "Haiku", ("\U000f0156", "#FF6533")),
     ("codex-cli", "GPT-5.6-Terra", ("\U000f01e7", "#2DE057")),
 ])
+@pytest.mark.parametrize("reviewer_name", ["sanity-jev", "sanity-llm", "dev-sanity"])
 def test_sanity_reviewer_and_severity_cells_use_roster_icon_style(
-    harness: str, model: str, dev_icon: tuple[str, str],
+    harness: str, model: str, dev_icon: tuple[str, str], reviewer_name: str,
 ) -> None:
-    names = ("sanity-jev", "sanity-llm", "dev-sanity")
-    agents = tuple(replace(RUNNING.agents[0], name=name,
-                           agent_type="dev" if name == "dev-sanity" else "sanity", harness=harness, model=model)
-                   for name in names)
-    rows = [
-        {"run_id": "r", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-4", "dev": "dev-sanity",
-         "reviewer": name, "kind": "API_FAILURE", "error": "unavailable"}
-        for name in names[:2]
-    ]
-    main, errors = sanity_text(runs.sanity_runs(rows), agents, local_zone=UTC)
+    member = replace(RUNNING.agents[0], name=reviewer_name, agent_type="sanity", harness=harness, model=model)
+    dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness=harness, model=model)
+    agents = (member, dev)
+    row = {"reviewer": reviewer_name, "kind": "API_FAILURE", "error": "unavailable"}
+    # Drive the renderer directly: the ledger parser accepts only its two producer reviewer names.
+    run = runs.SanityRun("r", "2026-10-02T13:14:00Z", "bj-4", 42, "alice", 1, "FAIL", row, None)
+    main, severity_table = sanity_text([run], agents, local_zone=UTC)
 
-    for name in names[:2]:
-        member = next(agent for agent in agents if agent.name == name)
-        glyph, color = "\U000f01a6", "#E551BA"
-        assert icon_for(member) == (glyph, color)
-        token = f"{glyph} {name}"
-        start = errors.plain.index(token)
-        assert any(span.start == start and span.end == start + len(token)
-                   and str(span.style) == color for span in errors.spans)
+    sanity_glyph, sanity_color = "\U000f01a6", "#E551BA"
+    assert icon_for(member) == (sanity_glyph, sanity_color)
+    reviewer_cell = _agent_name(reviewer_name, agents)
+    assert reviewer_cell.plain == f"{sanity_glyph} {reviewer_name}"
+    assert str(reviewer_cell.style) == sanity_color
+    token = f"{sanity_glyph} {reviewer_name}"
+    start = severity_table.plain.index(token)
+    assert any(span.start == start and span.end == start + len(token)
+               and str(span.style) == sanity_color for span in severity_table.spans)
 
     glyph, color = dev_icon
-    assert icon_for(next(agent for agent in agents if agent.name == "dev-sanity")) == dev_icon
-    token = f"{glyph} dev-sanity"
+    assert icon_for(dev) == dev_icon
+    token = f"{glyph} alice"
     start = main.plain.index(token)
     assert any(span.start <= start < span.end and str(span.style) == color for span in main.spans)
 
@@ -172,10 +171,12 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
     run_scenario(scenario())
 
 
-@pytest.mark.parametrize(("status", "reason", "color"), [
-    ("open", None, "#4A5AF8"), ("closed", "PASS", "#2EA043"), ("closed", "FAIL", "#F85149"),
+@pytest.mark.parametrize(("status", "reason", "qa_state", "color"), [
+    ("open", None, QaState.RUNNING, "#4A5AF8"),
+    ("closed", "PASS", QaState.PASS, "#2EA043"),
+    ("closed", "FAIL", QaState.FAIL, "#F85149"),
 ])
-def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_path, status, reason, color) -> None:
+def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_path, status, reason, qa_state, color) -> None:
     qa = {"id": "qa-1", "status": status, "closed_at": "2026-10-02T13:14:00Z", "close_reason": reason,
           "metadata": {"sprint": "bj-4", "round": 1}}
     finding = {"id": "f1", "description": "issue", "design": "correction", "severity": "important",
@@ -183,6 +184,7 @@ def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_pat
                "metadata": {"severity": "important", "reviewer": "req-qa"},
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
     reviewer = replace(RUNNING.agents[0], name="req-qa", agent_type="qa")
+    assert icon_for(replace(reviewer, qa_state=qa_state)) == ("\U000f029b", color)
     snapshot = replace(SNAPSHOT, agents=(reviewer,))
     monkeypatch.setattr(runs, "run_findings", lambda *_args: [finding])
     rendered = []
@@ -205,8 +207,10 @@ def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_pat
             await pending[-1]
             blocks = widget.query(MarkdownBlock)
             content = next(block._content for block in blocks if "req-qa" in block._content.plain)
-            assert "\U000f029b req-qa" in content.plain
-            assert any(str(span.style) == color for span in content.spans)
+            assert content.plain == "Reviewer: \U000f029b req-qa"
+            reviewer_start = len("Reviewer: ")
+            assert any(span.start == reviewer_start and span.end == len(content.plain)
+                       and str(span.style) == color for span in content.spans)
             assert finding["reviewer"] == "req-qa"
             assert rendered[0]["reviewer"] == "req-qa"
             assert rendered[0]["reviewer_display"] == "\U000f029b req-qa"
