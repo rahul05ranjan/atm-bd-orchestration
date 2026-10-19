@@ -12,6 +12,7 @@ import subprocess
 
 import pytest
 
+from task_close_world import World as HookWorld, hook as close_hook
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 LOADER = importlib.machinery.SourceFileLoader("sanity_stack_link", str(SCRIPTS / "sanity-stack-link"))
@@ -421,12 +422,9 @@ def test_rebase_then_real_sanity_hook_preserves_round_and_hands_off(world, tmp_p
     result = world.link(rival)
     assert result["result"] == "stacked"
 
-    test_spec = importlib.util.spec_from_file_location("bj3_hook_tests", SCRIPTS / "tests/test_task_close.py")
-    tests = importlib.util.module_from_spec(test_spec)
-    test_spec.loader.exec_module(tests)
     hook_root = tmp_path / "hook"
     hook_root.mkdir()
-    hook = tests.World(hook_root, monkeypatch)
+    hook = HookWorld(hook_root, monkeypatch)
     hook.beads["phase.stack"] = world.bead
     hook.beads[hook.values["sanity_bead"]]["metadata"]["sanity_round"] = 2
     hook.values.update(stack_bead="phase.stack", branch="rival", commit=rival["commit"],
@@ -436,7 +434,7 @@ def test_rebase_then_real_sanity_hook_preserves_round_and_hands_off(world, tmp_p
     world.hook = hook
     output, errors = io.StringIO(), io.StringIO()
     with redirect_stdout(output), redirect_stderr(errors):
-        code = tests.hook.main(["--role", "sanity", "--vars", str(hook.path)], runner=world, clock=world.clock)
+        code = close_hook.main(["--role", "sanity", "--vars", str(hook.path)], runner=world, clock=world.clock)
     assert code == 0, errors.getvalue()
     outcome = json.loads(output.getvalue())
     assert "ok" in outcome

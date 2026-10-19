@@ -105,6 +105,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/jev_receipts.py
     - skills/atm-bd-orchestration/scripts/tests/rendering.py
     - skills/atm-bd-orchestration/scripts/tests/subprocess_helpers.py
+    - skills/atm-bd-orchestration/scripts/tests/task_close_world.py
     - skills/atm-bd-orchestration/scripts/tests/test_agent_prompts.py
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
     - skills/atm-bd-orchestration/scripts/tests/test_atm_hook_doctor.py
