@@ -1,11 +1,9 @@
-"""Package test setup: put install.py and tests/ on sys.path, and keep pytest out of
-skills/ and agents/ (their suites run against an installed copy, from
-tests/test_skill_suites.py)."""
+"""Set package test import paths and run skill suites against an installed copy."""
 import sys
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent
-for path in (PKG, PKG / "tests"):
+for path in (PKG, PKG / "tests", PKG / "skills/atm-bd-orchestration/scripts/tests"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 

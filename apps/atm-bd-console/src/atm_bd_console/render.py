@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, tzinfo
+
 from rich.cells import cell_len
 from rich.text import Text
 
@@ -41,8 +43,10 @@ _STATUSES = {
 }
 
 
-def _clock(value, *, seconds: bool = False) -> str:
-    return value.astimezone().strftime("%H:%M:%S" if seconds else "%H:%M")
+def clock(value: datetime, *, seconds: bool = False, local_zone: tzinfo | None = None) -> str:
+    """Format a timestamp in local time, optionally using an injected zone."""
+    local_time = value.astimezone(local_zone) if local_zone is not None else value.astimezone()
+    return local_time.strftime("%H:%M:%S" if seconds else "%H:%M")
 
 
 def _age(age_s: int) -> str:
@@ -179,7 +183,7 @@ def _pr_link(line: Text, number: int, snapshot: Snapshot) -> None:
 
 def _sent_line(action: Action, snapshot: Snapshot) -> Text:
     beads = ", ".join(short_id(bead_id, snapshot.bead_prefix) for bead_id in action.bead_ids)
-    line = Text(f" {_clock(action.at)} {beads} → ")
+    line = Text(f" {clock(action.at)} {beads} → ")
     recipient = next((agent for agent in snapshot.agents if agent.name == action.to), None)
     line.append_text(render_agent(action.to, recipient))
     matching = next((row for row in snapshot.prs if row.bead_id in action.bead_ids), None)
@@ -195,9 +199,9 @@ def _beads_error(snapshot: Snapshot) -> tuple[str, str]:
 
 
 def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
-    lines = [Text(f"phase-{snapshot.phase} · {_clock(snapshot.generated_at)} · next {snapshot.interval_s}s")]
+    lines = [Text(f"phase-{snapshot.phase} · {clock(snapshot.generated_at)} · next {snapshot.interval_s}s")]
     if snapshot.stopped == "closed":
-        lines.append(Text(f"stopped: phase closed {_clock(snapshot.generated_at)}"))
+        lines.append(Text(f"stopped: phase closed {clock(snapshot.generated_at)}"))
     elif snapshot.stopped == "idle":
         lines.append(Text("stopped: idle 60 min"))
     if snapshot.phase_data is None:
@@ -209,7 +213,7 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
     if snapshot.errors:
         lines.extend((Text(), Text(f"== Errors ({len(snapshot.errors)})")))
         # Error carries no time of its own, so each row shows the tick that surfaced it (generated_at), not the mock's per-error time.
-        lines.extend(Text(f" {_clock(snapshot.generated_at)} {_error_text(error)}") for error in snapshot.errors)
+        lines.extend(Text(f" {clock(snapshot.generated_at)} {_error_text(error)}") for error in snapshot.errors)
     for section in snapshot.sections:
         if not section.rows:
             continue
@@ -248,7 +252,7 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
 
 def github_pause(gh: GhStatus, *, compact: bool = False) -> str:
     resource = "graphql" if gh.mode == "graphql" else "core"
-    reset = _clock(gh.quota_reset) if gh.quota_reset else "unknown"
+    reset = clock(gh.quota_reset) if gh.quota_reset else "unknown"
     reason = "rate limited" if gh.rate_limited else f"below {gh.quota_threshold}{'%' if compact else ' percent'}"
     if compact:
         return f"GitHub paused: {gh.quota_remaining}/{gh.quota_limit} {resource}, {reason}, reset {reset}"
@@ -270,7 +274,7 @@ def github_quotas(gh: GhStatus, now) -> str:
         parts.append(f"{resource} {value}{marker}")
         if reset is not None:
             resets.append(reset)
-    reset_text = _clock(min(resets)) if resets else "--:--"
+    reset_text = clock(min(resets)) if resets else "--:--"
     line = f"gh {' · '.join(parts)} · reset {reset_text}"
     if gh.quota_at is not None:
         age = (now - gh.quota_at).total_seconds()
@@ -284,7 +288,7 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     if gh.mode == "off":
         segment = "gh: off"
     else:
-        read_at = _clock(gh.at) if gh.at else "--:--"
+        read_at = clock(gh.at) if gh.at else "--:--"
         if gh.paused:
             segment = github_pause(gh, compact=width < 100)
         elif gh.error is not None or gh.ok is False:
@@ -313,9 +317,9 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
             short_status = f"{gh.mode} {STATUS_OK}"
         if gh.truncated:
             short_status += " 100+"
-        line = Text(f"{prefix}{short_status} | {progress} | tick {_clock(snapshot.generated_at, seconds=True)} | gh poll {gh.poll_interval_s}s / {gh.quota_threshold}% | active {hours}h{minutes:02d}m")
+        line = Text(f"{prefix}{short_status} | {progress} | tick {clock(snapshot.generated_at, seconds=True)} | gh poll {gh.poll_interval_s}s / {gh.quota_threshold}% | active {hours}h{minutes:02d}m")
     else:
-        line = Text(f"{prefix}{segment} | {progress} | active {hours}h{minutes:02d}m | tick {_clock(snapshot.generated_at, seconds=True)}")
+        line = Text(f"{prefix}{segment} | {progress} | active {hours}h{minutes:02d}m | tick {clock(snapshot.generated_at, seconds=True)}")
     if snapshot.lead:
         agent = next((item for item in snapshot.agents if item.name == snapshot.lead), None)
         line.append(" | lead ")

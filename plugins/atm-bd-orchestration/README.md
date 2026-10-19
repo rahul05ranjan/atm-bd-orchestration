@@ -154,7 +154,7 @@ the Jev transport at `.claude/skills/atm-bd-orchestration/scripts/jev_client.py`
 ### Phase settings
 
 Each tracked `.atm-bd/phase-<x>.toml` owns its nonempty `lead` and mandatory
-`[templates]` table: `dev`, `dev_fix`, `fix`, `sanity`, `qa`, `plan_review`,
+`[templates]` table: `dev`, `fix`, `sanity`, `qa`, `plan_review`,
 and `review`. Paths must name existing repository-relative files inside
 `.claude/skills/atm-bd-orchestration/templates/`. Runtime readers report missing
 settings and dangling paths; they never fall back to the generated YAML,
@@ -169,9 +169,10 @@ for the complete file and purpose mapping. Update `lead` there for a handoff.
 
 On upgrade, rerun the installer to remove the old repository YAML `lead`, and
 add `lead` plus all seven template entries to each active phase file before
-running phase commands. The installer preserves unrelated `roles.lead` launcher
-metadata but neither reads it nor writes it as a phase lead. `--set lead=...`
-and console/viewer `--as` are not supported.
+running phase commands. The installer reads `roles.lead` only for
+`team_lead_member`, the ANC-057 round-cap recipient, and preserves it rather
+than writing it as a phase lead. `--set lead=...` and console/viewer `--as`
+are not supported.
 
 ## Ownership and upgrades
 

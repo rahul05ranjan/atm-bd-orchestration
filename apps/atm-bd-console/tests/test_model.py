@@ -559,8 +559,8 @@ def test_rejected_step_is_not_dispatched_even_if_source_retains_it() -> None:
 
 
 def test_hold_is_shown_and_sent_once_then_batched() -> None:
-    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="missing")
-    supplied = inputs(phase(candidate))
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee=None, branch="missing")
+    supplied = inputs(phase(candidate), lead="solar")
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
     assert snapshot.sections[0].label == "Held"
     assert snapshot.sections[0].rows[0].bead_id == "qa"
@@ -639,9 +639,9 @@ def test_ready_step_without_branch_reports_one_meaningful_configuration_problem(
 
 
 def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> None:
-    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="topic", target="base")
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee=None, branch="topic", target="base")
     conflict = Merge("topic", "base", MergeState.CONFLICT, ("model.py", "dispatch.py"), (), NOW)
-    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+    supplied = inputs(phase(candidate), lead="solar", remotes=Ok((RemoteRef("topic", "sha"),)),
                       worktrees=Ok(()), merges=(Ok(conflict),))
 
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
@@ -672,9 +672,9 @@ def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> 
 
 
 def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
-    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee="solar", branch="sprint/bh-1",
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee=None, branch="sprint/bh-1",
                      worktree="/worktrees/atm-bh-1")
-    common = inputs(phase(candidate), remotes=Ok((RemoteRef("sprint/bh-1", "sha"),)),
+    common = inputs(phase(candidate), lead="solar", remotes=Ok((RemoteRef("sprint/bh-1", "sha"),)),
                     worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
     conflict = Merge("sprint/bh-1", "sprint/bh-1", MergeState.CONFLICT, ("model.py",), (), NOW)
     snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)

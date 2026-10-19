@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from contract_fixtures import RUNNING
 from textual.worker import WorkerCancelled
 
 from atm_bd_console import app as console
-from atm_bd_console.types import Config, Snapshot, State
+from atm_bd_console.types import Config, Snapshot, State, StepResult
 
 
 @pytest.fixture
@@ -18,6 +19,8 @@ def phase_repo(tmp_path: Path) -> Path:
     root = tmp_path / "phase-repo"
     shutil.copytree(Path(__file__).parent / "fixtures/beads/repo", root)
     (root / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
+    subprocess.run(("git", "init", "-q", str(root)), check=True)
+    subprocess.run(("git", "-C", str(root), "remote", "add", "origin", "https://github.com/example/repo.git"), check=True)
     return root
 
 # Only the system directories a fake script or a source's own subprocess needs; never the caller's PATH.
@@ -28,13 +31,14 @@ HANG_GUARD_S = 60
 
 
 class FakeStep:
-    def __init__(self, snapshot: Snapshot = RUNNING) -> None:
+    def __init__(self, snapshot: Snapshot = RUNNING, run_data=None) -> None:
         self.snapshot = snapshot
         self.calls: list[bool] = []
+        self.run_data = run_data
 
-    def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+    def __call__(self, config: Config, state: State, force_github: bool) -> StepResult:
         self.calls.append(force_github)
-        return self.snapshot, state
+        return StepResult(self.snapshot, state, run_data=self.run_data)
 
 
 @pytest.fixture(autouse=True)

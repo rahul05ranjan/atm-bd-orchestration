@@ -5,15 +5,19 @@ import subprocess
 import pytest
 
 COMMAND_TIMEOUT = 30
-SUITE_TIMEOUT = None   # a suite's verdict is its own result, never a wall-clock race; the CI job timeout is the hang backstop
+HANG_GUARD_SECONDS = 60
+SUITE_TIMEOUT = 1200  # generous hang backstop, shorter than the 30-minute CI job timeout
 OUTPUT_TAIL = 16000
 
 
-def run_command(command, *, timeout=COMMAND_TIMEOUT, check=False, **kwargs):
-    kwargs.setdefault("stdout", subprocess.PIPE)
-    kwargs.setdefault("stderr", subprocess.PIPE)
+def run_command(command, *, timeout=COMMAND_TIMEOUT, check=False, runner=None, **kwargs):
+    if not kwargs.get("capture_output"):
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+    if kwargs.get("input") is None and "stdin" not in kwargs:
+        kwargs["stdin"] = subprocess.DEVNULL
     try:
-        return subprocess.run(command, timeout=timeout, check=check, **kwargs)
+        return (runner or subprocess.run)(command, timeout=timeout, check=check, **kwargs)
     except subprocess.TimeoutExpired as error:
         def tail(output):
             if isinstance(output, bytes):

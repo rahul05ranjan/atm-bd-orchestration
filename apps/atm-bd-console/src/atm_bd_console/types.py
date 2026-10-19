@@ -8,6 +8,7 @@ from typing import Any, Literal, TypeAlias
 from .enums import CiState, MergeState, PrState, QaState, SprintState
 from .migrations import migrate_pull_request_ci, migrate_snapshot_ci
 from .result import Error, Result
+from .step_result import StepResult
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
 StepKind: TypeAlias = Literal["dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"]
@@ -206,6 +207,8 @@ class Config:
     notification_sender: str = DEFAULT_NOTIFICATION_SENDER
     github_poll_interval_s: int = 600
     github_quota_threshold: int = 50
+    code_root: str = ""
+    github_repo: str = ""
 
 
 @dataclass(frozen=True)
@@ -396,6 +399,7 @@ class PhaseFile:
     depends_on: Mapping[str, tuple[str, ...]]
     lead: str
     templates: Mapping[str, str]
+    code_checkout: str | None = None
 
 
 @dataclass(frozen=True)
@@ -422,4 +426,4 @@ class ActionLine:
 
 
 SpecFn: TypeAlias = Callable[[DispatchContext], Result[DispatchSpec]]
-StepFn: TypeAlias = Callable[[Config, State, bool], tuple[Snapshot, State]]
+StepFn: TypeAlias = Callable[[Config, State, bool], StepResult]

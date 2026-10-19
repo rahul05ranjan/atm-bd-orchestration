@@ -30,9 +30,15 @@ sequenceDiagram
   alt PASS
     S->>B: bd close sanity "PASS at sha"
   else FAIL
-    S->>B: sanity-create-findings: one child of dev per undone deliverable
-    S->>B: reopen dev, leave sanity open (re-blocked by its edge)
-    L->>A: atm task assign D --task-id dev-bead-id (dev-fix.xml.j2)
+    S->>B: hook increments metadata.sanity_round
+    alt round at most max_sanity_rounds (default 5)
+      S->>B: hook reopens dev, resets sanity open and unassigned
+      S->>D: hook sends sanity-fail: numbered undone deliverables and reasons
+      Note over D: existing dev task stays open; fix, rebase, push, rerun hook
+    else round exceeds max_sanity_rounds
+      S->>L: hook sends SANITY.ROUND_CAP once
+      Note over S,B: dev stays closed; sanity is not reset; no finding children
+    end
   end
   S->>A: atm task close sanity-bead-id
   L->>B: bd ready
@@ -55,7 +61,7 @@ Each ATM task id equals its bead id (correlation.md).
 
 | Fact | Where it is written |
 | --- | --- |
-| sanity result | sanity bead `close_reason` "PASS at sha"; FAIL leaves child findings "deliverable-N NOT complete" |
+| sanity result | sanity bead `close_reason` "PASS at sha"; FAIL increments `metadata.sanity_round` and sends numbered undone deliverables through `sanity-fail`, without finding children |
 | QA verdict | qa bead `close_reason` |
 | round | `metadata.round` on qa and fix beads |
 | severity | `metadata.severity` on fix and finding beads |

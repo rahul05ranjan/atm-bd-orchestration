@@ -89,7 +89,7 @@ PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (ST
 PHASE_TEMPLATES = {
     purpose: f".claude/skills/atm-bd-orchestration/templates/{filename}.xml.j2"
     for purpose, filename in (
-        ("dev", "dev-template"), ("dev_fix", "dev-fix"), ("fix", "fix-assignment"),
+        ("dev", "dev-template"), ("fix", "fix-assignment"),
         ("sanity", "dev-sanity-template"), ("qa", "qa-template"),
         ("plan_review", "plan-review-template"), ("review", "review-template"),
     )
@@ -111,7 +111,8 @@ REPO_CONFIG = RepoConfig(
     "atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", ".claude/project/quality-policy.md",
     ("req-qa", "arch-qa"), "docs/plans",
 )
-CONFIG = Config("bh", "fenix", "atm-dev", "rest", 60, True, True, "/repo", ".atm-bd/atm-bd-console")
+CONFIG = Config("bh", "fenix", "atm-dev", "rest", 60, True, True, "/repo", ".atm-bd/atm-bd-console",
+                code_root="/code", github_repo="owner/repo")
 DISPATCH_CONTEXT = DispatchContext(
     STEP, SPRINT, "bh", "atm-bd-console", "fenix", "0123456789abcdef", "integrate/phase-bh",
     "/worktrees/sprint/bh-6-tick-rules", PULL_REQUEST, (PULL_REQUEST,), REPO_CONFIG,

@@ -4,9 +4,11 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
+from . import command
 from .atm_bd import REPO_CONFIG_PATH, phase_file
 from .paths import console_config_path, state_directory
 from .result import ConfigInvalid, Err, IoFailed, Ok, Result
@@ -16,6 +18,59 @@ _GITHUB = frozenset(("graphql", "rest", "off"))
 # The documented cron schedule (SKILL.md: every 15 minutes). A tick's snapshot is judged stale after twice its
 # interval, so the cron's cadence is the interval it records; the interval in console.toml is the TUI's.
 CRON_CADENCE_S = 900
+CODE_REPO_FIX = "set code_checkout to that repository's primary checkout"
+
+
+def _github_repo(origin: str) -> str | None:
+    """Extract owner/repo from a GitHub HTTPS, SSH, or SCP-style origin URL."""
+    scp = re.fullmatch(r"git@github\.com:([^/]+)/([^/]+)", origin)
+    if scp:
+        owner, name = scp.groups()
+    else:
+        parsed = urlsplit(origin)
+        if parsed.hostname is None or parsed.hostname.lower() != "github.com":
+            return None
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) != 2:
+            return None
+        owner, name = parts
+    name = name.removesuffix(".git")
+    if not owner or not name or any(char.isspace() for char in owner + name):
+        return None
+    return f"{owner}/{name}"
+
+
+def code_repository(root: Path, checkout: str | None) -> Result[tuple[str, str]]:
+    """Resolve the optional code checkout and its explicit GitHub repository identity."""
+    try:
+        code_root = (root / checkout).resolve() if checkout is not None else root.resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        return Err(ConfigInvalid("config_invalid", "code_checkout", repr(checkout),
+                                 f"{CODE_REPO_FIX}: {error}"))
+    fix = f"{CODE_REPO_FIX}; origin must be a GitHub repository URL"
+    top = command.run(("git", "rev-parse", "--show-toplevel"), fix, cwd=code_root)
+    if isinstance(top, Err):
+        return Err(ConfigInvalid("config_invalid", "code_checkout", str(code_root),
+                                 f"{CODE_REPO_FIX}; path is not a git checkout"))
+    try:
+        actual_top = Path(top.value.stdout.strip()).resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        return Err(ConfigInvalid("config_invalid", "code_checkout", str(code_root),
+                                 f"{CODE_REPO_FIX}; could not resolve git toplevel: {error}"))
+    if actual_top != code_root:
+        return Err(ConfigInvalid("config_invalid", "code_checkout", str(code_root),
+                                 f"{CODE_REPO_FIX}; use the primary checkout at {actual_top}"))
+    origin_result = command.run(("git", "remote", "get-url", "origin"), fix, cwd=code_root)
+    if isinstance(origin_result, Err):
+        return Err(ConfigInvalid("config_invalid", "code_checkout.origin", str(code_root),
+                                 f"set origin in the code checkout to a GitHub repository URL; {origin_result.error}"))
+    origin = origin_result.value.stdout.strip()
+    repo = _github_repo(origin)
+    if repo is None:
+        return Err(ConfigInvalid("config_invalid", "code_checkout.origin", repr(origin),
+                                 "set origin in the code checkout to a GitHub repository URL such as "
+                                 "https://github.com/owner/repo.git"))
+    return Ok((str(code_root), repo))
 
 
 def repo_root() -> Path:
@@ -109,7 +164,11 @@ def load_config(
     phase_settings = phase_file(str(root), phase)
     if isinstance(phase_settings, Err):
         return phase_settings
+    code_repo = code_repository(root, phase_settings.value.code_checkout)
+    if isinstance(code_repo, Err):
+        return code_repo
     state_dir = state_directory(root, f"atm-phase-{phase}")
     return Ok(Config(phase, phase_settings.value.lead, team.value, chosen_github, chosen_interval, dry_run, no_fetch,
                      str(root), str(state_dir), notification_sender=notification_sender,
-                     github_poll_interval_s=poll_interval, github_quota_threshold=quota_threshold))
+                     github_poll_interval_s=poll_interval, github_quota_threshold=quota_threshold,
+                     code_root=code_repo.value[0], github_repo=code_repo.value[1]))

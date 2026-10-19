@@ -11,12 +11,21 @@ from atm_bd_console.icons import (
     AGENT_ICONS,
     CI_ICONS,
     PR_ICONS,
+    SANITY_VERDICT_ICONS,
     SPRINT_ICONS,
     icon,
     icon_for,
     merge_icon,
 )
 from atm_bd_console.types import AgentView, Member
+
+
+def test_sanity_verdict_glyphs() -> None:
+    assert SANITY_VERDICT_ICONS == {
+        "PASS": ("\U000f029b", "#2EA043"),
+        "FAIL": ("\U000f029b", "#F85149"),
+        "API_FAILURE": ("\U000f0026", "#D29922"),
+    }
 
 
 def test_model_icons_are_case_insensitive_and_use_harness_fallbacks() -> None:

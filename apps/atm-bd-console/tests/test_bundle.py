@@ -147,6 +147,7 @@ def test_wheel_sdist_and_rebuilt_wheel_bundle_every_file(tmp_path: Path, bundle_
 def test_sdist_rejects_identity_without_valid_commit(tmp_path: Path, bundle_checkout: Path, commit_value) -> None:
     app = bundle_checkout / "apps" / "atm-bd-console"
     shutil.copy2(APP / "hatch_build.py", app / "hatch_build.py")
+    shutil.copy2(APP / "src/atm_bd_console/skill_integrity.py", app / "src/atm_bd_console/skill_integrity.py")
     source = tmp_path / "source"
     run(*build_command("--sdist", "--out-dir", str(source)), cwd=app)
     unpacked = tmp_path / "unpacked"

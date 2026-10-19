@@ -16,12 +16,31 @@ from .result import CommandFailed, Err, Ok, ParseFailed, Rejected, Timeout, Unre
 from .types import GhStatus, PullRequest
 
 GRAPHQL = """query($owner: String!, $name: String!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequests(states: [OPEN, CLOSED, MERGED], first: 100, after: $cursor, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount pageInfo { hasNextPage endCursor } nodes { number url state isDraft headRefName baseRefName headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { totalCount nodes { ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } } } } } }"""
-# The repository is the checkout gh runs in: gh fills {owner} and {repo} from it (or from GH_REPO).
-GRAPHQL_ARGV = ("gh", "api", "graphql", "-F", "owner={owner}", "-F", "name={repo}", "-f", f"query={GRAPHQL}")
-REST_ARGV = ("gh", "api", "repos/{owner}/{repo}/pulls?state=all&per_page=100")
 FAILURES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT"}
 REQUEST_TIMEOUT_S = 20
-QUOTA_ARGV = ("gh", "api", "rate_limit")
+
+
+def _repo_parts(github_repo: str) -> tuple[str, str]:
+    owner, separator, name = github_repo.partition("/")
+    if not separator or not owner or not name or "/" in name:
+        raise ValueError("github_repo must be owner/name")
+    return owner, name
+
+
+def graphql_argv(github_repo: str) -> tuple[str, ...]:
+    owner, name = _repo_parts(github_repo)
+    return ("gh", "api", "graphql", "-F", f"owner={owner}", "-F", f"name={name}",
+            "-f", f"query={GRAPHQL}")
+
+
+def rest_argv(github_repo: str) -> tuple[str, ...]:
+    _repo_parts(github_repo)
+    return ("gh", "api", f"repos/{github_repo}/pulls?state=all&per_page=100")
+
+
+def quota_argv(github_repo: str) -> tuple[str, ...]:
+    _repo_parts(github_repo)
+    return ("gh", "api", "rate_limit")
 
 
 def _quota_entry(resources, resource):
@@ -33,9 +52,9 @@ def _quota_entry(resources, resource):
 
 
 class Budget:
-    def __init__(self, mode: Literal["graphql", "rest"], repo_root: str | Path | None,
-                 threshold: int, interval_s: int, now: datetime, previous: GhStatus):
-        self.mode, self.repo_root, self.now = mode, repo_root, now
+    def __init__(self, mode: Literal["graphql", "rest"], code_root: str | Path | None,
+                 threshold: int, interval_s: int, now: datetime, previous: GhStatus, github_repo: str):
+        self.mode, self.code_root, self.now, self.github_repo = mode, code_root, now, github_repo
         if previous.mode != mode:
             previous = GhStatus(mode, None, None, None, False)
         self.status = replace(previous, mode=mode, quota_threshold=threshold, poll_interval_s=interval_s)
@@ -44,7 +63,8 @@ class Budget:
         status = self.status
         if status.paused and status.quota_reset is not None and self.now < status.quota_reset:
             return Err(CommandFailed("command_failed", argv, 1, "GitHub polling paused until reset", "wait for the quota reset"))
-        quota = command.run(QUOTA_ARGV, "check GitHub quota and retry", cwd=self.repo_root, timeout_s=REQUEST_TIMEOUT_S)
+        quota = command.run(quota_argv(self.github_repo), "check GitHub quota and retry", cwd=self.code_root,
+                            timeout_s=REQUEST_TIMEOUT_S)
         if isinstance(quota, Err):
             return quota
         resource = "graphql" if self.mode == "graphql" else "core"
@@ -148,10 +168,10 @@ def _from_graphql(node: dict) -> PullRequest:
                        ci_state_of(raw_ci, None, failed), failed, state, raw_ci, raw_state)
 
 
-def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | None = None,
-             branch_groups: tuple[tuple[str, ...], ...] = (), budget: Budget | None = None):
-    """Open pull requests of the repository checked out at `repo_root` (default: the current directory)."""
-    result, status = _open_prs(mode, repo_root, branch_groups, budget)
+def open_prs(mode: Literal["graphql", "rest", "off"], code_root: str | Path | None,
+             branch_groups: tuple[tuple[str, ...], ...], budget: Budget | None, github_repo: str):
+    """Open pull requests for an explicit GitHub repo, using its checkout as the command directory."""
+    result, status = _open_prs(mode, code_root, branch_groups, budget, github_repo)
     if budget is not None:
         status = replace(status, quota_remaining=budget.status.quota_remaining, quota_limit=budget.status.quota_limit,
                          quota_reset=budget.status.quota_reset, paused=budget.status.paused,
@@ -163,12 +183,12 @@ def open_prs(mode: Literal["graphql", "rest", "off"], repo_root: str | Path | No
     return result, status
 
 
-def _open_prs(mode, repo_root, branch_groups, budget):
+def _open_prs(mode, code_root, branch_groups, budget, github_repo):
     if mode == "off":
         return Ok(()), _status("off", None)
     run = budget.run if budget is not None else command.run
-    argv = GRAPHQL_ARGV if mode == "graphql" else REST_ARGV
-    completed = run(argv, "check GitHub connectivity and retry", cwd=repo_root, timeout_s=REQUEST_TIMEOUT_S)
+    argv = graphql_argv(github_repo) if mode == "graphql" else rest_argv(github_repo)
+    completed = run(argv, "check GitHub connectivity and retry", cwd=code_root, timeout_s=REQUEST_TIMEOUT_S)
     if isinstance(completed, Err):
         failure = completed.error
         if isinstance(failure, CommandFailed):
@@ -194,8 +214,8 @@ def _open_prs(mode, repo_root, branch_groups, budget):
                 if not isinstance(cursor, str) or not cursor or cursor in cursors:
                     raise ValueError("invalid or repeated GitHub pagination cursor")
                 cursors.add(cursor)
-                page_argv = (*GRAPHQL_ARGV, "-f", f"cursor={cursor}")
-                response = run(page_argv, "check GitHub connectivity and retry", cwd=repo_root, timeout_s=REQUEST_TIMEOUT_S)
+                page_argv = (*graphql_argv(github_repo), "-f", f"cursor={cursor}")
+                response = run(page_argv, "check GitHub connectivity and retry", cwd=code_root, timeout_s=REQUEST_TIMEOUT_S)
                 if isinstance(response, Err):
                     return response, _status(mode, False, response.error)
                 pulls = json.loads(response.value.stdout)["data"]["repository"]["pullRequests"]
@@ -228,8 +248,8 @@ def _open_prs(mode, repo_root, branch_groups, budget):
                 selected[pr.number] = pr
         updates: dict[int, PullRequest] = {}
         for pr in selected.values():
-            checks_argv = ("gh", "api", f"repos/{{owner}}/{{repo}}/commits/{pr.head_sha}/check-runs?per_page=100")
-            response = run(checks_argv, "check GitHub connectivity and retry", cwd=repo_root,
+            checks_argv = ("gh", "api", f"repos/{github_repo}/commits/{pr.head_sha}/check-runs?per_page=100")
+            response = run(checks_argv, "check GitHub connectivity and retry", cwd=code_root,
                                    timeout_s=REQUEST_TIMEOUT_S)
             if isinstance(response, Err):
                 return response, _status(mode, False, response.error)

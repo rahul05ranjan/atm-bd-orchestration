@@ -17,7 +17,8 @@ from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoCo
 # atm-bd conventions (atm-beads sprint_index_common.py): the only place they are named.
 PHASE_DIR = ".atm-bd"
 PHASE_KEYS = ("plan", "root", "integration_branch")
-TEMPLATE_PURPOSES = ("dev", "dev_fix", "fix", "sanity", "qa", "plan_review", "review")
+TEMPLATE_PURPOSES = ("dev", "fix", "sanity", "qa", "plan_review", "review")
+RETIRED_TEMPLATE_PURPOSES = frozenset({"dev_fix"})
 TEMPLATE_DIRECTORY = Path(".claude/skills/atm-bd-orchestration/templates")
 PLAN_KEYS = frozenset({"sprint", "depends_on"})
 PHASE_ID = re.compile(r"[a-z0-9]+")
@@ -138,7 +139,7 @@ def _plan(path: Path) -> Result[tuple[tuple[str, tuple[str, ...]], ...]]:
 
 def _phase_templates(root: Path, raw: object) -> Result[Mapping[str, str]]:
     templates = raw if isinstance(raw, dict) else {}
-    for purpose in sorted(templates.keys() - TEMPLATE_PURPOSES):
+    for purpose in sorted(templates.keys() - TEMPLATE_PURPOSES - RETIRED_TEMPLATE_PURPOSES):
         key = f"templates.{purpose}"
         return Err(ConfigInvalid("config_invalid", key, repr(templates[purpose]), f"remove unknown {key}; use {', '.join(TEMPLATE_PURPOSES)}"))
     for purpose in TEMPLATE_PURPOSES:
@@ -177,6 +178,11 @@ def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
     lead = raw.get("lead")
     if not isinstance(lead, str) or not lead.strip():
         return Err(ConfigInvalid("config_invalid", "lead", repr(lead), f"set lead in {path} to a nonempty ATM identity"))
+    code_checkout = raw.get("code_checkout")
+    if code_checkout is not None and (not isinstance(code_checkout, str) or not code_checkout.strip()
+                                      or Path(code_checkout).is_absolute()):
+        return Err(ConfigInvalid("config_invalid", "code_checkout", repr(code_checkout),
+                                 f"set code_checkout in {path} to a repository-relative path of the code repository"))
     templates = _phase_templates(Path(repo_root), raw.get("templates"))
     if isinstance(templates, Err):
         return templates
@@ -194,7 +200,8 @@ def phase_file(repo_root: str, x: str) -> Result[PhaseFile]:
         return rows
     ids = {name: sprint_bead_id(root_id, x, name) for name, _ in rows.value}
     depends_on = {ids[name]: tuple(ids[item] for item in items) for name, items in rows.value}
-    return Ok(PhaseFile(x, root_id, _phase_label(x), tuple(ids.values()), depends_on, lead=lead, templates=templates.value))
+    return Ok(PhaseFile(x, root_id, _phase_label(x), tuple(ids.values()), depends_on, lead=lead,
+                        templates=templates.value, code_checkout=code_checkout))
 
 
 def _yaml_scalars(text: str) -> dict[str, Any]:

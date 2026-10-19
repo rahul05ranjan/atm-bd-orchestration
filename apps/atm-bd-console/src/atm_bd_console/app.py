@@ -1,15 +1,17 @@
 """The interactive console: one Textual app over an injected step function."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import ClassVar, Protocol
 
+from markdown_it.token import Token
 from rich.cells import cell_len
 from rich.text import Text
 from sc_observability import Level
@@ -17,23 +19,53 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, ScrollableContainer, VerticalScroll
+from textual.css.query import NoMatches
 from textual.errors import NoWidget
 from textual.message import Message
-from textual.widgets import OptionList, Static, TabbedContent, TabPane
+from textual.widgets import Markdown, OptionList, Static, TabbedContent, TabPane
+from textual.widgets._markdown import MarkdownBlock
 from textual.widgets._tabbed_content import ContentTab
 from textual.widgets.option_list import Option
 
-from . import prs, render, status, status_table
+from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .build import display_identity, identity
 from .enums import SprintState
-from .icons import SPRINT_ICONS
+from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
-from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn
+from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn, StepResult
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
+
+
+class FindingsMarkdown(Markdown):
+    """Render the strict Markdown document while retaining roster icon colours."""
+
+    reviewer_colors: dict[str, str]
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.reviewer_colors = {}
+
+    def _parse_markdown(self, tokens: Iterable[Token]) -> Iterable[MarkdownBlock]:
+        def color(block: MarkdownBlock) -> None:
+            content = block._content
+            source = (block.source or "").lstrip()
+            prefix = "Reviewer: "
+            if source.startswith("**Reviewer:**") and content.plain.startswith(prefix):
+                display = content.plain[len(prefix):]
+                style = self.reviewer_colors.get(display)
+                if style:
+                    content = content.stylize(style, len(prefix), len(content.plain))
+            block.set_content(content)
+            for child in block._blocks:
+                color(child)
+
+        for block in super()._parse_markdown(tokens):
+            color(block)
+            yield block
 
 
 class _DiagnosticEvent(Protocol):
@@ -59,7 +91,7 @@ def status_header(snapshot: Snapshot) -> Text:
 
 def _diagnostic_line(event: _DiagnosticEvent) -> str:
     """Add local display time and level to a stored message without interpreting it."""
-    return f"{render._clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
+    return f"{render.clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
 
 
 def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text:
@@ -72,6 +104,72 @@ def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text
             line.no_wrap = True
             lines.append(line)
     return Text("\n").join(lines)
+
+
+def _run_time(value: str, *, local_zone: tzinfo | None = None) -> str:
+    try:
+        return render.clock(datetime.fromisoformat(value), local_zone=local_zone)
+    except ValueError:
+        return "—"
+
+
+def _verdict(row: dict | None) -> Text:
+    if not row:
+        return Text("—")
+    kind = "API_FAILURE" if row.get("kind") == "API_FAILURE" else row.get("verdict")
+    glyph, color = SANITY_VERDICT_ICONS.get(str(kind), ("?", None))
+    return Text(glyph, style=color or "")
+
+
+def _duration(value: object) -> str:
+    return f"{value:g}s" if type(value) in (int, float) else "—"  # type: ignore[operator]
+
+
+def _agent_name(name: str | None, agents: tuple[AgentView, ...]) -> Text:
+    if not name:
+        return Text("—")
+    member = next((agent for agent in agents if agent.name == name), None)
+    glyph, color = icon_for(member)
+    result = Text(glyph, style=color or "")
+    result.append(f" {name}")
+    return result
+
+
+def sanity_text(
+    items: list[runs.SanityRun], agents: tuple[AgentView, ...], *, local_zone: tzinfo | None = None,
+) -> tuple[Text, Text]:
+    lines = [Text("Completed  Sprint  PR  Dev  JEV  Elapsed  LLM  Elapsed  Final  Iter")]
+    errors = [Text("Sprint  Iter  Reviewer  Error")]
+    for run in items:
+        line = Text(f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  #{run.pr_number or '—'}  ")
+        line.append_text(_agent_name(run.dev, agents))
+        for row, field in ((run.jev, "jev_elapsed_s"), (run.llm, "llm_elapsed_s")):
+            line.append("  ")
+            line.append_text(_verdict(row))
+            line.append(f"  {_duration(row.get(field) if row else None)}")
+            if row and row.get("kind") == "API_FAILURE":
+                name = str(row.get("reviewer") or "")
+                error = Text(f"{run.sprint}  {run.iteration or '—'}  ")
+                error.append_text(_agent_name(name, agents))
+                error.append("  ")
+                error.append_text(_verdict(row))
+                detail = row.get("error")
+                rendered = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+                error.append(f"  {rendered}")
+                errors.append(error)
+        line.append(f"  {run.final_verdict or '—'}  {run.iteration or '—'}")
+        lines.append(line)
+    return Text("\n").join(lines), Text("\n").join(errors)
+
+
+def _quality_run_label(
+    run: runs.QaRun, findings: list[dict], *, local_zone: tzinfo | None = None,
+) -> str:
+    counts = [sum(f["severity"] == severity for f in findings) for severity in ("blocking", "important", "minor")]
+    verdict = run.verdict.name if run.verdict is not None else "—"
+    return (f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  {run.bead.get('id', '')}  "
+            f"#{run.pr_number or '—'}  {run.round or '—'}  {verdict}  "
+            f"{counts[0]}/{counts[1]}/{counts[2]}  {_duration(run.elapsed_s)}")
 
 
 def _lock_message(error: Error) -> str:
@@ -138,6 +236,10 @@ class ConsoleApp(App[int]):
     Screen { layers: base overlay; }
     #build { layer: overlay; position: absolute; width: auto; height: 1; }
     #diagnostics { height: 1fr; overflow: auto; }
+    #sanity-list { height: 3fr; overflow: auto; }
+    #sanity-errors { height: 2fr; overflow: auto; }
+    #quality-runs { height: 3fr; }
+    #quality-findings { height: 2fr; overflow: auto; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -163,6 +265,15 @@ class ConsoleApp(App[int]):
         self._pending_forced_refresh = False
         self._status_view_initialized = False
         self.show_pr_history = False
+        self.sanity_runs: list[runs.SanityRun] = []
+        self.quality_runs: list[runs.QaRun] = []
+        self.finding_beads: list[dict] = []
+        self.runs_error: str | None = None
+        self._open_quality_runs: list[runs.QaRun] = []
+        self._open_findings: list[dict] = []
+        self._closed_quality_runs: list[runs.QaRun] = []
+        self._closed_findings: list[dict] = []
+        self._quality_error: str | None = None
         # Every mouse press, click, key and tab change with the widget it landed on (#241 evidence).
         self.input_log_path = Path(config.state_dir) / "input.log"
 
@@ -182,6 +293,13 @@ class ConsoleApp(App[int]):
                         yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
+            with TabPane("Sanity", id="sanity"):
+                yield Static(id="sanity-list")
+                yield Static(id="sanity-errors")
+            with TabPane("Quality", id="quality"):
+                yield Static(id="quality-error")
+                yield OptionList(id="quality-runs")
+                yield FindingsMarkdown(id="quality-findings")
             with TabPane("Diagnostics", id="diagnostics"):
                 yield Static(id="diagnostics-text")
         yield Static(id="status-bar")
@@ -207,6 +325,8 @@ class ConsoleApp(App[int]):
 
     def action_refresh(self) -> None:
         self.tick(True)
+        if self.query_one(TabbedContent).active == "quality":
+            self._load_closed_quality()
 
     def action_noop(self) -> None:
         return None
@@ -274,6 +394,32 @@ class ConsoleApp(App[int]):
             self.call_after_refresh(self._refresh_status_viewport)
         elif event.pane.id == "diagnostics":
             self.refresh_views()
+        elif event.pane.id == "quality":
+            self._load_closed_quality()
+
+    @work(thread=True, group="quality", exclusive=True, exit_on_error=False)
+    def _load_closed_quality(self) -> None:
+        result = ledger_source.closed_quality(self.config.repo_root, self.config.phase)
+        self.call_from_thread(self._finish_quality, result)
+
+    def _finish_quality(self, result) -> None:
+        if not self.is_running:
+            return
+        previous = (self._quality_error, self._closed_quality_runs, self._closed_findings)
+        if isinstance(result, Err):
+            self._quality_error = str(result.error)
+        else:
+            self._quality_error = None
+            self._closed_quality_runs, self._closed_findings = result.value
+            self._combine_quality()
+        if previous != (self._quality_error, self._closed_quality_runs, self._closed_findings):
+            self.refresh_views()
+
+    def _combine_quality(self) -> None:
+        qa = {run.bead.get("id"): run.bead for run in (*self._closed_quality_runs, *self._open_quality_runs)}
+        findings = {row.get("id"): row for row in (*self._closed_findings, *self._open_findings)}
+        self.quality_runs = runs.qa_runs(list(qa.values()))
+        self.finding_beads = list(findings.values())
 
     def tick(self, force_github: bool) -> None:
         # Interval ticks are intentionally dropped while work is in flight. Forced
@@ -290,10 +436,15 @@ class ConsoleApp(App[int]):
         text = ""
         error: Error | None = None
         tick_error: Error | None = None
+        run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None = None
+        runs_error = None
         self._step_lock.acquire()
         try:
-            snapshot, state = self.step(self.config, self.state, force_github)
+            step_result = self.step(self.config, self.state, force_github)
+            snapshot, state = step_result
             self.state = state
+            run_data = step_result.run_data
+            runs_error = step_result.runs_error
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
         finally:
@@ -303,9 +454,15 @@ class ConsoleApp(App[int]):
                 text, error = status.status_text(snapshot)
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
-        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error)
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error)
 
-    def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None) -> None:
+    def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None,
+                     run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None,
+                     runs_error: str | None) -> None:
+        if run_data is not None:
+            self.sanity_runs, self._open_quality_runs, self._open_findings = run_data
+            self._combine_quality()
+        self.runs_error = runs_error
         if tick_error is not None:
             self._show_tick_error(tick_error)
         elif snapshot is not None:
@@ -352,10 +509,47 @@ class ConsoleApp(App[int]):
         self.call_after_refresh(self.refresh_views)
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        self._show_sprint(event.option.id)
+        if event.option_list.id == "quality-runs":
+            self._show_findings(event.option.id)
+        else:
+            self._show_sprint(event.option.id)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self._show_sprint(event.option.id)
+        if event.option_list.id == "quality-runs":
+            self._show_findings(event.option.id)
+        else:
+            self._show_sprint(event.option.id)
+
+    def _show_findings(self, bead_id: str | None) -> None:
+        run = next((r for r in self.quality_runs if r.bead.get("id") == bead_id), None)
+        if run is None:
+            return
+        try:
+            findings = runs.run_findings(run.bead, self.finding_beads)
+            agents = self.snapshot.agents if self.snapshot else ()
+            qa_state = run.verdict
+            colors: dict[str, str] = {}
+            display_findings = []
+            for finding in findings:
+                name = str(finding.get("reviewer") or "")
+                roster = tuple(replace(agent, qa_state=qa_state) if agent.name == name and agent.agent_type == "qa" else agent
+                               for agent in agents)
+                label = _agent_name(name, roster)
+                display_findings.append({**finding, "reviewer_display": label.plain})
+                member = next((agent for agent in roster if agent.name == name), None)
+                _, color = icon_for(member)
+                if name and color:
+                    colors[label.plain] = color
+            content = findings_renderer.render_findings(self.config.repo_root, display_findings)
+        except Exception as error:  # noqa: BLE001
+            colors = {}
+            content = f"Unable to render findings: {error}"
+        try:
+            widget = self.query_one("#quality-findings", FindingsMarkdown)
+        except NoMatches:
+            return  # A queued highlight can arrive while the screen is shutting down.
+        widget.reviewer_colors = colors
+        widget.update(content)
 
     def _show_sprint(self, sprint_id: str | None) -> None:
         if self.snapshot is None:
@@ -415,6 +609,26 @@ class ConsoleApp(App[int]):
             header.truncate(width, overflow="ellipsis")
             self.query_one("#status-header", Static).update(header)
             self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
+            sanity, errors = sanity_text(self.sanity_runs, snapshot.agents)
+            if self.runs_error:
+                sanity.append(f"\nUnable to load runs: {self.runs_error}", style="red")
+            self.query_one("#sanity-list", Static).update(sanity)
+            self.query_one("#sanity-errors", Static).update(errors)
+            quality_error = self.query_one("#quality-error", Static)
+            quality_message = self._quality_error or self.runs_error
+            quality_error.update(Text(f"Unable to load runs: {quality_message}", style="red") if quality_message else "")
+            quality_error.display = bool(quality_message)
+            quality = self.query_one("#quality-runs", OptionList)
+            highlighted = quality.highlighted
+            quality.clear_options()
+            options = []
+            for run in self.quality_runs:
+                findings = runs.run_findings(run.bead, self.finding_beads)
+                label = _quality_run_label(run, findings)
+                options.append(Option(label, id=str(run.bead.get("id"))))
+            quality.add_options(options)
+            if options:
+                quality.highlighted = min(highlighted or 0, len(options) - 1)
             self.call_after_refresh(self._refresh_status_viewport)
         if self.tick_error is not None:
             dashboard, header = render.tick_error(self.tick_error, dashboard_width)
@@ -436,7 +650,7 @@ class ConsoleApp(App[int]):
             f"Build: {identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
-RunnerStep = Callable[[Config, State, bool, StateStore], tuple[Snapshot, State]]
+RunnerStep = Callable[[Config, State, bool, StateStore], StepResult]
 
 
 def run(config: Config, step: StepFn | None, state: State, startup_error: Error | None = None, *, runner_step: RunnerStep | None = None) -> int:

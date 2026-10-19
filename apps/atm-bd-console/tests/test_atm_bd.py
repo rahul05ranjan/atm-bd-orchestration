@@ -100,6 +100,23 @@ def test_phase_file_reads_the_real_toml_and_its_plan() -> None:
     assert phase_file(str(REPO), "bh") == Ok(EXPECTED_PHASE_FILE)
 
 
+def test_phase_file_retains_optional_code_checkout_path(repo: Path) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace("[templates]", 'code_checkout = "../code"\n\n[templates]'))
+    result = phase_file(str(repo), "bh")
+    assert isinstance(result, Ok)
+    assert result.value.code_checkout == "../code"
+
+
+@pytest.mark.parametrize("value", ['""', "42", '"/absolute/path"'])
+def test_phase_file_rejects_invalid_code_checkout(repo: Path, value: str) -> None:
+    toml = repo / TOML
+    toml.write_text(toml.read_text().replace("[templates]", f"code_checkout = {value}\n\n[templates]"))
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ConfigInvalid)
+    assert error.key == "code_checkout"
+
+
 def test_phase_file_root_comes_from_the_toml_and_sprints_from_the_plan(repo: Path) -> None:
     toml = repo / TOML
     toml.write_text(toml.read_text().replace('"atm-phase-bh"', '"zz-phase-bh"'))
@@ -290,7 +307,7 @@ def _read(fake_bin) -> tuple[tuple[Bead, ...], tuple[Bead, ...], tuple[Bead, ...
     """One tick's bead reads: open and ready by label, then one batched show of the plan-derived closed ids."""
     _replay_bd(fake_bin)
     file = _ok(PLAN_FILE)
-    open_beads = _ok(beads_source.open_beads(file.label))
+    open_beads = _ok(beads_source.open_rows(file.label)).beads
     ready = _ok(beads_source.ready(file.label))
     shown = _ok(beads_source.show(closed_show_ids(file, open_beads + ready)))
     return open_beads, ready, shown
@@ -308,7 +325,7 @@ def test_closed_ids_are_derived_from_the_plan_and_shown_in_one_batched_call(fake
     open_beads, ready, shown = _read(fake_bin)
     assert closed_show_ids(_ok(PLAN_FILE), open_beads + ready) == CLOSED_IDS
     assert fake_bin.argv() == [
-        ("bd", "list", "-l", "phase-bh", "--json"),
+        ("bd", "list", "-l", "phase-bh", "-n", "0", "--json"),
         ("bd", "ready", "-l", "phase-bh", "--json"),
         ("bd", "show", *CLOSED_IDS, "--json"),
     ]

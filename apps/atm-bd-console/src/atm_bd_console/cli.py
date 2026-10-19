@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from . import atm_bd, atm_source, render, runner, status_table
+from . import atm_bd, atm_source, queues, render, runner, status_table
 from . import config as config_source
 from .build import identity
 from .codec import snapshot_stale, to_json
@@ -60,6 +60,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=CONSOLE_NAME)
     parser.add_argument("--version", action="version", version=identity())
     commands = parser.add_subparsers(dest="command", required=True)
+    queue = commands.add_parser("queues", help="show phase bead queues")
+    queue_where = queue.add_mutually_exclusive_group(required=True)
+    queue_where.add_argument("--phase", help="phase; the root comes from .atm-bd/phase-<phase>.toml")
+    queue_where.add_argument("--root", help="the phase root bead id")
+    queue.add_argument("--all", action="store_true", help="also list not-ready beads with reasons")
+    queue.add_argument("--stack", action="store_true", help="also read the phase stack from GitHub")
+    queue.add_argument("--json", action="store_true", help="print newly dropped rows as one JSON object")
+    queue.add_argument("--min-age", type=int, default=10, help="--json: minutes a row must be old to be reported")
+    queue.add_argument("--state-file")
     for name in ("console", "cron", "show", "snapshot"):
         sub = commands.add_parser(name, help="run one tick and exit" if name == "cron" else None)
         sub.add_argument("--phase")
@@ -77,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("skill", help="install or list atm-bd-orchestration skills; `skill --help` lists its options")
     args = parser.parse_args(argv)
     invocation = f"{CONSOLE_NAME} {args.command}"
+    if args.command == "queues":
+        return queues.main(args, repo_root=config_source.repo_root())
     if not args.phase:
         print(f"{invocation}: --phase <phase> is required; name the phase to run")
         return 3
@@ -88,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render.dashboard(snapshot.value, 120, 80).plain)
             if snapshot.value.stopped is None: print(render.status_bar(snapshot.value, 120).plain)
             return 2 if snapshot.value.phase_data is None else 0
-        last = f" (last tick {render._clock(snapshot.value.generated_at)})" if isinstance(snapshot, Ok) else ""
+        last = f" (last tick {render.clock(snapshot.value.generated_at)})" if isinstance(snapshot, Ok) else ""
         print(f"{invocation}: console is not running for phase {args.phase}{last}; start it: {CONSOLE_NAME} console --phase {args.phase}")
         return 2
     md_table = getattr(args, "md_table", False)
@@ -109,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": f"{invocation}: {_error_text(lock.error)}"}))
             snapshot = load_snapshot(loaded.value.repo_root, root_id)
             if isinstance(snapshot, Ok) and snapshot_stale(snapshot.value, now()):
-                text = f"{invocation}: console stopped updating (last tick {render._clock(snapshot.value.generated_at)})"
+                text = f"{invocation}: console stopped updating (last tick {render.clock(snapshot.value.generated_at)})"
                 print(json.dumps({"at": now().strftime("%Y-%m-%dT%H:%M:%SZ"), "kind": "error", "text": text}))
             return 0
         with lock.value:

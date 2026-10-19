@@ -11,10 +11,10 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 3. Work only on the assigned branch and worktree. Never run `gh stack link/sync/rebase/merge` or `bd sync` (the lead is the stack writer and owns sync); `--actor "$ATM_IDENTITY"` on every `bd` write.
 4. Before claiming: dev rebases onto `origin/<pr_target>` (a conflict is part of the work); dev-fix and fix only fetch (their branch was cut from the stack top). Then run `assignment-gates.py dev`; `READY`: `bd update <bead> --claim`, then `atm task start <bead> "<one line>"`.
 5. `NOT_READY`: do not claim or start; find the blockers; close the task `refused` (`bead_state` open), `reason_md` = bead, cause, who must move and the dependency to add (`bd dep add <bead> --blocked-by <blocker>`). A blocker met mid-task (work another bead or agent owns that is not done; a shared change you can make yourself is a quick fix, 26, and the task continues): return the bead open, unassigned, blocker in notes, close the task `refused` the same way. Never wait.
-6. Any other gate code: reuse a matching workflow class bead (append task id, head, command, evidence) and cite it in the refusal; none matches: report the signature to the task assigner and cite that message; never create a per-task bead.
+6. Any other gate code: close the task `refused` with the code, command and failure evidence in `reason_md`; leave the bead unchanged when the gate fails before claim.
 7. Commit as items land and push early; a push or `atm send` closes nothing.
 8. Never weaken a test, skip a criterion, or leave a placeholder; run `<test_command>` and `<lint_command>` (dev and dev-fix: also the bead's validation commands) to zero failures, including lint failures inherited from a lower layer.
-9. Before closing, the dev rebases onto the stack's current top (`assignment-gates.py stack-top`; any other exit is a code to refuse with, never a guess), re-runs the tests, force-pushes and opens the PR against that top (never draft; a quick-fix finding fixed on a branch that already has its PR keeps that PR), then runs `/sc-gh-stack-view`.
+9. Before closing, the dev rebases onto the stack's current top (`assignment-gates.py stack-top --root <phase-root> --pr-target <pr_target> --worktree <worktree>`; any other exit is a code to refuse with, never a guess), re-runs the tests, force-pushes and opens the PR against that top (never draft; a quick-fix finding fixed on a branch that already has its PR keeps that PR), then runs `/sc-gh-stack-view`.
 10. Close bead and task together with the close template, `bd close` first and the task only if it succeeded; the close carries the pushed head, the top rebased onto, the PR and the verbatim `/sc-gh-stack-view` output. The task close is the report; it returns to the task assigner.
 
 ### Dev (`dev-template`)
@@ -24,7 +24,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 13. Read `policy_path` and every guideline it names for the languages touched.
 14. Read the complete plan and enumerate all tasks that must be completed in the primary and any child beads; create an itemized private checklist outside the tracked tree with every task identified; work through the checklist one item at a time; then go through it again one item at a time and confirm each is fully met; nothing outside the bead's scope.
 15. Close: `bd close --reason "dev complete at <short sha>"` + `dev-complete.md.j2` with the deliverable inventory and gate output; deletion work adds a before/after inventory.
-16. Cannot complete: class bead or report (6); `bd update --status blocked --assignee "" --append-notes "DEV_CANNOT_COMPLETE; ..."`; never `bd close` (it would release the sanity check); task `refused`. Unfinished is a failure.
+16. Cannot complete: include the reason, command and failure evidence in the task refusal's `reason_md`; `bd update --status blocked --assignee "" --append-notes "DEV_CANNOT_COMPLETE; ..."`; never `bd close` (it would release the sanity check); task `refused`. Unfinished is a failure.
 
 ### Dev-fix (`dev-fix`)
 
@@ -39,17 +39,17 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 22. Confirm the defect at the cited file:line; absent: no work, close `not_reproducible` with the file:line checked.
 23. Fix every in-scope occurrence of the pattern; touch only what the remedy needs.
 24. Close: `bd close --reason "fixed at <short sha>"` (or `"not reproducible: <file:line>"`) + `fix-complete.md.j2`, outcome `fixed` (with commit and PR) or `not_reproducible` (none).
-25. Cannot fix: class bead or report (6); return the bead open, unassigned, `FIX_CANNOT_COMPLETE` in notes; task `refused`. Never close a finding unfixed.
+25. Cannot fix: include the reason, command and failure evidence in the task refusal's `reason_md`; return the bead open, unassigned, `FIX_CANNOT_COMPLETE` in notes; task `refused`. Never close a finding unfixed.
 
 ### Parallel quick fix (finder)
 
 26. A change other live branches need never goes in your layer: stop and tell the task assigner the change and the branches it breaks.
-27. The lead picks the quick fix's `pr_target` (a lower bound); the finder cuts `fix/<thing>` from the stack's current top (`stack-top --pr-target <pr_target>`) in its own worktree: only the change, compiler-forced implementors/call sites, one test for a bug; test passes; push; PR against that top as a new layer, never into a lower layer or the integration branch; report the PR by plain `atm send`.
+27. The lead picks the quick fix's `pr_target` (a lower bound); the finder cuts `fix/<thing>` from the stack's current top (`stack-top --root <phase-root> --pr-target <pr_target> --worktree <worktree>`) in its own worktree: only the change, compiler-forced implementors/call sites, one test for a bug; test passes; push; PR against that top as a new layer, never into a lower layer or the integration branch; report the PR by plain `atm send`.
 28. Sprint task stays open; continue on the rebased layer.
 
 ### Scripts
 
-29. `assignment-gates.py dev` prints one code; exit 0 `READY`, 2 `GATE_CANNOT_RUN`, 5 otherwise. `stack-top --pr-target <b>` prints, exit 0, the head of the last open PR of the one open stack based on or containing `<b>` (its base when none is open); with no stack, the top of the one chain of open unlinked PRs based on `<b>`, else `<b>`; several stacks or a branching chain: `STACK_AMBIGUOUS` (5); `GATE_CANNOT_RUN` (2).
+29. `assignment-gates.py dev` prints one code; exit 0 `READY`, 2 `GATE_CANNOT_RUN`, 5 otherwise. `stack-top --root <phase-root> --pr-target <b> --worktree <worktree>` prints the last layer's branch from `<phase-root>.stack` on exit 0. With no layers it resolves `origin/<b>` and prints `<b>`; unreadable or invalid ledger data or an unresolvable fallback returns `GATE_CANNOT_RUN` (2).
 30. Checks in order: `validate-plan` (`PLAN_INVALID`), in `bd ready` (`NOT_READY`), open and unassigned or self (`UNCLAIMABLE`), `pr_target` (the sprint container's for a poured dev bead) is `--pr-target` or its ancestor (`PR_TARGET_MISMATCH`), `origin/<pr_target>` ancestor of HEAD (`WRONG_BASE`).
 31. Difficulty models (substring): hard fable/opus/astra; normal terra/opus/sonnet; fast luna/haiku.
 

@@ -1,8 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.18.0] - 2026-10-19
 
 ### Changed
+- Upgrade note: open beads poured by 0.16.x formulas lack the required `branch`, `worktree`, `pr_target`, and `difficulty` metadata and are reported by `validate-plan`. Re-pour those beads with the current formulas before validating the phase.
+- Phase bj integrates the close hook, stack ledger and serialized sanity linking, sanity and quality run tabs, and manifest-based plugin integrity verification.
+- `dev-sanity-complete.md.j2` 2.0.1 states FAIL handoff, lead escalation and the absence of finding beads in one conditional sentence. Version 2.0.0 removes `finding_bead_ids` from its status JSON and defaults. `task-close-vars.j2` 2.0.0 also removes the retired `finding_bead_ids` default.
+- `scripts/wrap_jev_receipt.py` is the only way to write a sanity-jev reply's `data.jev` (#334): it takes the assignment and the raw `jev_client.py --assignment` stdout (plus findings, and dev-sanity's triaged `--final` via `--reply`), verifies every receipt with TYPESAFE_API_KEY, passes the receipt or part list and the client's outer `elapsed_s` through unchanged, and refuses with the failing check and its fix whatever `sanity-merge --reviewer sanity-jev` would reject. Hand-written replies were rejected as `SANITY.RESULT_INVALID` (`sc-sanity-jev` 0.9.0, bj `dev-sanity` 3.1.0, `dev-sanity-task` 2.18.0).
 - The command is now `atm-bd`: use `atm-bd console` for the dashboard and `atm-bd cron` for one tick. Existing users should run `uv tool uninstall atm-bd-console` before installing the new tool; the old executable is not an alias.
 - Runtime state, locks, snapshots, and logs start fresh under `.atm-bd/atm-bd/`; old state and logs are not migrated or read. After stopping the old console, `.atm-bd/atm-bd-console/` can be deleted if its contents are no longer needed.
 
