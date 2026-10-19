@@ -25,7 +25,8 @@ def container(bid: str) -> dict:
 
 
 def poured(container_id: str, step: str, blocks: list[str]) -> dict:
-    bead = {"id": f"{container_id}.group-{step}", "issue_type": "task", "status": "open", "labels": ["phase-t", f"stage:{step}"],
+    stage = "dev-sanity" if step == "sanity" else step
+    bead = {"id": f"{container_id}.group-{step}", "issue_type": "task", "status": "open", "labels": ["phase-t", f"stage:{stage}"],
             "created_at": "2026-09-26T00:00:00Z",
             "dependencies": [{"dependency_type": "parent-child", "id": container_id}] + [{"dependency_type": "blocks", "id": b} for b in blocks],
             "metadata": {"difficulty": "normal", "branch": "sprint/test", "worktree": "wt", "pr_target": "integrate/phase-t"}}
@@ -109,11 +110,11 @@ class ValidatePlan(Repo):
     def test_each_problem(self):
         cases = {
             "x-t-2.group-dev: missing blocks edge to x-t-1.group-sanity or x-t-1": (VALID, PLAN, "x-t-2.group-dev", lambda b: b.update(dependencies=[])),
-            "x-t-1: metadata.requirements: ": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].update(requirements=[])),
-            "x-t-1: metadata.adrs: mixes NONE with ids": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].update(adrs=["NONE", "ADR-1"])),
-            "x-t-1: metadata.worktree: ": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].pop("worktree")),
+            "x-t-1: requirements: ": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].update(requirements=[])),
+            "x-t-1: adrs: mixes NONE with ids": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].update(adrs=["NONE", "ADR-1"])),
+            "x-t-1: worktree: ": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].pop("worktree")),
             "x-t-1: description: ": (VALID, PLAN, "x-t-1", lambda b: b.update(description="none")),
-            "x-t-1: metadata.difficulty: ": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].update(difficulty="medium")),
+            "x-t-1: difficulty: ": (VALID, PLAN, "x-t-1", lambda b: b["metadata"].update(difficulty="medium")),
             "x-t-1.group-sanity: missing blocks edge to its sprint x-t-1.group-dev": (VALID, PLAN, "x-t-1.group-sanity", lambda b: b.update(dependencies=[])),
             "x-phase-t: metadata.integration_branch is \"integrate/other\"": (VALID, PLAN, "x-phase-t", lambda b: b["metadata"].update(integration_branch="integrate/other")),
         }
@@ -162,6 +163,28 @@ class ValidatePlan(Repo):
         out = self.run_beads(beads)
         self.assertEqual(out.returncode, 0)
         self.assertIn("warning: x-t-1.group-sanity: metadata.dev_bead is not x-t-1.group-dev", out.stderr)
+
+    def test_open_finding_missing_required_key_is_a_problem_but_closed_history_is_ignored(self):
+        finding = {"id": "x-t-1.finding", "parent": "x-t-1", "status": "open", "issue_type": "task",
+                   "labels": ["phase-t", "stage:finding"], "metadata": {"severity": "important", "reviewer": "qa"}}
+        out = self.run_beads(VALID + [finding])
+        self.assertEqual((out.returncode, out.stdout), (5, "x-t-1.finding: found_at_commit: Field required\n"))
+        finding["status"] = "closed"
+        out = self.run_beads(VALID + [finding])
+        self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
+
+    def test_open_phase_bead_without_a_stage_has_no_model(self):
+        unknown = {"id": "x-t-1.unknown", "parent": "x-t-1", "status": "open", "labels": ["phase-t"]}
+        out = self.run_beads(VALID + [unknown])
+        self.assertEqual((out.returncode, out.stdout), (5, "x-t-1.unknown: no model\n"))
+
+    def test_closed_sprint_and_sanity_are_not_schema_validated(self):
+        beads = broken("x-t-1", lambda bead: (bead.update(status="closed"), bead["metadata"].pop("worktree")))
+        sanity = next(bead for bead in beads if bead["id"] == "x-t-1.group-sanity")
+        sanity["status"] = "closed"
+        sanity["metadata"].pop("branch")
+        out = self.run_beads(beads)
+        self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
 
     def test_cannot_run(self):
         out = self.run_beads(VALID, PLAN)
@@ -290,6 +313,9 @@ FAKE_BD = """#!/usr/bin/env python3
 import json, os, sys
 beads = json.load(open(os.environ["FAKE_BD_BEADS"]))
 args = sys.argv[1:]
+if os.environ.get("FAKE_BD_LOG"):
+    with open(os.environ["FAKE_BD_LOG"], "a") as log:
+        log.write(json.dumps(args) + "\\n")
 if args[:1] == ["show"]:
     ids = [a for a in args[1:] if not a.startswith("--")]
     found = [b for b in beads if b["id"] in ids]
@@ -343,6 +369,16 @@ class LivePlan(Repo):
         self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
         self.assertEqual(self.live(VALID, "--root", "x-phase-t").returncode, 0)
 
+    def test_phase_walk_uses_one_list_includes_gates_and_excludes_other_phases(self):
+        log = self.base / "bd.log"
+        rows = VALID + [{"id": "other", "status": "open", "labels": ["phase-u"]},
+                        {"id": "gate", "status": "open", "issue_type": "gate", "labels": ["phase-t"]}]
+        out = self.live(rows, "--phase", "t", "--no-doctor", FAKE_BD_LOG=str(log))
+        self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
+        lists = [json.loads(line) for line in log.read_text().splitlines() if json.loads(line)[0] == "list"]
+        self.assertEqual(len(lists), 1)
+        self.assertIn("--include-gates", lists[0])
+
     def test_plan_missing_on_the_branch_cannot_run(self):
         (self.repo / ".atm-bd/phase-t.toml").write_text(TOML.replace("integrate/phase-t", "integrate/phase-u"))
         git(self.repo, "push", "-q", "origin", "main:refs/heads/integrate/phase-u")
@@ -395,6 +431,15 @@ class FilePlan(LivePlan):
     def test_an_import_into_a_running_phase_reads_the_rest_live(self):
         out = self.run_file([container("x-t-2")], [b for b in VALID if not b["id"].startswith("x-t-2")])
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+
+    def test_file_overlays_live_and_validates_other_live_phase_beads(self):
+        invalid = {"id": "finding", "parent": "x-t-1", "status": "open", "labels": ["phase-t", "stage:finding"],
+                   "metadata": {"severity": "important", "reviewer": "qa"}}
+        out = self.run_file([container("x-t-2")], VALID + [invalid])
+        self.assertEqual((out.returncode, out.stdout), (5, "finding: found_at_commit: Field required\n"))
+        fixed = {**invalid, "metadata": {**invalid["metadata"], "found_at_commit": "abc"}}
+        out = self.run_file([container("x-t-2"), fixed], VALID + [invalid])
+        self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
 
 
 if __name__ == "__main__":
