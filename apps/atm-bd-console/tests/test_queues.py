@@ -8,8 +8,7 @@ from types import SimpleNamespace
 import pytest
 import sc_compose
 
-from atm_bd_console import queues
-from atm_bd_console import config
+from atm_bd_console import config, queues
 from atm_bd_console.command import Output
 from atm_bd_console.result import CommandFailed, Err, Ok
 
@@ -294,7 +293,7 @@ def test_phase_stack_check_uses_valid_sibling_checkout(monkeypatch, tmp_path: Pa
     (tmp_path / ".atm-bd" / "phase-bj.toml").write_text('integration_branch = "integrate/phase-bj"\n')
     code_root = (tmp_path / "../code-checkout").resolve()
     validation_calls = []
-    source_runner, source_calls = fixed_runner()
+    source_runner, _source_calls = fixed_runner()
     def run(argv, fix, *, cwd=None, **kwargs):
         validation_calls.append((list(argv), cwd))
         if tuple(argv) == ("git", "rev-parse", "--show-toplevel"):
