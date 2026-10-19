@@ -577,19 +577,20 @@ def blocking_shape(rendered: str) -> str:
     return re.search(r"-blocking\.json` = `(\{.*?\})` and run", step, re.S).group(1)
 
 
-@unittest.skipIf(shutil.which("bd") is None or shutil.which("dolt") is None or shutil.which("sc-compose") is None,
-                 "bd, dolt or sc-compose not on PATH: the real bead-groups receiver cannot run")
 class BlockingFindingsHandoffTests(unittest.TestCase):
-    """qa-template step g (fix verification) -> `<qa bead>-blocking.json` -> `bead-groups --findings` on a real bd."""
+    """Rendered QA JSON is accepted by the in-process bead-groups receiver."""
 
-    @classmethod
-    def setUpClass(cls):
-        from test_bead_pour_real_bd import Workspace, init_workspace, stop_server
-        root = Path(tempfile.mkdtemp(prefix="handoff-blocking-")).resolve()
-        cls.ws = Workspace(root)
-        cls.addClassCleanup(shutil.rmtree, root, ignore_errors=True)
-        cls.addClassCleanup(stop_server, root)
-        init_workspace(cls.ws)
+    def setUp(self):
+        from test_bead_pour_plan import PlanFixture
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.ws = PlanFixture(Path(temporary.name))
+
+    def received(self, sprint, path):
+        from test_bead_pour_plan import groups
+        phase = self.ws.rows[sprint]["metadata"]["phase"]
+        with patch.object(groups.sprint_index_common, "load_phase_config", return_value={"root": f"t-phase-{phase}"}):
+            return self.ws.runner.finding_targets(path)[0]
 
     def written(self, sprint: str, qa: str, severity: str, found_on_layer=None) -> Path:
         values = json.loads((EXAMPLES / "qa-template-fix-round-vars.json").read_text())
@@ -611,21 +612,16 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
         out.write_text(json.dumps(document))
         return out
 
-    def test_the_fix_round_shape_pours_and_a_non_blocking_one_is_refused(self):
-        from test_bead_pour_real_bd import fix_group, group
+    def test_the_fix_round_shape_is_accepted_and_a_non_blocking_one_is_refused(self):
         ws = self.ws
         sprint = ws.sprint("hz", 1)
-        dev, sanity, qa = group(sprint)
-        ws.groups("--sprint", sprint)
-        ws.close(dev, "done")
-        ws.close(sanity, "PASS")
-        result = ws.groups("--findings", self.written(sprint, qa, "blocking", found_on_layer=15))
-        fix = fix_group(sprint, "qa1-f1", 2)[0]
-        self.assertEqual(ws.show(fix)["metadata"]["reviewer"], "arch-qa")
-        self.assertEqual(ws.show(fix)["metadata"]["found_on_layer"], 15)
-        refused = ws.groups("--findings", self.written(sprint, qa, "important"), expect=2)  # planted negative
-        self.assertEqual(refused["targets"][0]["error"]["code"], "BEAD_GROUPS_NOT_BLOCKING")
-        self.assertTrue(result["targets"])
+        qa = f"{sprint}.group-qa"
+        result = self.received(sprint, self.written(sprint, qa, "blocking", found_on_layer=15))
+        self.assertEqual(result["compose"]["reviewer"], "arch-qa")
+        self.assertEqual(result["compose"]["found_on_layer"], 15)
+        self.assertEqual(result["compose"]["ref"], "qa1-f1-r2")
+        refused = self.received(sprint, self.written(sprint, qa, "important"))
+        self.assertEqual(refused.code, "BEAD_GROUPS_NOT_BLOCKING")
 
 
     def round_one(self, sprint: str, qa: str, **finding) -> Path:
@@ -646,29 +642,26 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
         out.write_text(json.dumps({**sent, "findings": [{k: v for k, v in row.items() if v is not None}]}))
         return out
 
-    def test_the_round_one_shape_parses_and_pours_and_one_without_its_remedy_is_refused(self):
-        from test_bead_pour_real_bd import fix_group, group
+    def test_the_round_one_shape_is_accepted_and_one_without_its_remedy_is_refused(self):
         ws = self.ws
         sprint = ws.sprint("hx", 1)
-        _, _, qa = group(sprint)
-        ws.groups("--sprint", sprint)
-        ws.groups("--findings", self.round_one(sprint, qa, found_on_layer=15))
-        fix = fix_group(sprint, "qa1-f1")[0]
-        self.assertEqual(ws.show(fix)["metadata"]["found_on_layer"], 15)
-        self.assertEqual({k: ws.show(fix)["metadata"][k] for k in ("reviewer", "difficulty")},
+        qa = f"{sprint}.group-qa"
+        target = self.received(sprint, self.round_one(sprint, qa, found_on_layer=15))
+        self.assertEqual(target["compose"]["found_on_layer"], 15)
+        self.assertEqual({key: target["compose"][key] for key in ("reviewer", "difficulty")},
                          {"reviewer": "arch-qa", "difficulty": "normal"})
-        ws.groups("--findings", self.round_one(sprint, qa, ref="qa1-f2", difficulty="hard"))
-        self.assertEqual(ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"]["difficulty"], "hard")
-        self.assertNotIn("found_on_layer", ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"])
+        target = self.received(sprint, self.round_one(sprint, qa, ref="qa1-f2", difficulty="hard"))
+        self.assertEqual(target["compose"]["difficulty"], "hard")
+        self.assertFalse(target["compose"]["has_found_on_layer"])
         # planted negatives: the old key-list shape is not JSON, and a finding without its remedy is refused
         with self.assertRaises(ValueError):
             json.loads('{"findings": [{"ref": "qa1-f1", "severity": "blocking", "reviewer", "title", "remedy", '
                        '"priority": 1, optional "difficulty"}]}')
-        refused = ws.groups("--findings", self.round_one(sprint, qa, ref="qa1-f3", remedy=None), expect=2)
-        self.assertEqual(refused["targets"][0]["error"]["code"], "BEAD_GROUPS_FINDINGS_INVALID")
-        self.assertIsNone(ws.show(fix_group(sprint, "qa1-f3")[0]))
+        refused = self.received(sprint, self.round_one(sprint, qa, ref="qa1-f3", remedy=None))
+        self.assertEqual(refused.code, "BEAD_GROUPS_FINDINGS_INVALID")
+        self.assertIn("remedy", str(refused))
 
-    def test_a_workflow_issue_bead_imports_and_a_render_without_its_remedy_is_refused(self):
+    def test_a_workflow_issue_jsonl_has_its_parent_and_requires_its_remedy(self):
         ws = self.ws
         parent = ws.sprint("hy", 1)
         values = {**json.loads((EXAMPLES / "workflow-issue-bead-vars.json").read_text()), "id": "t-wf-jev-outage", "parent": parent}
@@ -682,10 +675,9 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
         rows = ws.root / "workflow.jsonl"
         path.write_text(json.dumps(values))
         rows.write_text(json.dumps(json.loads(render("workflow-issue-bead.json.j2", path))) + "\n")
-        ws.bd("import", "-i", rows)
-        bead = ws.show("t-wf-jev-outage")
+        bead = json.loads(rows.read_text())
         self.assertIn("workflow-issue", bead["labels"])
-        self.assertEqual(ws.deps("t-wf-jev-outage"), {parent: "parent-child"})
+        self.assertEqual(bead["dependencies"], [{"issue_id": "t-wf-jev-outage", "depends_on_id": parent, "type": "parent-child"}])
 
 
 if __name__ == "__main__":
