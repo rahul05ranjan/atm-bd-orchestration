@@ -22,6 +22,30 @@
     "SanityMetadata": {
       "additionalProperties": true,
       "properties": {
+        "branch": {
+          "minLength": 1,
+          "title": "Branch",
+          "type": "string"
+        },
+        "worktree": {
+          "minLength": 1,
+          "title": "Worktree",
+          "type": "string"
+        },
+        "pr_target": {
+          "minLength": 1,
+          "title": "Pr Target",
+          "type": "string"
+        },
+        "difficulty": {
+          "enum": [
+            "hard",
+            "normal",
+            "fast"
+          ],
+          "title": "Difficulty",
+          "type": "string"
+        },
         "dev_bead": {
           "minLength": 1,
           "title": "Dev Bead",
@@ -29,6 +53,10 @@
         }
       },
       "required": [
+        "branch",
+        "worktree",
+        "pr_target",
+        "difficulty",
         "dev_bead"
       ],
       "title": "SanityMetadata",
