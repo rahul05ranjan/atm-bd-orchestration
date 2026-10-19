@@ -255,6 +255,18 @@ def test_retry_recovers_hosted_only_torn_link(world):
     assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
 
 
+def test_next_verdict_recovers_prior_hosted_only_torn_link(world):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    third = world.branch("third", "second", 3)
+    assert world.link(first)["result"] == "stacked"
+    world.fail_view = True
+    assert world.link(second)["result"] == "stack_failed"
+    world.fail_view = False
+    assert world.link(third)["result"] == "stacked"
+    assert [(item["pr"], item["linked"]) for item in world.bead["metadata"]["layers"]] == [(1, True), (2, True), (3, True)]
+
+
 def test_rebase_then_real_sanity_hook_preserves_round_and_hands_off(world, tmp_path, monkeypatch):
     first = world.branch("first", "trunk", 1)
     rival = world.branch("rival", "trunk", 2)

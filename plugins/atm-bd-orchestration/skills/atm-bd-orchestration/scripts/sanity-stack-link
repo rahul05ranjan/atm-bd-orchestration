@@ -177,7 +177,8 @@ class Linker:
                     raise StackError('hosted stack conflicts with ledger ancestry')
                 layer['linked'] = True
             else:
-                if number != self.values['pr_number'] or pull['head'] != self.values['branch'] or pull['sha'] != self.values['commit']:
+                if (sum(other['head'] == pull['head'] for other in pulls) != 1 or
+                        any(layer['branch'] == pull['head'] or layer['pr'] == number for layer in layers)):
                     raise StackError('hosted-only stack layer is not uniquely attributable')
                 layers.append({'branch': pull['head'], 'pr': number, 'head': pull['sha'], 'base': previous, 'linked': True})
             previous = pull['head']
@@ -230,6 +231,8 @@ class Linker:
             if metadata != original:
                 self.write(metadata)
             return {'result': 'stacked', 'top': layers[-1], 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
+        if any(layer['pr'] == self.values['pr_number'] or layer['branch'] == self.values['branch'] for layer in layers):
+            raise StackError('checked layer is already below the stack top')
         base = layers[-1]['branch'] if layers else metadata['trunk']
         ancestor = self.command(['git', 'merge-base', '--is-ancestor', 'origin/' + base, self.values['commit']], check=False)
         actual = self.command(['git', 'rev-parse', 'refs/remotes/origin/' + base]).stdout.strip()
