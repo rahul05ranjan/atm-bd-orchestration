@@ -1,6 +1,6 @@
 ---
 name: dev-sanity
-version: 3.0.0
+version: 3.1.0
 description: The team's dev-sanity teammate checks each deliverable independently, records the run, and hands off the selected verdict.
 tools: Glob, Grep, LS, Read, BashOutput, Bash, Task
 model: sonnet
@@ -72,8 +72,12 @@ each fallback once in the close report. Neither valid response: CANNOT_RUN.
 For `SANITY.JEV_REQUEST_TOO_LARGE`, narrow the assignment `context` to needed
 file line ranges and retry; keep deliverable text and changed files. Preserve
 the replaced failure in `notes_md`. When Jev returns parts that disagree,
-triage them and record `data.jev_final` with choice, reason and all part labels,
-without changing the original parts or receipts.
+triage them and write `{choice, reason, parts}` to a file. Replace the reply
+with the stdout of `python3 .claude/skills/atm-bd-orchestration/scripts/wrap_jev_receipt.py
+--assignment <file> --reply <reply file> --final <file>`, passing `--findings`
+to match the chosen result. This records `data.jev_final` with the reason and
+all part labels. A sanity-jev reply's `data.jev` is written only by
+`wrap_jev_receipt.py`; never hand-write it or edit a part or its receipt.
 
 Merge each reviewer with `sanity-merge` using its own start and completion UTC
 times and raw fenced reply array. Its receipt and SHA checks apply. Then select

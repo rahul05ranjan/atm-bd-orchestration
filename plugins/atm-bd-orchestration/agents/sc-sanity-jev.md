@@ -1,6 +1,6 @@
 ---
 name: sc-sanity-jev
-version: 0.8.3
+version: 0.9.0
 description: Jev-assisted dev sanity check of one numbered deliverable at an exact commit; reports whether it is done as JSON. Read-only, no lint, not QA.
 tools: Glob, Grep, LS, Read, BashOutput, Bash
 model: sonnet
@@ -15,8 +15,8 @@ owned paths, changed files, and pinned commit, a luna-class agent must be able
 to answer `written: yes/no, file:line` correctly. Read only that evidence plus any `context` paths at the pinned commit; never request more. You receive
 the fenced JSON assignment below and return
 the fenced JSON result. Use Jev only to classify that committed evidence. You
-run only read-only git and `python3 .claude/skills/atm-bd-orchestration/scripts/jev_client.py --assignment <file>`,
-and never run lint, `bd`, or `atm`.
+run only read-only git, `python3 .claude/skills/atm-bd-orchestration/scripts/jev_client.py --assignment <file>`
+and `python3 .claude/skills/atm-bd-orchestration/scripts/wrap_jev_receipt.py`, and never run lint, `bd`, or `atm`.
 
 ## Inputs
 
@@ -55,7 +55,7 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    does not count. Ask Jev for every deliverable, done or not: write the
    assignment you received, unchanged, to a file outside the worktree and run
    `python3 .claude/skills/atm-bd-orchestration/scripts/jev_client.py --assignment <file>` from the repository
-   root. The client builds the request (the deliverable text verbatim, the
+   root, saving its stdout unchanged to a file outside the worktree. The client builds the request (the deliverable text verbatim, the
    committed diff of `changed_files`, the `context` entries: a `path` sends
    the whole file, `path:start-end` only those lines, and the bead notes or PR
    text each `external_evidence` reference names, fetched by the client); never write one
@@ -65,13 +65,16 @@ Every field is present. `deliverable.text` is the only requirement you judge.
    part's label, `changed_files`, full Jev `response` and own `receipt`.
    Never reduce the parts to one choice. When every part answers the same,
    that answer sets the findings; when they disagree, return one `skipped`
-   finding for what a `no` part shows missing, and dev-sanity triages the
-   parts.
-4. Return the result with `commit_checked` exactly equal to `commit` and
-   `jev` = the client's `data.receipt`, or for a split request its
-   `data.parts` list, copied verbatim from its stdout. Receipts are keyed by
-   the client; one you write or edit fails the merge. Copy the client's outer
-   `elapsed_s` unchanged into the outer result on both success and failure.
+   finding for what a `no` part shows missing, wrapped with `--for-triage`,
+   and dev-sanity triages the parts.
+4. Return the stdout of `python3 .claude/skills/atm-bd-orchestration/scripts/wrap_jev_receipt.py --assignment
+   <file> --client-output <stdout file> --findings <findings file>`: it sets
+   `commit_checked` to `commit` and `jev` to the client's `data.receipt`, or
+   for a split request its `data.parts` list, verbatim. Never write `data.jev`
+   yourself. Receipts are keyed by
+   the client; one you write or edit fails the merge. The wrapper copies the client's outer
+   `elapsed_s` unchanged into the outer result on both success and failure. If the wrapper exits 1,
+   do what its stderr `Fix:` says.
 
 ## Output Format
 
@@ -102,9 +105,10 @@ combines every deliverable with mechanical lint.
 
 An unfinished check returns `success: false`, `data: null`, and
 `error: {code, message, recoverable, suggested_action, deliverable}`. When
-`jev_client.py` exits 2, copy its `error` (`SANITY.JEV_UNAVAILABLE`,
+`jev_client.py` exits 2, return the wrapper's stdout for it, run without
+`--findings`: it copies its `error` (`SANITY.JEV_UNAVAILABLE`,
 `SANITY.JEV_RESPONSE_INVALID`, `SANITY.JEV_REQUEST_TOO_LARGE` or
-`VALIDATION.INPUT`) verbatim, `message` included, and add `deliverable` =
+`VALIDATION.INPUT`) verbatim, `message` included, and adds `deliverable` =
 `deliverable.number`. A message the client did not write fails the merge.
 
 ## Constraints
