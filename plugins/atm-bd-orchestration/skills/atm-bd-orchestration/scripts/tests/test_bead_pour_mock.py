@@ -17,7 +17,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -122,28 +121,40 @@ SERVER_DIR = ".dolt-server"   # data directory and log of the workspace's own do
 
 # Runs dolt as its child and stops it when the test process that started it is gone (killed, so class
 # cleanup never ran): the server must not outlive the run.
+# dolt logs this line once it is listening; it is the only readiness signal start_server waits for.
+READY_MARK = "Server ready"
+# The supervisor relays dolt's output to the workspace log and writes READY to its stdout once dolt is ready. It
+# stops dolt when its stdin reaches EOF, which happens when the process that started it dies, and it exits only after
+# dolt has exited, so its exit means the server is gone. It never polls.
 SUPERVISOR = """\
-import os, signal, subprocess, sys, time
-parent = int(sys.argv[1])
-server = subprocess.Popen(sys.argv[2:])
-def stop(*_):
-    server.terminate()
-    try:
-        server.wait(10)
-    except subprocess.TimeoutExpired:
-        server.kill()
-    sys.exit(0)
-signal.signal(signal.SIGTERM, stop)
-while server.poll() is None:
-    if os.getppid() != parent:
-        stop()
-    time.sleep(0.5)
-sys.exit(server.returncode)
-"""
+import signal, subprocess, sys, threading
+log_path, server = sys.argv[1], sys.argv[2:]
+proc = subprocess.Popen(server, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+signal.signal(signal.SIGTERM, lambda *_: proc.terminate())
+def stop_with_parent():
+    sys.stdin.read()
+    proc.terminate()
+threading.Thread(target=stop_with_parent, daemon=True).start()
+ready = False
+with open(log_path, "w") as log:
+    for line in proc.stdout:
+        log.write(line)
+        log.flush()
+        if not ready and "%s" in line:
+            ready = True
+            print("READY", flush=True)
+code = proc.wait()
+if not ready:
+    print(f"EXITED {code}", flush=True)
+sys.exit(code)
+""" % READY_MARK
+
+# Holds each supervisor's stdin write end for the life of this process: dropping it stops that server.
+LIFELINES: list[subprocess.Popen] = []
 
 
 def start_server(root: Path) -> int:
-    """Start a dolt sql-server for the workspace on a free loopback port; return the port once it accepts connections."""
+    """Start a dolt sql-server for the workspace on a free loopback port; return the port once dolt reports it is ready."""
     data = root / SERVER_DIR
     data.mkdir()
     with socket.socket() as probe:
@@ -151,22 +162,16 @@ def start_server(root: Path) -> int:
         port = probe.getsockname()[1]
     supervisor = data / "supervise.py"
     supervisor.write_text(SUPERVISOR)
-    with (data / "server.log").open("w") as log:
-        server = subprocess.Popen([sys.executable, str(supervisor), str(os.getpid()),
-                                   "dolt", "sql-server", "-H", "127.0.0.1", "-P", str(port), f"--data-dir={data}"],
-                                  cwd=data, stdout=log, stderr=subprocess.STDOUT)
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if server.poll() is not None:
-            break
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
-            return port
-        except OSError:
-            time.sleep(0.2)
-    tail = "\n".join((data / "server.log").read_text(errors="replace").splitlines()[-40:])
-    raise AssertionError(f"dolt sql-server on 127.0.0.1:{port} did not accept connections "
-                         f"(exit {server.poll()}):\n{tail}")
+    server = subprocess.Popen([sys.executable, str(supervisor), str(data / "server.log"),
+                               "dolt", "sql-server", "-H", "127.0.0.1", "-P", str(port), f"--data-dir={data}"],
+                              cwd=data, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    LIFELINES.append(server)
+    report = server.stdout.readline().strip()
+    if report != "READY":
+        log = data / "server.log"
+        tail = "\n".join(log.read_text(errors="replace").splitlines()[-40:]) if log.is_file() else ""
+        raise AssertionError(f"dolt sql-server on 127.0.0.1:{port} did not report ready ({report or 'EOF'}):\n{tail}")
+    return port
 
 
 def stop_server(root: Path) -> None:
@@ -222,21 +227,19 @@ class ServerLifetimeTests(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="server-life-")).resolve()
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.addCleanup(stop_server, root)
-        code = ("import sys, time; from pathlib import Path; sys.path.insert(0, sys.argv[1]);"
-                "from test_bead_pour_mock import start_server; print(start_server(Path(sys.argv[2])), flush=True); time.sleep(600)")
+        code = ("import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]);"
+                "from test_bead_pour_mock import start_server; print(start_server(Path(sys.argv[2])), flush=True);"
+                "sys.stdin.read()")
         owner = subprocess.Popen([sys.executable, "-c", code, str(Path(__file__).parent), str(root)],
-                                 stdout=subprocess.PIPE, text=True)
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         port = int(owner.stdout.readline())
         owner.kill()
         owner.wait()
+        # The supervisor inherits this stderr and exits only after dolt has exited, so EOF means the server is gone.
+        owner.stderr.read()
         marker = str(root / SERVER_DIR)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            alive = [line for line in subprocess.run(["ps", "-axwwo", "command="], capture_output=True, text=True).stdout.splitlines()
-                     if marker in line]
-            if not alive:
-                break
-            time.sleep(0.5)
+        alive = [line for line in subprocess.run(["ps", "-axwwo", "command="], capture_output=True, text=True).stdout.splitlines()
+                 if marker in line]
         self.assertEqual(alive, [], "dolt server outlived the killed test process")
         with self.assertRaises(OSError):
             socket.create_connection(("127.0.0.1", port), timeout=1).close()
