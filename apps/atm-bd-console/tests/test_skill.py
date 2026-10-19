@@ -310,7 +310,7 @@ def test_remote_tree_installer_failure_is_reported_before_apply(installer, tmp_p
     fake, _ = installer
     plugin = tmp_path / "remote-package"
     plugin.mkdir()
-    source = skill_source.SkillSource("0.16.0", plugin, COMMIT, published(plugin))
+    source = skill_source.SkillSource("0.16.0", plugin, COMMIT, published(plugin), expected_version="0.16.0")
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
     fake.plan_install = lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad manifest"))
 
@@ -361,7 +361,7 @@ def test_tag_install_does_not_blame_the_ref_for_host_or_target_failures(
     fake, _ = installer
     remote = tmp_path / "remote-package"
     remote.mkdir()
-    source = skill_source.SkillSource("v0.16.0", remote, COMMIT, published(remote))
+    source = skill_source.SkillSource("v0.16.0", remote, COMMIT, published(remote), expected_version="0.16.0")
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
     setattr(fake, step, _raise(error))
 
@@ -388,7 +388,7 @@ def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path:
     remote = tmp_path / "remote"
     remote.mkdir()
     (remote / "install.py").write_text(f"from pathlib import Path; Path({str(marker)!r}).touch()\n", encoding="utf-8")
-    source = skill_source.SkillSource("v0.16.0", remote, COMMIT, published(remote))
+    source = skill_source.SkillSource("v0.16.0", remote, COMMIT, published(remote), expected_version="0.16.0")
     monkeypatch.setattr(skill.skill_source, "resolve_source", source_context(source))
 
     assert skill.run(["--latest", "--dest", str(tmp_path / "consumer")]) == 0

@@ -132,6 +132,18 @@ def test_load_manifest_without_published_bytes_names_the_ref() -> None:
         skill_integrity.load_manifest(source)
 
 
+def test_load_manifest_uses_source_version_not_its_display_name(tmp_path: Path) -> None:
+    data = manifest_bytes(make_tree(tmp_path / "plugin"))
+    # Neither a release-looking name nor the bundled name controls validation.
+    unpinned = skill_source.SkillSource("v9.9.9", Path("unused"), COMMIT, data, expected_version=None)
+    assert skill_integrity.load_manifest(unpinned)["version"] == "0.17.4"
+    pinned = skill_source.SkillSource("bundled", Path("unused"), COMMIT, data, expected_version="0.17.4")
+    assert skill_integrity.load_manifest(pinned)["version"] == "0.17.4"
+    mismatched = skill_source.SkillSource("bundled", Path("unused"), COMMIT, data, expected_version="0.17.3")
+    with pytest.raises(skill_integrity.IntegrityError, match="does not match release version '0.17.3'"):
+        skill_integrity.load_manifest(mismatched)
+
+
 @pytest.mark.parametrize("version", [None, 17, "0.17.3"], ids=["missing", "number", "mismatch"])
 def test_integrity_parser_owns_release_version_validation(tmp_path: Path, version) -> None:
     manifest = skill_integrity.build_manifest(make_tree(tmp_path / "plugin"), "0.17.4")

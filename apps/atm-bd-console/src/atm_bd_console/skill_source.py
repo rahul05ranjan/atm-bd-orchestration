@@ -59,6 +59,8 @@ class SkillSource:
     manifest: bytes | None = None
     # Releases are parsed before cloning; keep the validated result for the installer.
     parsed_manifest: dict[str, Any] | None = None
+    # Bundled sources accept their published version; releases must match their tag.
+    expected_version: str | None = None
 
 
 def bundled_directory() -> Path:
@@ -186,7 +188,8 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
     manifest = release_manifest(ref)
     if manifest is None:
         raise SkillSourceError(skill_integrity.no_manifest_message(ref))
-    parsed_manifest = skill_integrity.parse_manifest(manifest, ref, expected_version=ref.removeprefix("v"))
+    expected_version = ref.removeprefix("v")
+    parsed_manifest = skill_integrity.parse_manifest(manifest, ref, expected_version=expected_version)
 
     with tempfile.TemporaryDirectory(prefix="atm-bd-skill-") as temporary:
         try:
@@ -205,4 +208,4 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
         except (SkillSourceError, OSError) as error:
             raise SkillSourceError(install_failure_message(ref, error)) from error
         # Outside the translation: errors raised by the caller's work with the tree are not the ref's.
-        yield SkillSource(name, pkg_dir, commit, manifest, parsed_manifest)
+        yield SkillSource(name, pkg_dir, commit, manifest, parsed_manifest, expected_version)

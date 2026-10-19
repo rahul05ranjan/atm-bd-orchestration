@@ -63,6 +63,7 @@ def test_bundled_source_needs_no_network_and_uses_packaged_data(monkeypatch, tmp
 
     with skill_source.resolve_source() as source:
         assert source.name == "bundled"
+        assert source.expected_version is None
         assert source.pkg_dir == plugin
         assert source.commit == "unknown"
         assert source.manifest == PUBLISHED
@@ -115,6 +116,7 @@ def test_release_resolves_to_shallow_clone_as_data_without_running_it(monkeypatc
 
     with skill_source.resolve_source(version="0.16.0") as source:
         assert source.name == "v0.16.0"
+        assert source.expected_version == "0.16.0"
         assert source.pkg_dir == cloned[0]
         assert source.commit == COMMIT
         assert source.pkg_dir.joinpath("install.py").is_file()
@@ -143,6 +145,7 @@ def test_latest_clones_the_latest_release_tag_not_main(monkeypatch, published) -
 
     with skill_source.resolve_source(latest=True) as source:
         assert source.name == "v0.17.4"
+        assert source.expected_version == "0.17.4"
         assert source.commit == COMMIT
         assert source.manifest == published_manifest("0.17.4")
     clone = next(args for args in calls if args[0] == "clone")

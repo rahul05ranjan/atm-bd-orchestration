@@ -37,6 +37,9 @@ class ManifestSource(Protocol):
     @property
     def parsed_manifest(self) -> dict[str, Any] | None: ...
 
+    @property
+    def expected_version(self) -> str | None: ...
+
 
 @dataclass(frozen=True)
 class PathResult:
@@ -129,8 +132,7 @@ def load_manifest(source: ManifestSource) -> dict[str, Any]:
         return source.parsed_manifest
     if source.manifest is None:
         raise IntegrityError(no_manifest_message(source.name))
-    expected_version = None if source.name == "bundled" else source.name.removeprefix("v")
-    return parse_manifest(source.manifest, source.name, expected_version=expected_version)
+    return parse_manifest(source.manifest, source.name, expected_version=source.expected_version)
 
 
 def verify_tree(pkg_dir: Path, manifest: dict[str, Any]) -> list[PathResult]:
