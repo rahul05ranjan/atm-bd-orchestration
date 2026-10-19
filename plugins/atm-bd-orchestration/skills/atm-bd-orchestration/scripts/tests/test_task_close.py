@@ -163,6 +163,11 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
             assert argv[-2:] == ["--actor", "caller"]
         if "--vars" in argv:
             assert argv[argv.index("--vars") + 1] == str(world.path)
+    for argv, kwargs in world.calls:
+        if argv[:3] == ["atm", "task", "assign"]:
+            assert kwargs["env"]["ATM_TEAM"] == "test-team"
+        else:
+            assert kwargs["env"].get("ATM_TEAM") == before.get("ATM_TEAM")
 
 
 def test_preview_and_native_send_use_identical_unmodified_vars(world, monkeypatch):
@@ -213,10 +218,18 @@ def test_github_retries_and_falls_back_without_requiring_pr_base(world, failure)
 
 
 def test_ledger_top_overrides_static_target(world):
-    world.beads["atm-phase-bj.stack"]["metadata"]["layers"] = [
-        {"branch": "irrelevant-broken-lower-layer", "head": "0" * 40},
-        {"branch": "new-top", "head": "b" * 40},
+    from bead_schema import StackMetadata
+
+    metadata = world.beads["atm-phase-bj.stack"]["metadata"]
+    metadata["layers"] = [
+        {"branch": "irrelevant-broken-lower-layer", "pr": 350, "head": "0" * 40,
+         "base": metadata["trunk"], "linked": True},
+        {"branch": "new-top", "pr": 351, "head": "b" * 40,
+         "base": "irrelevant-broken-lower-layer", "linked": True},
     ]
+    validated = StackMetadata.model_validate(metadata)
+    assert len(validated.layers) == 2
+    assert validated.layers[-1].branch == "new-top"
     assert "ok" in world.run()
     calls = [argv for argv, _kwargs in world.calls]
     assert ["git", "merge-base", "--is-ancestor", "origin/new-top", world.values["commit"]] in calls
@@ -308,6 +321,27 @@ def test_qa_closes_bead_before_task_and_sends_lead_status(world, verdict):
     assert "ok" in world.run("qa", verdict=verdict)
     assert [argv[:2] for argv, _sender in world.writes] == [["bd", "update"], ["bd", "close"], ["atm", "task"], ["atm", "send"]]
     assert world.messages[0]["recipient"] == "phase-lead"
+    assert world.messages[0]["type"] is None
+    assert world.messages[0]["body"] == f"QA {verdict} {world.values['qa_bead']} commit={world.values['commit']} round=1"
+    assert "--template" not in world.writes[-1][0]
+
+
+def test_close_key_is_triple_and_only_fail_counter_key_adds_assignment(world):
+    assert "ok" in world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "not implemented"}])
+    bead = world.values["sanity_bead"]
+    metadata = world.beads[bead]["metadata"]
+    assert metadata["task_close_key"] == [bead, "FAIL", world.values["commit"]]
+    assert metadata["sanity_round_key"] == [bead, "assignment-1", "FAIL", world.values["commit"]]
+    world.tasks[bead] = [world.assignment(2)]
+    assert "ok" in world.run("sanity", verdict="PASS")
+    assert world.beads[bead]["metadata"]["task_close_key"] == [bead, "PASS", world.values["commit"]]
+
+
+def test_existing_four_part_state_allows_a_new_assignment(world):
+    bead = world.values["sanity_bead"]
+    world.beads[bead]["metadata"]["task_close_key"] = [bead, "assignment-0", "FAIL", "old-head"]
+    assert "ok" in world.run("sanity")
+    assert world.beads[bead]["metadata"]["task_close_key"] == [bead, "PASS", world.values["commit"]]
 
 
 @pytest.mark.parametrize("role,verdict", [("dev", "PASS"), ("fix", "PASS"), ("sanity", "PASS"), ("sanity", "FAIL"), ("sanity", "CANNOT_RUN"), ("qa", "PASS"), ("qa", "FAIL")])
@@ -426,3 +460,128 @@ def test_help_describes_the_permission_only_override(capsys):
         hook.main(["--help"])
     assert exit_info.value.code == 0
     assert " ".join("Do NOT use without permission from the phase lead.".split()) in " ".join(capsys.readouterr().out.split())
+
+
+def d1_run_path(world, path):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        result = hook.main(["--role", "dev", "--vars", str(path)], runner=world, clock=lambda: 42)
+    assert result == 1
+    assert stdout.getvalue() == stderr.getvalue()
+    return json.loads(stdout.getvalue())["err"]
+
+
+@pytest.mark.parametrize("contents", [None, '{"broken":', '[]', 'null'])
+def test_d1_vars_read_errors_name_exact_path_and_correction(world, contents):
+    path = world.root / "bad-input.json"
+    if contents is not None:
+        path.write_text(contents)
+    error = d1_run_path(world, path)
+    assert error["code"] == "VARS.INVALID"
+    assert str(path) in error["message"]
+    assert str(path) in error["fix"]
+    assert world.calls == []
+
+
+@pytest.mark.parametrize("relative,field,contents", [
+    (".atm-bd/phase-bj.toml", "lead", None),
+    (".atm-bd/phase-bj.toml", "lead", "lead = ["),
+    (".atm-bd/phase-bj.toml", "lead", "other = 'value'\n"),
+    (".atm-bd/phase-bj.toml", "lead", "lead = 5\n"),
+    (".atm.toml", "atm.default_team", None),
+    (".atm.toml", "atm.default_team", "[atm\n"),
+    (".atm.toml", "atm.default_team", "[atm]\n"),
+    (".atm.toml", "atm.default_team", "[atm]\ndefault_team = ''\n"),
+])
+def test_d1_toml_errors_name_file_and_field_before_commands(world, relative, field, contents):
+    path = world.root / relative
+    if contents is None:
+        path.unlink()
+    else:
+        path.write_text(contents)
+    error = world.run()["err"]
+    assert error["code"] == "CONFIG.INVALID"
+    assert str(path) in error["message"] and field in error["message"]
+    assert str(path) in error["fix"] and field in error["fix"]
+    assert world.calls == []
+
+
+@pytest.mark.parametrize("contents", [None, "invalid: [", "[]", "max_sanity_rounds: zero\n"])
+def test_d1_repository_config_errors_name_generated_path(world, contents):
+    path = world.root / hook.repo_config.RELATIVE_PATH
+    if contents is None:
+        path.unlink()
+    else:
+        path.write_text(contents)
+    error = world.run()["err"]
+    assert error["code"] == "CONFIG.INVALID"
+    assert str(path) in error["message"] and str(path) in error["fix"]
+    assert world.calls == []
+
+
+@pytest.mark.parametrize("field", ["bead_prefix", "dev_sanity_member"])
+def test_d1_missing_repository_field_names_correction(world, field):
+    path = world.root / hook.repo_config.RELATIVE_PATH
+    values = hook.yaml.safe_load(path.read_text())
+    del values[field]
+    path.write_text(hook.yaml.safe_dump(values))
+    error = world.run()["err"]
+    assert error["code"] == "CONFIG.INVALID"
+    assert field in error["message"] and field in error["fix"]
+    assert str(path) in error["fix"]
+    assert world.calls == []
+
+
+@pytest.mark.parametrize("count", ["not-an-integer", "2", -1, True, None, 1.5, [], {}])
+def test_d1_invalid_sanity_counter_names_bead_metadata_and_fix(world, count):
+    bead = world.values["sanity_bead"]
+    world.beads[bead]["metadata"]["sanity_round"] = count
+    error = world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "missing"}])["err"]
+    assert error["code"] == "BEAD.INVALID"
+    assert bead in error["message"] and "metadata.sanity_round" in error["message"]
+    assert bead in error["fix"] and "metadata.sanity_round" in error["fix"]
+    assert world.writes == []
+
+
+@pytest.mark.parametrize("field", ["primary_checkout", "worktree_path", "phase"])
+def test_d1_invalid_path_fields_name_the_required_string(world, field):
+    error = world.run(**{field: 42})["err"]
+    assert error["code"] == "VARS.INVALID"
+    assert field in error["message"] and field in error["fix"]
+    assert world.calls == []
+
+
+@pytest.mark.parametrize("metadata,field", [
+    ([], "$[0].metadata"),
+    ({"layers": {}}, "$[0].metadata.layers"),
+    ({"layers": ["invalid"]}, "$[0].metadata.layers[0]"),
+    ({"layers": [{"branch": "top"}]}, "$[0].metadata.layers[0].head"),
+])
+def test_d1_malformed_bead_shapes_name_producer_and_field(world, metadata, field):
+    bead = "atm-phase-bj.stack"
+    world.beads[bead]["metadata"] = metadata
+    error = world.run()["err"]
+    producer = f"bd show {bead} --json"
+    assert error["code"] == "COMMAND.INVALID"
+    assert producer in error["message"] and field in error["message"]
+    assert producer in error["fix"] and field in error["fix"]
+    assert "vars file and" not in error["fix"]
+    assert world.writes == []
+
+
+@pytest.mark.parametrize("payload,field", [
+    ([], "$"),
+    ({"events": {}}, "$.events"),
+    ({"events": [42]}, "$.events[0]"),
+    ({"events": [{"event": "assigned", "seq": 1}]}, "$.events[0].at"),
+    ({"events": [{"event": "assigned", "at": "2026-10-19T00:00:00Z"}]}, "$.events[0].message_id/seq"),
+])
+def test_d1_malformed_atm_events_name_producer_and_field(world, payload, field):
+    argv = ("atm", "task", "events", world.values["dev_task_id"], "--all", "--json")
+    world.overrides[argv] = (0, json.dumps(payload))
+    error = world.run()["err"]
+    producer = " ".join(argv)
+    assert error["code"] == "COMMAND.INVALID"
+    assert producer in error["message"] and field in error["message"]
+    assert producer in error["fix"] and field in error["fix"]
+    assert world.writes == []

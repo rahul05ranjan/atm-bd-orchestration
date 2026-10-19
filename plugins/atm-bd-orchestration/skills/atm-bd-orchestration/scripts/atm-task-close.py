@@ -38,6 +38,120 @@ def header(path):
     return yaml.safe_load(path.read_text(encoding="utf-8").split("---", 2)[1])
 
 
+def read_vars(path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise CloseError("VARS.INVALID", f"Cannot read vars file {path}: {error}",
+                         f"Provide a readable UTF-8 JSON file at --vars {path}.") from error
+    try:
+        values = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise CloseError("VARS.INVALID", f"{path}:{error.lineno}:{error.colno}: {error.msg}",
+                         f"Correct JSON at line {error.lineno}, column {error.colno} in {path}.") from error
+    if not isinstance(values, dict):
+        raise CloseError("VARS.INVALID", f"{path}: expected a JSON object, got {type(values).__name__}",
+                         f"Replace the top-level value in {path} with the lead's shared vars object.")
+    return values
+
+
+def read_toml_setting(path, fields):
+    name = ".".join(fields)
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+        raise CloseError("CONFIG.INVALID", f"Cannot read {name} from {path}: {error}",
+                         f"Create or repair UTF-8 TOML file {path} and set {name} to a non-empty string.") from error
+    for field in fields:
+        if not isinstance(data, dict) or field not in data:
+            raise CloseError("CONFIG.INVALID", f"{path}: missing {name}",
+                             f"Set {name} to a non-empty string in {path}.")
+        data = data[field]
+    if not isinstance(data, str) or not data.strip():
+        raise CloseError("CONFIG.INVALID", f"{path}: {name} must be a non-empty string",
+                         f"Set {name} to a non-empty string in {path}.")
+    return data
+
+
+def read_config(root, role, verdict):
+    path = root / repo_config.RELATIVE_PATH
+    try:
+        config = repo_config.load(root)
+    except (repo_config.ConfigError, OSError, UnicodeError) as error:
+        if isinstance(error, repo_config.ConfigNotFound):
+            fix = f"Run the atm-bd-orchestration installer for {root} to create {path}."
+        elif "max_sanity_rounds" in str(error):
+            fix = f"Set max_sanity_rounds to a positive integer in the consumer registry and rerun the installer to regenerate {path}."
+        elif "lead belongs" in str(error):
+            fix = f"Move lead from {path} into .atm-bd/phase-<x>.toml and rerun the installer to remove the repository lead."
+        else:
+            fix = f"Repair the readable UTF-8 YAML mapping in {path} at the location reported in the error."
+        raise CloseError("CONFIG.INVALID", f"{path}: {error}",
+                         fix) from error
+    fields = ["bead_prefix", "dev_sanity_member"] if role in ("dev", "fix") else ["qa_member"] if role == "sanity" and verdict == "PASS" else []
+    for field in fields:
+        value = config.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise CloseError("CONFIG.INVALID", f"{path}: {field} must be a non-empty string",
+                             f"Set {field} in the consumer registry and rerun the installer to regenerate {path}.")
+    return config
+
+
+def sanity_round(metadata, bead):
+    count = metadata.get("sanity_round", 0)
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise CloseError("BEAD.INVALID", f"{bead}: metadata.sanity_round must be a non-negative integer, got {count!r}",
+                         f"Correct metadata.sanity_round on bead {bead} to the recorded non-negative FAIL count with bd update {bead} --metadata, preserving other metadata.")
+    return count
+
+
+def validate_command_json(argv, data):
+    producer = " ".join(argv)
+
+    def require(condition, field, expected):
+        if not condition:
+            raise CloseError("COMMAND.INVALID", f"{producer}: {field} must be {expected}",
+                             f"Repair {field} in the JSON returned by `{producer}` to be {expected}, then retry.")
+
+    if argv[:2] in (["bd", "show"], ["bd", "list"]):
+        require(isinstance(data, list), "$", "an array of bead objects")
+        for index, row in enumerate(data):
+            field = f"$[{index}]"
+            require(isinstance(row, dict), field, "a bead object")
+            metadata = row.get("metadata")
+            require(metadata is None or isinstance(metadata, dict), field + ".metadata", "an object or null")
+            if isinstance(metadata, dict) and "layers" in metadata:
+                layers = metadata["layers"]
+                require(isinstance(layers, list), field + ".metadata.layers", "an array")
+                for layer_index, layer in enumerate(layers):
+                    layer_field = f"{field}.metadata.layers[{layer_index}]"
+                    require(isinstance(layer, dict), layer_field, "an object")
+                    for name in ("branch", "head"):
+                        require(isinstance(layer.get(name), str) and bool(layer[name].strip()), layer_field + "." + name, "a non-empty string")
+    elif argv[:3] == ["atm", "task", "events"]:
+        require(isinstance(data, dict), "$", "an object")
+        events = data.get("events")
+        require(isinstance(events, list), "$.events", "an array")
+        for index, event in enumerate(events):
+            field = f"$.events[{index}]"
+            require(isinstance(event, dict), field, "an event object")
+            if event.get("event") in ("assigned", "updated", "reassigned"):
+                require(isinstance(event.get("at"), str) and bool(event["at"]), field + ".at", "a timestamp string")
+                require(bool(event.get("message_id")) or isinstance(event.get("seq"), int), field + ".message_id/seq", "an assignment event identifier")
+    elif argv[:2] == ["atm", "search"]:
+        require(isinstance(data, dict), "$", "an object")
+        require(isinstance(data.get("hits"), list), "$.hits", "an array")
+    elif argv[:2] == ["gh", "api"]:
+        require(isinstance(data, list), "$", "an array of PR objects")
+        for index, pr in enumerate(data):
+            field = f"$[{index}]"
+            require(isinstance(pr, dict), field, "a PR object")
+            require("number" in pr, field + ".number", "a PR number")
+            require(isinstance(pr.get("head"), dict), field + ".head", "an object")
+            require(isinstance(pr["head"].get("sha"), str), field + ".head.sha", "a string")
+    return data
+
+
 def validate(values, role):
     if role == "dev" and values.get("outcome") == "not_reproducible":
         raise CloseError("VARS.INVALID", "not_reproducible is a fix outcome", "Use the fix role for an unreproducible finding.")
@@ -63,6 +177,10 @@ def validate(values, role):
     for name in names:
         if not str(values[name] or "").strip():
             raise CloseError("VARS.EMPTY", name, f"Populate {name} in the shared vars file.")
+    for name in ("primary_checkout", "worktree_path", "phase"):
+        if not isinstance(values[name], str):
+            raise CloseError("VARS.INVALID", f"{name} must be a string, got {type(values[name]).__name__}",
+                             f"Set {name} to a non-empty string in the lead's shared vars file.")
     if role in ("sanity", "qa") and values["verdict"] not in ("PASS", "FAIL", "CANNOT_RUN"):
         raise CloseError("VARS.INVALID", "verdict must be PASS, FAIL or CANNOT_RUN", "Supply the selected review verdict.")
     if role == "qa" and values["verdict"] == "CANNOT_RUN":
@@ -89,14 +207,12 @@ class Hook:
         self.identity = os.environ.get("ATM_IDENTITY", "")
         if not self.identity:
             raise CloseError("VARS.INVALID", "ATM_IDENTITY is not set", "Run as the assigned ATM member.")
-        config = repo_config.load(self.root)
+        config = read_config(self.root, role, values["verdict"])
         self.config = config
-        phase = tomllib.loads((self.root / ".atm-bd" / f"phase-{values['phase']}.toml").read_text())
-        team = tomllib.loads((self.root / ".atm.toml").read_text())["atm"]["default_team"]
-        self.lead = phase["lead"]
+        self.lead = read_toml_setting(self.root / ".atm-bd" / f"phase-{values['phase']}.toml", ("lead",))
+        team = read_toml_setting(self.root / ".atm.toml", ("atm", "default_team"))
         self.env = dict(os.environ)
-        self.env["ATM_TEAM"] = team
-        self.lead_env = {**self.env, "ATM_IDENTITY": self.lead}
+        self.lead_env = {**self.env, "ATM_IDENTITY": self.lead, "ATM_TEAM": team}
         self.github = "ok"
         self.closed, self.assigned = [], []
         self.task = values[{"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role]]
@@ -105,7 +221,8 @@ class Hook:
         if not assignments:
             raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
         self.assignment = assignments[-1]
-        self.key = [self.task, self.assignment.get("message_id") or self.assignment["seq"], values["verdict"], values.get("commit", "")]
+        self.assignment_id = self.assignment.get("message_id") or self.assignment["seq"]
+        self.key = [self.task, values["verdict"], values.get("commit", "")]
 
     def run(self, argv, *, lead=False, git=False, check=True):
         try:
@@ -119,10 +236,14 @@ class Hook:
         return result
 
     def json(self, argv, **kwargs):
+        self.last_json_argv = list(argv)
         try:
-            return json.loads(self.run(argv, **kwargs).stdout)
+            data = json.loads(self.run(argv, **kwargs).stdout)
         except ValueError as error:
-            raise CloseError("COMMAND.INVALID", f"{argv[0]} returned invalid JSON", "Repair the command's JSON output and retry.") from error
+            producer = " ".join(argv)
+            raise CloseError("COMMAND.INVALID", f"{producer} returned invalid JSON: {error}",
+                             f"Repair the JSON returned by `{producer}` at the reported syntax location and retry.") from error
+        return validate_command_json(argv, data)
 
     def bead(self, bead):
         rows = self.json(["bd", "show", bead, "--json"])
@@ -144,8 +265,14 @@ class Hook:
 
     def check_replay(self, bead):
         record = self.bead(bead)
-        recorded = (record.get("metadata") or {}).get("task_close_key")
-        if recorded and recorded[:2] == self.key[:2] and recorded != self.key:
+        metadata = record.get("metadata") or {}
+        recorded = metadata.get("task_close_key")
+        recorded_assignment = metadata.get("task_close_assignment", self.assignment_id)
+        if isinstance(recorded, list) and len(recorded) == 4:
+            recorded_assignment = recorded[1]
+            recorded = [recorded[0], *recorded[2:]]
+        same_assignment = recorded_assignment == self.assignment_id
+        if recorded and recorded[0] == self.task and same_assignment and recorded != self.key:
             if self.role not in ("dev", "fix") or record.get("status") != "open":
                 raise CloseError("REPLAY.CONFLICT", "recorded verdict or sha differs", "Use the original vars for a replay or start a new review assignment.")
 
@@ -276,7 +403,7 @@ class Hook:
         values = self.values
         assignment_values = json.loads(Path(path).read_text()) if path else values
         self.metadata(values["checked_bead"], {"commit": assignment_values["commit"], "branch": assignment_values["branch"], "pr_number": values.get("pr_number", ""),
-                                             "pr_url": values["pr_url"], "task_close_key": self.key})
+                                             "pr_url": values["pr_url"], "task_close_key": self.key, "task_close_assignment": self.assignment_id})
         assigned = self.delivered("dev-sanity-task", recipient=self.config["dev_sanity_member"],
                                   sender=self.lead, values=assignment_values)
         sanity_events = self.json(["atm", "task", "events", sanity, "--all", "--json"]).get("events", [])
@@ -299,7 +426,7 @@ class Hook:
         if verdict == "CANNOT_RUN":
             self.render("dev-sanity-complete.md.j2")
             metadata = self.bead(bead).get("metadata") or {}
-            self.update(bead, status="open", assignee="", metadata={**metadata, "task_close_key": self.key})
+            self.update(bead, status="open", assignee="", metadata={**metadata, "task_close_key": self.key, "task_close_assignment": self.assignment_id})
             self.close_task(bead, "dev-sanity-complete.md.j2", outcome="refused")
             return
         self.render("dev-sanity-complete.md.j2")
@@ -313,7 +440,7 @@ class Hook:
                 raise CloseError("VARS.INVALID", "fix QA requires carry_forward", "Supply the checked fix bead as carry_forward.")
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
-            self.metadata(bead, {"task_close_key": self.key})
+            self.metadata(bead, {"task_close_key": self.key, "task_close_assignment": self.assignment_id})
             self.close_bead(bead, f"PASS at {values['commit']}")
             self.close_task(values["dev_task_id"], lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
@@ -322,13 +449,13 @@ class Hook:
         self.render("sanity-fail.xml.j2")
         record = self.bead(bead)
         metadata = record.get("metadata") or {}
-        count_key = self.key
-        count = int(metadata.get("sanity_round", 0))
+        count_key = [self.task, self.assignment_id, values["verdict"], values.get("commit", "")]
+        count = sanity_round(metadata, bead)
         if metadata.get("sanity_round_key") != count_key:
             count += 1
-            self.metadata(bead, {"sanity_round": count, "sanity_round_key": count_key, "task_close_key": self.key})
+            self.metadata(bead, {"sanity_round": count, "sanity_round_key": count_key, "task_close_key": self.key, "task_close_assignment": self.assignment_id})
         if count > self.config["max_sanity_rounds"]:
-            message = f"SANITY.ROUND_CAP {bead} {values['commit']} assignment={self.key[1]} undone=" + ",".join(str(item["number"]) for item in values["undone"])
+            message = f"SANITY.ROUND_CAP {bead} {values['commit']} assignment={self.assignment_id} undone=" + ",".join(str(item["number"]) for item in values["undone"])
             if not self.delivered(None, recipient=self.lead, text=message):
                 self.run(["atm", "send", self.lead, message])
             self.close_task(bead, "dev-sanity-complete.md.j2")
@@ -343,10 +470,12 @@ class Hook:
         values = self.values
         self.check_replay(values["qa_bead"])
         self.render("qa-complete.md.j2")
-        self.metadata(values["qa_bead"], {"task_close_key": self.key})
+        self.metadata(values["qa_bead"], {"task_close_key": self.key, "task_close_assignment": self.assignment_id})
         self.close_bead(values["qa_bead"], f"{values['verdict']} at {values['commit']}")
         self.close_task(values["qa_bead"], "qa-complete.md.j2")
-        self.send(self.lead, "qa-complete.md.j2", "qa-complete")
+        message = f"QA {values['verdict']} {values['qa_bead']} commit={values['commit']} round={values['round']}"
+        if not self.delivered(None, recipient=self.lead, text=message):
+            self.run(["atm", "send", self.lead, message])
 
 
 def main(argv=None, runner=subprocess.run, clock=time.monotonic):
@@ -354,11 +483,10 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
     parser.add_argument("--role", required=True, choices=ROLES)
     parser.add_argument("--vars", required=True, type=Path)
     parser.add_argument("--skip-checks", action="store_true", help="skips the PR and stack checks. Do NOT use without permission from the phase lead.")
+    hook = None
     try:
         args = parser.parse_args(argv)
-        values = json.loads(args.vars.read_text(encoding="utf-8"))
-        if not isinstance(values, dict):
-            raise CloseError("VARS.INVALID", "vars must be an object", "Supply a shared JSON vars object.")
+        values = read_vars(args.vars)
         validate(values, args.role)
         hook = Hook(args.role, values, args.vars, runner, clock)
         started = clock()
@@ -370,8 +498,19 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
         output = {"ok": result}
     except CloseError as error:
         output = {"err": {"code": error.code, "message": str(error), "fix": error.fix}}
-    except (OSError, ValueError, KeyError, TypeError, repo_config.ConfigError) as error:
-        output = {"err": {"code": "VARS.INVALID", "message": str(error), "fix": "Correct repository configuration or vars and rerun the hook."}}
+    except KeyError as error:
+        field = str(error.args[0])
+        producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars)
+        output = {"err": {"code": "COMMAND.INVALID", "message": f"{producer}: required field {field} is missing",
+                          "fix": f"Restore field {field} in `{producer}` before retrying."}}
+    except OSError as error:
+        path = str(error.filename or "the path named in the error")
+        output = {"err": {"code": "COMMAND.FAILED", "message": str(error),
+                          "fix": f"Restore file access for {path} and rerun with the same vars file."}}
+    except (ValueError, TypeError) as error:
+        producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars)
+        output = {"err": {"code": "COMMAND.INVALID", "message": f"{producer}: {type(error).__name__}: {error}",
+                          "fix": f"Repair the invalid value reported by {type(error).__name__} in `{producer}`: {error}."}}
     print(json.dumps(output))
     print(json.dumps(output), file=sys.stderr)
     return 1 if "err" in output else 0

@@ -14,6 +14,17 @@ ROOT = Path(__file__).parents[2]
 
 
 class TemplateContractTests(unittest.TestCase):
+    def test_dev_and_fix_completion_descriptions_identify_send_report_not_task_close(self):
+        import yaml
+
+        for name in ("dev-complete.md.j2", "fix-complete.md.j2"):
+            with self.subTest(template=name):
+                text = (ROOT / "templates" / name).read_text()
+                description = yaml.safe_load(text.split("---", 2)[1])["description"]
+                self.assertIn("Body of the hook's atm send --template report", description)
+                self.assertIn("task stays open until sanity PASS", description)
+                self.assertNotIn("atm task close", description)
+
     def test_dev_template_requires_pr_target_not_obsolete_top(self):
         text = (ROOT / "templates/dev-template.xml.j2").read_text()
         self.assertIn("- pr_target", text)
