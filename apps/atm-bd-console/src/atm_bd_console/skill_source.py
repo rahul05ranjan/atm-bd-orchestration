@@ -209,8 +209,8 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
         except RepositoryError:
             raise
         except SkillSourceError as error:
-            raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
+            raise SkillSourceError(install_failure_message(ref, error)) from error
         except OSError as error:
-            raise SkillSourceError(f"{ref} is not installable by atm-bd {__version__}: {error}") from error
+            raise SkillSourceError(install_failure_message(ref, error)) from error
         # Outside the translation: errors raised by the caller's work with the tree are not the ref's.
         yield SkillSource(name, pkg_dir, commit, manifest)

@@ -319,6 +319,32 @@ def test_missing_release_artifact_fails_before_yield_with_app_version(monkeypatc
         raise AssertionError("invalid release tree must not be yielded")
 
 
+@pytest.mark.parametrize("error_type", [skill_source.SkillSourceError, OSError])
+def test_release_tree_errors_use_the_shared_formatter(monkeypatch, error_type) -> None:
+    failure = error_type("tree unavailable")
+    formatted = []
+    monkeypatch.setattr(skill_source, "remote_tags", lambda: ("v0.16.0",))
+    monkeypatch.setattr(skill_source, "_run_git", lambda *args, **kwargs: "")
+
+    def reject_tree(*args):
+        raise failure
+
+    def format_failure(name, error):
+        formatted.append((name, error))
+        return "shared formatted error"
+
+    monkeypatch.setattr(skill_source, "_validate_pkg_dir", reject_tree)
+    monkeypatch.setattr(skill_source, "install_failure_message", format_failure)
+
+    with (
+        pytest.raises(skill_source.SkillSourceError, match="^shared formatted error$") as caught,
+        skill_source.resolve_source(version="0.16.0"),
+    ):
+        pytest.fail("an invalid release tree must not be yielded")
+    assert formatted == [("v0.16.0", failure)]
+    assert caught.value.__cause__ is failure
+
+
 def test_errors_raised_while_the_tree_is_in_use_are_not_relabelled(monkeypatch, tmp_path: Path) -> None:
     def run(args, **_kwargs):
         if args[0] == "ls-remote":
