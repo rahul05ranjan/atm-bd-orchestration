@@ -78,8 +78,8 @@ def phase_config_path(repo: Path, phase: str) -> Path:
     return Path(repo) / PHASE_DIR / f"phase-{phase}.toml"
 
 
-def validate_phase_config(repo: Path, phase: str, data: dict[str, Any], *, require_dispatch: bool = True) -> dict[str, Any]:
-    """Validate phase settings; readers may omit dispatch settings for queue inspection."""
+def validate_phase_config(repo: Path, phase: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Validate the complete tracked phase settings."""
     path = phase_config_path(repo, phase)
     problems = []
     for key in PHASE_KEYS:
@@ -91,10 +91,10 @@ def validate_phase_config(repo: Path, phase: str, data: dict[str, Any], *, requi
     if "code_checkout" in data and (not isinstance(data["code_checkout"], str) or not data["code_checkout"].strip()
                                      or Path(data["code_checkout"]).is_absolute()):
         problems.append("code_checkout: optional repository-relative path to the code repository")
-    if require_dispatch and (not isinstance(data.get("lead"), str) or not data["lead"].strip()):
+    if not isinstance(data.get("lead"), str) or not data["lead"].strip():
         problems.append("lead: required nonempty string")
     templates = data.get("templates")
-    if require_dispatch and templates is None:
+    if templates is None:
         problems.append("templates: required table with keys " + ", ".join(DEFAULT_TEMPLATES))
     if templates is not None:
         if not isinstance(templates, dict):
@@ -127,8 +127,8 @@ def validate_phase_config(repo: Path, phase: str, data: dict[str, Any], *, requi
     return dict(data)
 
 
-def load_phase_config(repo: Path, phase: str, *, require_dispatch: bool = False) -> dict[str, Any]:
-    """Read the phase's plan, root and branch; preserve optional phase-specific keys."""
+def load_phase_config(repo: Path, phase: str) -> dict[str, Any]:
+    """Read and validate the complete phase settings."""
     path = phase_config_path(repo, phase)
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -136,7 +136,7 @@ def load_phase_config(repo: Path, phase: str, *, require_dispatch: bool = False)
         raise RuntimeError(f"{path} does not exist; the planner commits it with the plan") from exc
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise RuntimeError(f"{path}: {exc}") from exc
-    return validate_phase_config(repo, phase, data, require_dispatch=require_dispatch)
+    return validate_phase_config(repo, phase, data)
 
 
 def phase_path(repo: Path, phase: str) -> Path:

@@ -102,10 +102,13 @@ repository's primary checkout relative to the beads repository root. If absent,
 the code repository defaults to the beads repository. The console verifies that
 the selected path is a Git toplevel with a GitHub `origin`; phase data, beads,
 plans and console state remain in the beads repository.
-The phase file requires `dev`, `fix`, `sanity`, `qa`,
+The shared phase reader requires `plan`, `root`, `integration_branch`, `lead`,
+and the `templates` table, and rejects unknown top-level keys. `code_checkout`
+is optional. The table requires `dev`, `fix`, `sanity`, `qa`,
 `plan_review` and `review`; each points to an existing repository-relative
 file inside `.claude/skills/atm-bd-orchestration/templates/`. The phase lead
 has no repository YAML, registry-role, CLI identity or environment fallback.
+Only the legacy `templates.dev_fix` key is tolerated in addition to those six.
 
 | Key | Consumed by |
 | --- | --- |

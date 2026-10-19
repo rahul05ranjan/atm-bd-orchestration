@@ -228,7 +228,7 @@ def ci(repo: Path) -> int:
         return VALID
     for name in sorted(names):
         try:
-            config = plan_io.load_phase_config(repo, Path(name).stem.removeprefix("phase-"), require_dispatch=True)
+            config = plan_io.load_phase_config(repo, Path(name).stem.removeprefix("phase-"))
             text = (repo / config["plan"]).read_text(encoding="utf-8")
         except (RuntimeError, OSError) as exc:
             problems.append(f"{name}: {exc}")
@@ -266,7 +266,7 @@ def main(argv: list[str]) -> int:
         if args.root and plan_io.phase_of_root(args.root) != phase:
             raise CannotRun(f"--root {args.root} is not a root of phase {phase}")
         repo = Path(git("rev-parse", "--show-toplevel").strip())
-        config = plan_io.load_phase_config(repo, phase, require_dispatch=True)
+        config = plan_io.load_phase_config(repo, phase)
         if args.root and args.root != config["root"]:
             raise CannotRun(f"--root {args.root}; .atm-bd/phase-{phase}.toml names {config['root']}")
         text, where = plan_text(repo, config, args.index)

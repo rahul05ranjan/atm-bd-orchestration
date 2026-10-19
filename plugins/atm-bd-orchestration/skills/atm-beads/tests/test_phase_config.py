@@ -12,7 +12,7 @@ from phase_fixtures import TEMPLATE_DIRECTORY, TEMPLATE_NAMES, phase_data, phase
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from sprint_index_common import load_phase_config
+from sprint_index_common import load_phase_config, validate_phase_config
 
 
 class PhaseConfigTests(unittest.TestCase):
@@ -60,7 +60,7 @@ class PhaseConfigTests(unittest.TestCase):
                         target[key] = value
                     self.write(data)
                     with self.assertRaisesRegex(RuntimeError, f"{key}: required") as caught:
-                        load_phase_config(self.repo, "t", require_dispatch=True)
+                        load_phase_config(self.repo, "t")
                     self.assertIn(str(self.path), str(caught.exception))
 
     def test_each_dangling_template_path_names_its_key_and_path(self):
@@ -98,13 +98,25 @@ class PhaseConfigTests(unittest.TestCase):
                         load_phase_config(self.repo, "t")
                     self.assertIn(data["templates"][key], str(caught.exception))
 
-    def test_phase_file_does_not_require_lead_or_templates_and_preserves_extra_keys(self):
+    def test_both_readers_require_lead_and_templates_by_default(self):
+        for key in ("lead", "templates"):
+            with self.subTest(key=key):
+                data = copy.deepcopy(self.data)
+                data.pop(key)
+                self.write(data)
+                with self.assertRaisesRegex(RuntimeError, f"{key}: required"):
+                    load_phase_config(self.repo, "t")
+                with self.assertRaisesRegex(RuntimeError, f"{key}: required"):
+                    validate_phase_config(self.repo, "t", data)
+
+    def test_unknown_top_level_key_fails_in_both_readers(self):
         data = copy.deepcopy(self.data)
-        data.pop("lead")
-        data.pop("templates")
-        data["code_checkout"] = "../product"
+        data["unexpected"] = "value"
         self.write(data)
-        self.assertEqual(load_phase_config(self.repo, "t"), data)
+        with self.assertRaisesRegex(RuntimeError, "unknown key.*unexpected"):
+            load_phase_config(self.repo, "t")
+        with self.assertRaisesRegex(RuntimeError, "unknown key.*unexpected"):
+            validate_phase_config(self.repo, "t", data)
 
     def test_unknown_template_keys_and_retired_aliases_fail(self):
         for key in ("dev_assign", "fix_review", "sanity_assign", "qa_assign", "unknown"):
@@ -125,7 +137,7 @@ class PhaseConfigTests(unittest.TestCase):
             load_phase_config(self.repo, "t")
         self.assertIn(str(self.path), str(caught.exception))
 
-    def test_missing_lead_is_not_required_by_the_shared_phase_reader(self):
+    def test_missing_lead_has_no_environment_or_repository_fallback(self):
         data = copy.deepcopy(self.data)
         data.pop("lead")
         self.write(data)
@@ -133,10 +145,11 @@ class PhaseConfigTests(unittest.TestCase):
         config.parent.mkdir(parents=True)
         config.write_text("lead: repository-fallback\n")
         code = ("from pathlib import Path; from sprint_index_common import load_phase_config; "
-                "assert 'lead' not in load_phase_config(Path('.'), 't')")
+                "load_phase_config(Path('.'), 't')")
         result = run_subprocess([sys.executable, "-c", code], cwd=self.repo, capture_output=True, text=True,
                                 env={**os.environ, "PYTHONPATH": str(SCRIPTS), "ATM_IDENTITY": "env-fallback"})
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lead: required", result.stderr)
 
     def init(self, *arguments):
         return run_subprocess([sys.executable, str(SCRIPTS / "phase-config"), "init", *arguments],

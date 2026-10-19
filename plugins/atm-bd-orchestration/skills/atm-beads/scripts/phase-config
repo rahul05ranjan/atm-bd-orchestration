@@ -29,7 +29,7 @@ def main(argv: list[str]) -> int:
         "lead": args.lead,
         "templates": dict(DEFAULT_TEMPLATES),
     }
-    validate_phase_config(repo, args.phase, data, require_dispatch=True)
+    validate_phase_config(repo, args.phase, data)
     scalars = "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n"
                       for key, value in data.items() if key != "templates")
     templates = "".join(f"{key} = {json.dumps(value)}\n" for key, value in data["templates"].items())
