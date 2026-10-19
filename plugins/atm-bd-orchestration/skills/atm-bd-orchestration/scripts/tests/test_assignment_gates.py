@@ -76,15 +76,7 @@ HISTORY_PASSED = [{"CommitHash": "c4", "Issue": {"id": "bead", "status": "open"}
 
 def sanity_runner(overrides=None):
     data = {
-        ("bd", "show", "bead", "--json"): (0, dumped([{"metadata": {}}])),
-        ("gh", "pr", "view", "7", "--json", "baseRefName,headRefName,headRefOid"): (0, dumped({"baseRefName": "target", "headRefName": "branch", "headRefOid": "head"})),
-        **stacks(pr(5, "merged", "closed", "2026-10-01T00:00:00Z"), pr(6, "target"), pr(7, "branch")),
-        HEADS("--head", "target"): (0, dumped([{"headRefName": "target"}])),
-        ("git", "fetch", "origin"): (0, ""),
-        ("git", "rev-parse", "target"): (0, "base"),
-        ("git", "rev-parse", "origin/target"): (0, "base"),
-        ("git", "log", "--format=%H", "origin/target..head"): (0, "delta"),
-        ("git", "status", "--porcelain", "--untracked-files=no"): (0, "?? .beads.gate.lock"),
+        ("git", "rev-parse", "HEAD"): (0, "head"),
         ("bd", "history", "bead", "--json"): (0, dumped(HISTORY_NEVER_PASSED)),
     }; data.update(overrides or {}); return FakeRunner(data)
 
@@ -161,41 +153,45 @@ class AssignmentGateTests(unittest.TestCase):
 
     def test_sanity_refusals_and_ready(self):
         cases = [
-            ("pr-required.json", ns("sanity", pr_number=""), sanity_runner()),
-            ("not-stacked.json", ns("sanity"), sanity_runner({("gh", "pr", "view", "7", "--json", "baseRefName,headRefName,headRefOid"): (0, dumped({"baseRefName": "wrong", "headRefName": "branch", "headRefOid": "head"}))})),
-            ("not-stacked.json", ns("sanity"), sanity_runner({("gh", "pr", "view", "7", "--json", "baseRefName,headRefName,headRefOid"): (0, dumped({"baseRefName": "target", "headRefName": "branch", "headRefOid": "moved"}))})),
-            ("not-stacked.json", ns("sanity"), sanity_runner({STACKS: (0, "")})),
-            ("not-stacked.json", ns("sanity"), sanity_runner(stacks(pr(6, "target")))),
-            ("not-stacked.json", ns("sanity"), sanity_runner(stacks(pr(6, "target"), pr(7, "branch"), is_open=False))),
-            ("not-stacked.json", ns("sanity"), sanity_runner(stacks(pr(6, "target"), pr(8, "other"), pr(7, "branch")))),
-            ("sanity-ready.json", ns("sanity"), sanity_runner(stacks(pr(6, "target"), pr(8, "closed-unmerged", "closed"), pr(7, "branch"),
-                                                                     others=[{"number": 2, "base": {"ref": "main"}, "open": True, "pull_requests": [pr(9, "x")]}]))),
-            ("not-stacked.json", ns("sanity", pr_target="planned"), sanity_runner({("git", "merge-base", "--is-ancestor", "origin/planned", "origin/target"): (1, "")})),
-            ("sanity-ready.json", ns("sanity", pr_target="planned"), sanity_runner({("git", "merge-base", "--is-ancestor", "origin/planned", "origin/target"): (0, "")})),
-            ("not-rebased.json", ns("sanity"), sanity_runner({("git", "merge-base", "--is-ancestor", "origin/target", "head"): (1, "")})),
-            ("zero-delta.json", ns("sanity"), sanity_runner({("git", "log", "--format=%H", "origin/target..head"): (0, "")})),
-            ("dirty-tree.json", ns("sanity"), sanity_runner({("git", "status", "--porcelain", "--untracked-files=no"): (0, " M tracked.py")})),
             ("sanity-frozen.json", ns("sanity"), sanity_runner({("bd", "history", "bead", "--json"): (0, dumped(HISTORY_PASSED))})),
             ("sanity-ready.json", ns("sanity"), sanity_runner()),
+            ("sanity-ready.json", ns("sanity", pr_number=""), sanity_runner()),
         ]
         for fixture, gate_args, runner in cases:
-            with self.subTest(fixture=fixture): self.assert_fixture(fixture, gate_args, runner)
+            with self.subTest(fixture=fixture, pr_number=gate_args.pr_number):
+                self.assert_fixture(fixture, gate_args, runner)
 
-    def test_sanity_checks_the_assigned_base_and_runs_git_in_the_worktree(self):
-        self.assertEqual(gates.evaluate(ns("sanity", base="target"), sanity_runner()), "READY")
-        self.assertEqual(gates.evaluate(ns("sanity", base="assigned-elsewhere"), sanity_runner()), "NOT_STACKED")
-        moved = {("git", "-C", "/wt", "log", "--format=%H", "origin/target..head"): (0, "")}
-        runner = sanity_runner(moved)
-        self.assertEqual(gates.evaluate(ns("sanity", worktree="/wt"), runner), "ZERO_DELTA")
-        git_calls = [argv for _, argv in runner.calls if argv[0] == "git"]
-        self.assertTrue(git_calls and all(argv[1:3] == ("-C", "/wt") for argv in git_calls), git_calls)
+    def test_sanity_requires_an_assigned_commit_before_reading_state(self):
+        runner = sanity_runner()
+        self.assertEqual(gates.evaluate(ns("sanity", commit=""), runner), "COMMIT_REQUIRED")
+        self.assertEqual(runner.calls, [])
 
-    def test_sanity_rebase_check_that_cannot_run_is_not_a_refusal(self):
-        runner = sanity_runner({("git", "merge-base", "--is-ancestor", "origin/target", "head"): (128, "")})
-        self.assertEqual(gates.evaluate(ns("sanity"), runner), "GATE_CANNOT_RUN")
+    def test_sanity_checks_only_history_and_the_assigned_worktree_commit(self):
+        runner = sanity_runner({("git", "-C", "/wt", "rev-parse", "HEAD"): (0, "head")})
+        self.assertEqual(gates.evaluate(ns("sanity", worktree="/wt", base="elsewhere", pr_number=""), runner), "READY")
+        self.assertEqual(runner.calls, [
+            (None, ("bd", "history", "bead", "--json")),
+            (None, ("git", "-C", "/wt", "rev-parse", "HEAD")),
+        ])
+        moved = sanity_runner({("git", "-C", "/wt", "rev-parse", "HEAD"): (0, "moved")})
+        self.assertEqual(gates.evaluate(ns("sanity", worktree="/wt"), moved), "COMMIT_MISMATCH")
+
+    def test_sanity_commit_check_that_cannot_run_is_not_a_refusal(self):
+        runner = sanity_runner({("git", "rev-parse", "HEAD"): (128, "", "not a git repository")})
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(gates.evaluate(ns("sanity"), runner), "GATE_CANNOT_RUN")
+        self.assertIn("not a git repository", err.getvalue())
+
+    def test_sanity_frozen_history_wins_even_when_the_worktree_head_changed(self):
+        runner = sanity_runner({
+            ("bd", "history", "bead", "--json"): (0, dumped(HISTORY_PASSED)),
+            ("git", "rev-parse", "HEAD"): (0, "moved"),
+        })
+        self.assertEqual(gates.evaluate(ns("sanity"), runner), "SANITY_FROZEN")
+        self.assertEqual(runner.calls, [(None, ("bd", "history", "bead", "--json"))])
 
     def test_sanity_history_that_is_not_snapshots_cannot_run(self):
-        """Malformed `bd history` output is GATE_CANNOT_RUN naming the output, never an empty history (READY)."""
         for output in (dumped({"verdict": "PASS"}), dumped([{"description": "lint passes"}]), dumped([{"Issue": "closed"}]),
                        dumped([HISTORY_NEVER_PASSED[0], "PASS at abc1234"]), "not json"):
             with self.subTest(output=output):
@@ -206,40 +202,25 @@ class AssignmentGateTests(unittest.TestCase):
                 self.assertIn(output, err.getvalue())
         self.assertEqual(gates.evaluate(ns("sanity"), sanity_runner({("bd", "history", "bead", "--json"): (0, "[]")})), "READY")
 
-    def test_sanity_stack_checks_that_cannot_run_are_not_refusals(self):
-        for override in ({STACKS: (1, "", "gh: Not Found (HTTP 404)")}, {STACKS: (0, "not json")},
-                         {("git", "merge-base", "--is-ancestor", "origin/planned", "origin/target"): (128, "")}):
-            with self.subTest(override=override):
-                self.assertEqual(gates.evaluate(ns("sanity", pr_target="planned"), sanity_runner(override)), "GATE_CANNOT_RUN")
+    def test_sanity_history_command_failure_cannot_run(self):
+        runner = sanity_runner({("bd", "history", "bead", "--json"): (1, "", "database unavailable")})
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(gates.evaluate(ns("sanity"), runner), "GATE_CANNOT_RUN")
+        self.assertIn("database unavailable", err.getvalue())
 
-    def test_the_first_open_layer_is_based_on_the_trunk(self):
-        runner = sanity_runner({**stacks(pr(5, "merged", "closed", "2026-10-01T00:00:00Z"), pr(7, "target")),("gh", "pr", "view", "7", "--json", "baseRefName,headRefName,headRefOid"): (0, dumped({"baseRefName": "integrate", "headRefName": "target", "headRefOid": "head"})),
-                                ("git", "merge-base", "--is-ancestor", "origin/target", "origin/integrate"): (1, ""),
-                                ("git", "log", "--format=%H", "origin/integrate..head"): (0, "delta")})
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="integrate"), runner), "READY")
-        self.assertEqual(gates.evaluate(ns("sanity"), runner), "NOT_STACKED")  # the trunk does not descend from a planned layer above it
-
-    def test_layer_0_awaiting_layer_1_is_accepted_only_on_the_trunk(self):
-        unlinked = {STACKS: (0, ""), HEADS("--head", "integrate"): (0, "[]"),
-                    ("gh", "pr", "view", "7", "--json", "baseRefName,headRefName,headRefOid"): (0, dumped({"baseRefName": "integrate", "headRefName": "layer-0", "headRefOid": "head"})),
-                    ("git", "log", "--format=%H", "origin/integrate..head"): (0, "delta")}
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="integrate"), sanity_runner(unlinked)), "READY")
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="integrate"), sanity_runner(
-            {**unlinked, ("git", "merge-base", "--is-ancestor", "origin/integrate", "head"): (1, "")})), "NOT_REBASED")
-        # based on another layer's branch, or on a planned layer above the trunk: it must be in a stack
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="integrate"), sanity_runner(
-            {**unlinked, HEADS("--head", "integrate"): (0, dumped([{"headRefName": "integrate"}]))})), "NOT_STACKED")
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="planned"), sanity_runner(unlinked)), "NOT_STACKED")
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="integrate"), sanity_runner(
-            {**unlinked, HEADS("--head", "integrate"): (1, "", "HTTP 502")})), "GATE_CANNOT_RUN")
-
-    def test_sanity_reads_the_stack_from_githubs_stacks_api_not_local_tracking(self):
-        # The dev's worktree has no gh-stack tracking (the dev never runs gh stack), so `gh stack view` exits 2 there.
-        runner = sanity_runner({("/wt", ("gh", "stack", "view", "--json")): (2, ""),
-                                ("git", "-C", "/wt", "log", "--format=%H", "origin/target..head"): (0, "delta")})
-        self.assertEqual(gates.evaluate(ns("sanity", worktree="/wt"), runner), "READY")
-        self.assertIn(STACKS, runner.calls)
-        self.assertFalse([call for call in runner.calls if call[1][:3] == ("gh", "stack", "view")])
+    def test_sanity_does_not_consult_linking_dirty_state_or_github(self):
+        runner = sanity_runner({
+            STACKS: (1, "", "GitHub unavailable"),
+            ("gh", "pr", "view", "7", "--json", "baseRefName,headRefName,headRefOid"): (1, "", "unlinked PR"),
+            ("git", "status", "--porcelain", "--untracked-files=no"): (0, " M tracked.py"),
+            ("git", "merge-base", "--is-ancestor", "origin/target", "head"): (1, ""),
+            ("git", "log", "--format=%H", "origin/target..head"): (0, ""),
+        })
+        self.assertEqual(gates.evaluate(ns("sanity", pr_target="unlinked-target"), runner), "READY")
+        self.assertEqual([argv for _, argv in runner.calls], [
+            ("bd", "history", "bead", "--json"), ("git", "rev-parse", "HEAD"),
+        ])
 
     def test_a_lower_bound_whose_branch_is_gone_holds_only_when_its_pr_merged(self):
         gone = {("git", "merge-base", "--is-ancestor", "origin/planned", "origin/target"): (128, ""),
@@ -248,10 +229,11 @@ class AssignmentGateTests(unittest.TestCase):
         in_base = ("git", "merge-base", "--is-ancestor", "m1", "origin/target")
         listed = {**gone, merged: (0, dumped([{"mergeCommit": {"oid": "old"}}, {"mergeCommit": {"oid": "m1"}}])),
                   ("git", "merge-base", "--is-ancestor", "old", "origin/target"): (1, "")}
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="planned"), sanity_runner({**listed, in_base: (0, "")})), "READY")
-        # an older merged PR of a reused branch name whose merge commit is not in the base does not satisfy the bound
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="planned"), sanity_runner({**listed, in_base: (1, "")})), "GATE_CANNOT_RUN")
-        self.assertEqual(gates.evaluate(ns("sanity", pr_target="planned"), sanity_runner({**gone, merged: (0, "[]")})), "GATE_CANNOT_RUN")
+        self.assertTrue(gates.descends(FakeRunner({**listed, in_base: (0, "")}), "planned", "target"))
+        for responses in ({**listed, in_base: (1, "")}, {**gone, merged: (0, "[]")}):
+            with self.subTest(responses=responses):
+                with self.assertRaises(RuntimeError):
+                    gates.descends(FakeRunner(responses), "planned", "target")
 
     def stack_top(self, responses, target="integrate"):
         output = io.StringIO()
@@ -293,6 +275,28 @@ class AssignmentGateTests(unittest.TestCase):
     def test_gate_kinds_still_require_root_and_bead(self):
         with self.assertRaises(SystemExit):
             gates.main(["dev", "--pr-target", "target"], dev_runner())
+
+    def test_sanity_cli_needs_only_bead_commit_and_worktree(self):
+        runner = sanity_runner({("git", "-C", "/wt", "rev-parse", "HEAD"): (0, "head")})
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = gates.main(["sanity", "--bead", "bead", "--commit", "head", "--worktree", "/wt"], runner)
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue(), "READY\n")
+
+    def test_sanity_cli_still_requires_bead(self):
+        with self.assertRaises(SystemExit):
+            gates.main(["sanity", "--commit", "head"], sanity_runner())
+
+    def test_other_cli_kinds_still_require_pr_target(self):
+        for kind in ("dev", "qa", "stack-top"):
+            with self.subTest(kind=kind):
+                with self.assertRaises(SystemExit):
+                    gates.main([kind, "--root", "root", "--bead", "bead"], FakeRunner({}))
+
+    def test_qa_cli_still_requires_root(self):
+        with self.assertRaises(SystemExit):
+            gates.main(["qa", "--bead", "bead", "--pr-target", "target"], qa_runner())
 
     def test_qa_refusals_and_ready(self):
         cases = [

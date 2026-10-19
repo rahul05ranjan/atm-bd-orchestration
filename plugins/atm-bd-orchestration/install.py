@@ -327,7 +327,7 @@ def _coerce_set_value(name: str, raw: Any) -> Any:
 def resolve_config(repo_root: Path, overrides: Dict[str, Any], pkg_dir: Path = PKG_DIR) -> Dict[str, Any]:
     """Read the declared variables from registry.yaml and --set. Missing ones are left
     out (the strict render names them); unknown --set keys and wrong types are errors."""
-    names = config_variables(pkg_dir)
+    names = [*config_variables(pkg_dir), "max_sanity_rounds"]
     unknown = sorted(k for k in overrides if k not in names)
     if unknown:
         raise InstallError(
@@ -343,7 +343,15 @@ def resolve_config(repo_root: Path, overrides: Dict[str, Any], pkg_dir: Path = P
     if not isinstance(roles, dict):
         raise InstallError(f"{registry}: roles must be a mapping")
     values: Dict[str, Any] = {}
+    rounds = overrides.get("max_sanity_rounds", reg.get("max_sanity_rounds", 5))
+    if isinstance(rounds, str) and rounds.isdecimal():
+        rounds = int(rounds)
+    if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 1:
+        raise InstallError("max_sanity_rounds must be a positive integer")
+    values["max_sanity_rounds"] = rounds
     for name in names:
+        if name == "max_sanity_rounds":
+            continue
         if name in overrides:
             value = _coerce_set_value(name, overrides[name])
         elif name in ROLE_KEYS:

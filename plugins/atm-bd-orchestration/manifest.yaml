@@ -47,6 +47,10 @@ artifacts:
     - skills/atm-bd-orchestration/examples/ruthless-boundary-qa-assignment-vars.json
     - skills/atm-bd-orchestration/examples/sanity-run-record-vars.json
     - skills/atm-bd-orchestration/examples/schema-reviewer-assignment-vars.json
+    - skills/atm-bd-orchestration/examples/task-close-vars-dev.json
+    - skills/atm-bd-orchestration/examples/task-close-vars-fix.json
+    - skills/atm-bd-orchestration/examples/task-close-vars-qa.json
+    - skills/atm-bd-orchestration/examples/task-close-vars-sanity.json
     - skills/atm-bd-orchestration/examples/task-refused-vars.json
     - skills/atm-bd-orchestration/examples/workflow-issue-bead-vars.json
     - skills/atm-bd-orchestration/formulas/README.md
@@ -61,6 +65,7 @@ artifacts:
     - skills/atm-bd-orchestration/roles/quality-mgr.md
     - skills/atm-bd-orchestration/scripts/assignment-gates.py
     - skills/atm-bd-orchestration/scripts/atm-hook-doctor.py
+    - skills/atm-bd-orchestration/scripts/atm-task-close.py
     - skills/atm-bd-orchestration/scripts/bd_commands.py
     - skills/atm-bd-orchestration/scripts/bead-groups
     - skills/atm-bd-orchestration/scripts/bead-queues
@@ -71,7 +76,6 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/jev_client.py
     - skills/atm-bd-orchestration/scripts/post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/post_mortem_jev.py
-    - skills/atm-bd-orchestration/scripts/sanity-create-findings
     - skills/atm-bd-orchestration/scripts/sanity-merge
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
@@ -87,6 +91,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/fixtures/qa-ready.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/sanity-frozen.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/sanity-ready.json
+    - skills/atm-bd-orchestration/scripts/tests/fixtures/stack-bead.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/stale-sanity.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/transition-first-fail.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/transition-minor-pass.json
@@ -110,11 +115,10 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_jev.py
     - skills/atm-bd-orchestration/scripts/tests/test_qa_report_contract.py
-    - skills/atm-bd-orchestration/scripts/tests/test_sanity_create_findings.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_run_history.py
-    - skills/atm-bd-orchestration/scripts/tests/test_sanity_selected.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_split.py
+    - skills/atm-bd-orchestration/scripts/tests/test_task_close.py
     - skills/atm-bd-orchestration/scripts/tests/test_templates.py
     - skills/atm-bd-orchestration/scripts/tests/test_transitions.py
     - skills/atm-bd-orchestration/scripts/transitions.py
@@ -135,12 +139,15 @@ artifacts:
     - skills/atm-bd-orchestration/templates/qa-complete.md.j2
     - skills/atm-bd-orchestration/templates/qa-findings.md.j2
     - skills/atm-bd-orchestration/templates/qa-template.xml.j2
+    - skills/atm-bd-orchestration/templates/rebase-required.xml.j2
     - skills/atm-bd-orchestration/templates/req-qa-assignment.json.j2
     - skills/atm-bd-orchestration/templates/review-complete.md.j2
     - skills/atm-bd-orchestration/templates/review-template.xml.j2
     - skills/atm-bd-orchestration/templates/ruthless-boundary-qa-assignment.json.j2
+    - skills/atm-bd-orchestration/templates/sanity-fail.xml.j2
     - skills/atm-bd-orchestration/templates/sanity-run-record.json.j2
     - skills/atm-bd-orchestration/templates/schema-reviewer-assignment.json.j2
+    - skills/atm-bd-orchestration/templates/task-close-vars.j2
     - skills/atm-bd-orchestration/templates/task-refused.md.j2
     - skills/atm-bd-orchestration/templates/workflow-issue-bead.json.j2
     - skills/atm-beads/SKILL.md

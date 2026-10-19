@@ -10,7 +10,7 @@ is open.
 | Bead | Closed by | When |
 | --- | --- | --- |
 | dev, fix | the dev | the work is committed |
-| sanity | dev-sanity | PASS only. On FAIL it reopens the dev or fix bead and leaves sanity open; the `blocks` edge re-blocks sanity |
+| sanity | dev-sanity | PASS closes it. FAIL increments `metadata.sanity_round`; up to the configured cap the hook reopens dev or fix, resets sanity open/unassigned and sends `sanity-fail`; exceeding the cap escalates without reopening |
 | qa | quality-mgr | after it has poured a fix group for each blocking finding and created the important and minor finding beads |
 | sprint | the team lead | every blocking fix group is closed |
 
@@ -135,24 +135,29 @@ flowchart TB
   classDef script fill:#e6f4ea,stroke:#188038,color:#000
 
   SPR["p-x-2 sprint container<br/>cannot close: dev is open"]:::tmpl
-  DEV["p-x-2.group-dev<br/>reopened by dev-sanity"]:::poured
-  SAN["p-x-2.group-sanity: gate<br/>left open, re-blocked by dev"]:::poured
-  SF1["deliverable-2 NOT complete<br/>sanity-create-findings"]:::script
-  SF2["deliverable-5 NOT complete"]:::script
+  DEV["p-x-2.group-dev<br/>reopened by the close hook<br/>existing ATM task stays open"]:::poured
+  SAN["p-x-2.group-sanity: gate<br/>reset open and unassigned<br/>re-blocked by dev"]:::poured
+  FAIL["hook sends sanity-fail<br/>deliverable-2 and deliverable-5<br/>with selected reasons, no child beads"]:::script
+  CAP["round exceeds max_sanity_rounds (default 5)<br/>SANITY.ROUND_CAP to lead once<br/>dev stays closed; sanity not reset"]:::script
 
   DEV ==>|parent-child| SPR
   SAN ==>|parent-child| SPR
   SAN ==>|blocks| DEV
-  SF1 -->|parent-child| DEV
-  SF2 -->|parent-child| DEV
+  SAN -.->|FAIL within cap| FAIL
+  FAIL -.->|message on open task| DEV
+  SAN -.->|FAIL above cap| CAP
 ```
 
 The sanity bead is a minimal gate with no `discovered-from` edge. On FAIL
-dev-sanity files one child finding per undone deliverable under the checked
-bead, reopens it, and leaves sanity open. The open children hold the dev bead
-open, and the dev bead holds the sprint open. The dev fixes them for
-the reopened bead on a new layer cut from the stack's top (`dev-fix.xml.j2`). The same applies to a fix bead and its
-sanity.
+the close hook increments `metadata.sanity_round`. While the count is at most
+`max_sanity_rounds` (default 5), it reopens the checked bead, resets sanity
+open and unassigned, and sends one `sanity-fail` message with the numbered
+undone deliverables and selected reasons on the dev's existing open task.
+The dev fixes them, rebases onto the current top, validates, pushes and reruns
+the hook. No finding children or new task are created. Once the count exceeds
+the cap (the sixth FAIL by default), the hook reopens nothing and sends
+`SANITY.ROUND_CAP` to the lead once; the dev task stays open until the lead
+rules. The same applies to a fix bead and its sanity.
 
 dev-sanity is one teammate (`agents/dev-sanity.md`) that spawns
 `sc-sanity-llm` and `sc-sanity-jev`, owns the verdict, reruns a failed

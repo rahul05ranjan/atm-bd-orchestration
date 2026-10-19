@@ -173,32 +173,12 @@ def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
 
 
 def sanity_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
-    if not args.pr_number or not args.commit:
-        return "PR_REQUIRED"
-    run_json(runner, "bd", "show", args.bead, "--json")
-    pr = run_json(runner, "gh", "pr", "view", args.pr_number, "--json", "baseRefName,headRefName,headRefOid")
-    base = str(pr.get("baseRefName") or "")
-    stacked = stacked_base(runner, args.pr_number)
-    # Layer 0 alone cannot form a stack: unlinked, it is based on the trunk (its pr_target, no open PR's head).
-    awaiting_layer_one = stacked is None and base == args.pr_target and not open_pr_heads(runner, "--head", base)
-    assigned = getattr(args, "base", "")
-    if pr.get("headRefOid") != args.commit or (stacked != base and not awaiting_layer_one) or (assigned and base != assigned):
-        return "NOT_STACKED"
-    git = git_dir(args)
-    run(runner, "git", *git, "fetch", "origin")
-    if not descends(runner, args.pr_target, base, git):
-        return "NOT_STACKED"
-    if not run(runner, "git", *git, "log", "--format=%H", f"origin/{base}..{args.commit}"):
-        return "ZERO_DELTA"
-    rebased = runner(["git", *git, "merge-base", "--is-ancestor", f"origin/{base}", args.commit], capture_output=True, text=True)
-    if rebased.returncode == 1:
-        return "NOT_REBASED"
-    if rebased.returncode:
-        raise RuntimeError(rebased.stderr.strip() or "git merge-base failed")
-    if not is_clean(run(runner, "git", *git, "status", "--porcelain", "--untracked-files=no")):
-        return "DIRTY_TREE"
+    if not args.commit:
+        return "COMMIT_REQUIRED"
     if has_prior_pass(run(runner, "bd", "history", args.bead, "--json")):
         return "SANITY_FROZEN"
+    if run(runner, "git", *git_dir(args), "rev-parse", "HEAD") != args.commit:
+        return "COMMIT_MISMATCH"
     return "READY"
 
 
@@ -249,14 +229,16 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
     parser.add_argument("kind", choices=("dev", "sanity", "qa", "stack-top"))
     parser.add_argument("--root", default="")
     parser.add_argument("--bead", default="")
-    parser.add_argument("--pr-target", required=True)
+    parser.add_argument("--pr-target", default="")
     parser.add_argument("--identity", default="")
     parser.add_argument("--pr-number", default="")
     parser.add_argument("--commit", default="")
     parser.add_argument("--checked-bead", default="")
     parser.add_argument("--worktree", default="")
-    parser.add_argument("--base", default="", help="sanity: the assigned PR base; the PR's actual base must equal it")
+    parser.add_argument("--base", default="", help="accepted for compatibility; sanity does not check PR bases")
     args = parser.parse_args(argv)
+    if args.kind != "sanity" and not args.pr_target:
+        parser.error(f"{args.kind} needs --pr-target")
     if args.kind == "stack-top":
         try:
             top = stack_top(runner, args.pr_target)
@@ -265,7 +247,9 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
             return 2
         print(top or "STACK_AMBIGUOUS")
         return 0 if top else 5
-    if not (args.root and args.bead):
+    if args.kind == "sanity" and not args.bead:
+        parser.error("sanity needs --bead")
+    if args.kind != "sanity" and not (args.root and args.bead):
         parser.error(f"{args.kind} needs --root and --bead")
     code = evaluate(args, runner)
     print(code)

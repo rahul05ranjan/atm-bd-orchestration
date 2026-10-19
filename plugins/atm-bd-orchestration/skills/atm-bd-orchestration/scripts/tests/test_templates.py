@@ -30,13 +30,14 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn('"difficulty"', text)
         self.assertIn("## Deliverables\\n1.", text)
 
-    def test_sanity_assignment_has_pr_and_exact_checks(self):
+    def test_sanity_assignment_checks_only_frozen_history_and_pinned_commit_before_link(self):
         text = (ROOT / "templates/dev-sanity-template.xml.j2").read_text()
-        self.assertIn("- pr_number", text)
-        self.assertIn("- pr_url", text)
-        self.assertIn("gh pr view", text)
-        self.assertIn("SANITY.ZERO_DELTA", text)
-        self.assertIn("SANITY.NOT_REBASED", text)
+        self.assertIn("frozen PASS history and pinned commit", text)
+        self.assertIn("assignment-gates.py sanity --bead", text)
+        self.assertIn("--commit {{ commit }}", text)
+        self.assertIn("An unlinked PR is normal", text)
+        for obsolete in ("gh pr view", "SANITY.ZERO_DELTA", "SANITY.NOT_REBASED"):
+            self.assertNotIn(obsolete, text)
 
     def test_workflow_issue_template_exists(self):
         self.assertTrue((ROOT / "templates/workflow-issue-bead.json.j2").exists())
@@ -51,14 +52,18 @@ class TemplateContractTests(unittest.TestCase):
                 if name != "dev-sanity-template":
                     self.assertIn("--root {{ phase_root | string | cdata_escape }}", text)
 
-    def test_sanity_template_base_mismatch_code_matches_the_coordinator(self):
+    def test_sanity_template_links_after_selection_and_completes_through_hook(self):
         text = (ROOT / "templates/dev-sanity-template.xml.j2").read_text()
-        self.assertIn("require, else `SANITY.NOT_STACKED`:", text)  # agents/dev-sanity.md and assignment-gates.py sanity
+        self.assertIn("linking happens after the selected sanity PASS", text)
+        self.assertIn("For PASS, first obtain the sanity-stack result", text)
+        self.assertIn("atm-task-close.py --role sanity --vars", text)
+        self.assertIn("creates no finding bead", text)
+        self.assertIn("For CANNOT_RUN, the hook refuses", text)
+        self.assertNotIn("sanity-run-table.md.j2", text)
+        self.assertNotIn('<step id="e3">', text)
         self.assertNotIn("STALE_BASE", text)
-        self.assertIn("git merge-base --is-ancestor origin/<pr_target> origin/{{ base | string | cdata_escape }}", text)
+        self.assertNotIn("git merge-base --is-ancestor", text)
         self.assertNotIn("PR_TARGET_MISMATCH", text)
-        self.assertLess(text.index("bd ready -n 0 --json"), text.index("Otherwise claim"))
-        self.assertLess(text.index("git fetch origin"), text.index("origin/{{"))  # the tracking ref is fresh before any origin/ check
 
     def test_finding_bead_deliverables_are_splittable(self):
         import importlib.machinery, importlib.util, json, subprocess
@@ -176,6 +181,8 @@ class TemplateContractTests(unittest.TestCase):
         self.assertTrue(templates, "templates directory must not be empty")
         for template_path in templates:
             fixture_name = template_path.name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json"
+            if template_path.name in ("task-close-vars.j2", "sanity-fail.xml.j2", "rebase-required.xml.j2"):
+                fixture_name = "task-close-vars-dev.json"
             variables = examples / fixture_name
             with self.subTest(template=template_path.name):
                 self.assertTrue(variables.is_file(), f"missing strict-render fixture: {fixture_name}")
@@ -428,14 +435,26 @@ class BlockedRefusalTests(unittest.TestCase):
         for name in ("qa-template.xml.j2", "dev-sanity-template.xml.j2"):
             with self.subTest(template=name):
                 step_a = self._step(self._rendered(name), "a")
-                self.assertTrue(step_a.startswith('<step id="a"><![CDATA[Before'))
-                self.assertLess(step_a.index("bd ready -n 0 --json"), step_a.index("gh pr view"))
+                if name == "qa-template.xml.j2":
+                    self.assertLess(step_a.index("bd ready -n 0 --json"), step_a.index("gh pr view"))
+                else:
+                    self.assertLess(step_a.index("bd ready"), step_a.index("claim with"))
+                    self.assertLess(step_a.index("bd ready"), step_a.index("assignment-gates.py sanity"))
 
     def test_a_mid_task_blocker_returns_the_bead_open_and_refuses(self):
         for name in self.NOT_READY_STEP:
             with self.subTest(template=name):
                 text = self._rendered(name)
-                self.assertIn('--status open --assignee "" --append-notes "BLOCKED: <blocker>: <why>"', text)
+                if name == "dev-sanity-template.xml.j2":
+                    blocker_step = self._step(text, "e2")
+                    self.assertIn("BLOCKED: <blocker>: <why>", blocker_step)
+                    self.assertIn("--blocked-by <blocker>", blocker_step)
+                    self.assertIn("Run the hook with verdict CANNOT_RUN", blocker_step)
+                    self.assertIn("returns the bead open and unassigned and refuses the task", blocker_step)
+                    self.assertIn("atm-task-close.py --role sanity --vars", text)
+                    self.assertNotIn("bd update", blocker_step)
+                else:
+                    self.assertIn('--status open --assignee "" --append-notes "BLOCKED: <blocker>: <why>"', text)
                 self.assertIn("never stay active waiting", text)
 
     def test_a_shared_change_the_dev_can_make_is_a_quick_fix_not_a_blocker(self):
@@ -517,14 +536,14 @@ class DevAssignmentTests(unittest.TestCase):
         self.assertNotIn(f"git diff origin/{qa['base']}", layered.stdout)
 
     def test_sanity_reads_the_stack_from_githubs_stacks_api(self):
-        for text in ((ROOT / "templates/dev-sanity-template.xml.j2").read_text(), (ROOT.parents[1] / "agents/dev-sanity.md").read_text()):
+        for text in ((ROOT.parents[1] / "agents/dev-sanity.md").read_text(),):
             with self.subTest(text=text[:40]):
                 self.assertIn("gh api 'repos/{owner}/{repo}/stacks' --paginate --jq '.[]'`", text)
                 self.assertIn("never local `gh stack` tracking", text)
                 self.assertNotIn("gh_stack_view.py", text)
                 self.assertNotIn("`gh stack view --json` in the", text)
 
-    def test_completion_renders_a_stack_issue_unless_coherent_and_landable(self):
+    def test_completion_preserves_stack_evidence_without_requiring_link_or_landing(self):
         for name in ("dev-complete.md.j2", "fix-complete.md.j2"):
             values = _example(name.removesuffix(".md.j2") + "-vars.json")
             good = _render(name, values)
@@ -532,14 +551,34 @@ class DevAssignmentTests(unittest.TestCase):
                 self.assertEqual(good.returncode, 0, good.stderr)
                 self.assertNotIn("## Stack issue", good.stdout)
                 self.assertIn(values["stack_view"], good.stdout)
-                self.assertIn(f"Verify PR #{values['pr_number']} exists and link it on top of the phase stack", good.stdout)
-                self.assertIn("do not message or re-dispatch the dev for stacking", good.stdout)
+                self.assertIn("sanity PASS", good.stdout)
+                self.assertNotIn("## Next (task assigner)", good.stdout)
                 for bad in (values["stack_view"].replace("VERDICT: ✅ COHERENT", "VERDICT: ❌ NOT COHERENT"),
                             values["stack_view"].replace("LANDING: ✅", "LANDING: ❌"),
                             values["stack_view"].replace("LANDING: ✅", "LANDING: ❓")):
                     issue = _render(name, {**values, "stack_view": bad})
                     self.assertEqual(issue.returncode, 0, issue.stderr)
-                    self.assertLess(issue.stdout.index("## Stack issue"), issue.stdout.index("## Next (task assigner)"))
+                    self.assertIn(bad, issue.stdout)
+                    self.assertNotIn("## Stack issue", issue.stdout)
+
+    def test_dev_and_fix_use_immutable_shared_vars_and_wait_for_sanity(self):
+        for name, role in (("dev-template.xml.j2", "dev"), ("fix-assignment.xml.j2", "fix")):
+            values = _example(name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json")
+            result = _render(name, values)
+            with self.subTest(template=name):
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"atm-task-close.py --role {role} --vars <lead-supplied-vars-file>", result.stdout)
+                self.assertIn("immutable shared dispatch vars file unchanged", result.stdout)
+                self.assertIn("On `err`, fix the named cause", result.stdout)
+                self.assertIn("task stays open until sanity PASS", result.stdout)
+                self.assertIn("`task_reminder` means keep waiting", result.stdout)
+                self.assertIn("`sanity-fail` or `rebase-required`", result.stdout)
+                self.assertNotIn("completed --template", result.stdout)
+
+    def test_no_template_exposes_skip_checks(self):
+        for template in (ROOT / "templates").glob("*.j2"):
+            with self.subTest(template=template.name):
+                self.assertNotIn("--skip-checks", template.read_text())
 
 
 class PlanFixRoundTests(unittest.TestCase):

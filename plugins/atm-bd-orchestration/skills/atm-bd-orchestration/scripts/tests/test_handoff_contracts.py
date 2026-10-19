@@ -602,7 +602,6 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
 
     def test_the_fix_round_shape_pours_and_a_non_blocking_one_is_refused(self):
         from test_bead_pour_mock import fix_group, group
-        from test_sanity_create_findings import module as sanity_module
         ws = self.ws
         sprint = ws.sprint("hz", 1)
         dev, sanity, qa = group(sprint)
@@ -612,7 +611,7 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
         result = ws.groups("--findings", self.written(sprint, qa, "blocking", found_on_layer=15))
         fix = fix_group(sprint, "qa1-f1", 2)[0]
         self.assertEqual(ws.show(fix)["metadata"]["reviewer"], "arch-qa")
-        self.assertEqual(sanity_module.parent_layer(ws.show(fix)["metadata"]), 15)
+        self.assertEqual(ws.show(fix)["metadata"]["found_on_layer"], 15)
         refused = ws.groups("--findings", self.written(sprint, qa, "important"), expect=2)  # planted negative
         self.assertEqual(refused["targets"][0]["error"]["code"], "BEAD_GROUPS_NOT_BLOCKING")
         self.assertTrue(result["targets"])
@@ -638,20 +637,18 @@ class BlockingFindingsHandoffTests(unittest.TestCase):
 
     def test_the_round_one_shape_parses_and_pours_and_one_without_its_remedy_is_refused(self):
         from test_bead_pour_mock import fix_group, group
-        from test_sanity_create_findings import module as sanity_module
         ws = self.ws
         sprint = ws.sprint("hx", 1)
         _, _, qa = group(sprint)
         ws.groups("--sprint", sprint)
         ws.groups("--findings", self.round_one(sprint, qa, found_on_layer=15))
         fix = fix_group(sprint, "qa1-f1")[0]
-        self.assertEqual(sanity_module.parent_layer(ws.show(fix)["metadata"]), 15)
+        self.assertEqual(ws.show(fix)["metadata"]["found_on_layer"], 15)
         self.assertEqual({k: ws.show(fix)["metadata"][k] for k in ("reviewer", "difficulty")},
                          {"reviewer": "arch-qa", "difficulty": "normal"})
         ws.groups("--findings", self.round_one(sprint, qa, ref="qa1-f2", difficulty="hard"))
         self.assertEqual(ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"]["difficulty"], "hard")
-        with self.assertRaises(sanity_module.HandoffError):
-            sanity_module.parent_layer(ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"])
+        self.assertIn(ws.show(fix_group(sprint, "qa1-f2")[0])["metadata"].get("found_on_layer"), (None, ""))
         # planted negatives: the old key-list shape is not JSON, and a finding without its remedy is refused
         with self.assertRaises(ValueError):
             json.loads('{"findings": [{"ref": "qa1-f1", "severity": "blocking", "reviewer", "title", "remedy", '

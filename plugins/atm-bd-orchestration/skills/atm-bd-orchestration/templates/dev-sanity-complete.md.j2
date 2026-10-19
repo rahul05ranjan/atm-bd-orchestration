@@ -1,20 +1,24 @@
 ---
 name: dev-sanity-complete
 version: 1.2.1
-description: Sanity check report; the body of `atm task close <task-id> completed`. PASS closes the sanity check bead; FAIL leaves it open; dev-sanity has reopened the checked bead and filed these findings under it.
+description: Selected sanity verdict; FAIL sends sanity-fail to the dev and creates no finding bead.
 format: markdown
 required_variables:
   - generated_at
   - task_id
   - checked_bead
   - sprint
-  - branch
-  - commit
   - verdict
   - findings_count
   - findings_md
   - lint_md
 defaults:
+  qa_task_id: ""
+  sanity_task_id: ""
+  dev_task_id: ""
+  pr_number: ""
+  commit: ""
+  branch: ""
   run_id: "legacy"
   reviewer: "sanity-llm"
   notes_md: ""
@@ -33,7 +37,8 @@ metadata:
     stage: dev-sanity
     transition: complete
 ---
-{% if verdict not in ["PASS", "FAIL"] %}{{ verdict | verdict_must_be_PASS_or_FAIL }}ERROR: verdict must be PASS or FAIL, got {{ verdict }}
+{% set task_id = sanity_task_id if sanity_task_id else task_id %}
+{% if verdict not in ["PASS", "FAIL", "CANNOT_RUN"] %}{{ verdict | verdict_must_be_PASS_or_FAIL }}ERROR: verdict must be PASS, FAIL or CANNOT_RUN, got {{ verdict }}
 {% endif %}# Dev Sanity Check {{ verdict }}
 
 Generated: {{ generated_at }}
