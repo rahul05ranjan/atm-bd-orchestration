@@ -41,6 +41,19 @@ SNAPSHOT = replace(
 )
 
 
+def capture_updates(monkeypatch, widget):
+    pending = []
+    original = widget.update
+
+    def update(content):
+        result = original(content)
+        pending.append(result)
+        return result
+
+    monkeypatch.setattr(widget, "update", update)
+    return pending
+
+
 def test_sanity_rows_show_local_time_icon_name_and_api_failure() -> None:
     dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness="codex-cli", model="terra")
     reviewer = replace(RUNNING.agents[0], name="sanity-jev", agent_type="sanity", harness="codex-cli", model="sol")
@@ -78,10 +91,12 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
             assert options.option_count == 1
             label = str(options.get_option_at_index(0).prompt)
             assert _run_time(qa["closed_at"]) in label and "bj-4" in label and "1/0" in label and "FAIL" in label
+            widget = app.query_one("#quality-findings")
+            pending = capture_updates(monkeypatch, widget)
             app._show_findings("qa-1")
-            await pilot.pause()
+            await pending[-1]
             assert rendered and rendered[-1]["id"] == "f1"
-            assert app.query_one("#quality-findings")
+            assert widget
 
     run_scenario(scenario())
 
@@ -105,9 +120,10 @@ def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_pat
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             app.query_one("TabbedContent").active = "quality"
-            app._show_findings("qa-1")
             widget = app.query_one("#quality-findings")
-            await widget.update(widget._markdown)
+            pending = capture_updates(monkeypatch, widget)
+            app._show_findings("qa-1")
+            await pending[-1]
             blocks = widget.query(MarkdownBlock)
             content = next(block._content for block in blocks if "req-qa" in block._content.plain)
             assert "\U000f029b req-qa" in content.plain
