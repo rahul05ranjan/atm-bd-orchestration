@@ -42,6 +42,7 @@ class World:
         self.messages, self.calls, self.writes = [], [], []
         self.fail_after = None
         self.github_failure = False
+        self.git_network_failure = None
         self.overrides = {}
         monkeypatch.setenv("ATM_IDENTITY", "caller")
 
@@ -65,6 +66,8 @@ class World:
         if tuple(argv) in self.overrides:
             code, stdout = self.overrides[tuple(argv)]
             return subprocess.CompletedProcess(argv, code, stdout, "injected failure" if code else "")
+        if argv[0] == "git" and argv[1] == self.git_network_failure:
+            return subprocess.CompletedProcess(argv, 1, "", "remote unavailable")
         output, write = "", False
         if argv[:2] == ["bd", "show"]:
             output = [self.beads[argv[2]]]
@@ -123,6 +126,8 @@ class World:
         elif argv[0] == "git":
             if argv[1] == "rev-parse":
                 output = self.values["commit"] if argv[2] == "HEAD" else "b" * 40
+                if "branch" in self.values and argv[2] == f"refs/remotes/origin/{self.values['branch']}":
+                    output = self.values.get("commit", "")
             elif argv[1] == "ls-remote":
                 output = self.values["commit"] + "\trefs/heads/branch"
             elif argv[1:4] == ["remote", "get-url", "origin"]:
@@ -192,6 +197,19 @@ def test_invalid_vars_have_no_commands(world, change, code):
     assert world.calls == []
 
 
+def test_shared_contract_strict_render_precedes_task_event_reads(world):
+    # A strict-render error must win over an existing replay conflict without reading live state.
+    world.values.pop("base")
+    world.beads[world.values["checked_bead"]]["metadata"].update(
+        task_close_key=[world.values["dev_task_id"], "FAIL", "old-head"],
+        task_close_assignment="assignment-1",
+    )
+    result = world.run()
+    assert result["err"]["code"] == "VARS.MISSING"
+    assert "base" in result["err"]["message"]
+    assert world.calls == []
+
+
 @pytest.mark.parametrize("argv", [[], ["--role", "other", "--vars", "/absent"], ["--vars", "/absent"]])
 def test_argument_errors_use_typed_json(argv):
     stdout, stderr = io.StringIO(), io.StringIO()
@@ -227,6 +245,19 @@ def test_github_retries_and_falls_back_without_requiring_pr_base(world, failure)
     world.github_failure = failure
     assert world.run()["ok"]["github"] == "unavailable"
     assert len([argv for argv, _kwargs in world.calls if argv[0] == "gh"]) == 3
+
+
+@pytest.mark.parametrize("failed_command", ["ls-remote", "fetch"])
+def test_remote_git_failures_retry_then_use_cached_local_checks(world, failed_command):
+    world.git_network_failure = failed_command
+    result = world.run()
+    assert result["ok"]["github"] == "unavailable"
+    assert result["ok"]["assigned"] == [world.values["sanity_bead"]]
+    assert len([argv for argv, _kwargs in world.calls if argv[:2] == ["git", failed_command]]) == 3
+    assert not any(argv[:2] == ["gh", "api"] for argv, _kwargs in world.calls)
+    assert ["git", "merge-base", "--is-ancestor", "origin/integrate/phase-bj", world.values["commit"]] in [
+        argv for argv, _kwargs in world.calls
+    ]
 
 
 def test_ledger_top_overrides_static_target(world):
@@ -348,6 +379,47 @@ def test_close_key_is_triple_and_only_fail_counter_key_adds_assignment(world):
     world.tasks[bead] = [world.assignment(2)]
     assert "ok" in world.run("sanity", verdict="PASS")
     assert world.beads[bead]["metadata"]["task_close_key"] == [bead, "PASS", world.values["commit"]]
+
+
+def test_old_sanity_fail_replay_after_dev_reclose_does_not_touch_new_round(world):
+    old_commit = world.values["commit"]
+    assert "ok" in world.run("dev")
+    assert "ok" in world.run("sanity", verdict="FAIL", round=1,
+                             undone=[{"number": 2, "reason": "verbatim missing implementation"}])
+
+    new_commit = "c" * 40
+    assert "ok" in world.run("dev", commit=new_commit)
+    checked = world.values["checked_bead"]
+    sanity = world.values["sanity_bead"]
+    assert world.beads[checked]["status"] == "closed"
+    assert world.beads[checked]["metadata"]["commit"] == new_commit
+
+    writes_before = copy.deepcopy(world.writes)
+    messages_before = copy.deepcopy(world.messages)
+    task_events_before = copy.deepcopy(world.tasks[sanity])
+    replay = world.run("sanity", commit=old_commit, verdict="FAIL", round=1,
+                       undone=[{"number": 2, "reason": "verbatim missing implementation"}])
+
+    assert "ok" in replay
+    assert world.writes == writes_before
+    assert world.messages == messages_before
+    assert world.tasks[sanity] == task_events_before
+    assert world.beads[checked]["status"] == "closed"
+    assert world.beads[checked]["metadata"]["commit"] == new_commit
+
+
+def test_same_head_failures_on_distinct_assignments_increment_twice(world):
+    bead = world.values["sanity_bead"]
+    assert "ok" in world.run("sanity", verdict="FAIL", round=1,
+                             undone=[{"number": 2, "reason": "verbatim missing implementation"}])
+    assert world.beads[bead]["metadata"]["sanity_round"] == 1
+
+    world.tasks[bead].append(dict(event="assigned", message_id="assignment-2", seq=2,
+                                  at="2026-10-19T00:02:00Z", to_state="assigned"))
+    second = world.run("sanity", verdict="FAIL", round=2,
+                       undone=[{"number": 2, "reason": "verbatim missing implementation"}])
+    assert "ok" in second
+    assert world.beads[bead]["metadata"]["sanity_round"] == 2
 
 
 def test_existing_four_part_state_allows_a_new_assignment(world):

@@ -55,6 +55,18 @@ def read_vars(path):
     return values
 
 
+def validate_shared_vars(values, role):
+    """Strictly render the shared dispatch contract before inspecting live state."""
+    try:
+        sc_render.render(TEMPLATES / "task-close-vars.j2", values)
+    except sc_render.RenderError as error:
+        # Preserve the role-specific typed error when strict rendering rejects
+        # a missing required field; this validation performs no live reads.
+        validate(values, role)
+        raise CloseError("VARS.INVALID", str(error),
+                         "Supply every field required by the shared task-close vars contract.") from error
+
+
 def read_toml_setting(path, fields):
     name = ".".join(fields)
     try:
@@ -184,6 +196,8 @@ def validate(values, role):
                              f"Set {name} to a non-empty string in the lead's shared vars file.")
     if role in ("sanity", "qa") and values["verdict"] not in ("PASS", "FAIL", "CANNOT_RUN"):
         raise CloseError("VARS.INVALID", "verdict must be PASS, FAIL or CANNOT_RUN", "Supply the selected review verdict.")
+    if role == "sanity" and (isinstance(values["round"], bool) or not isinstance(values["round"], int) or values["round"] < 1):
+        raise CloseError("VARS.INVALID", "round must be a positive integer", "Supply the current sanity assignment round.")
     if role == "qa" and values["verdict"] == "CANNOT_RUN":
         raise CloseError("VARS.INVALID", "QA CANNOT_RUN is not a completed review", "Use the QA refusal workflow.")
     if not isinstance(values["undone"], list) or any(
@@ -223,6 +237,10 @@ class Hook:
             raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
         self.assignment = assignments[-1]
         self.assignment_id = self.assignment.get("message_id") or self.assignment["seq"]
+        latest_assignment = max(index for index, event in enumerate(self.events)
+                                if event.get("event") in ("assigned", "updated", "reassigned"))
+        self.assignment_round = 1 + sum(event.get("event") == "completed"
+                                        for event in self.events[:latest_assignment])
         self.key = [self.task, values["verdict"], values.get("commit", "")]
 
     def run(self, argv, *, lead=False, git=False, check=True):
@@ -273,9 +291,16 @@ class Hook:
             recorded_assignment = recorded[1]
             recorded = [recorded[0], *recorded[2:]]
         same_assignment = recorded_assignment == self.assignment_id
-        if recorded and recorded[0] == self.task and same_assignment and recorded != self.key:
-            if self.role not in ("dev", "fix") or record.get("status") != "open":
+        if recorded and recorded[0] == self.task:
+            stale_vars = self.role == "sanity" and self.values["round"] < self.assignment_round
+            if recorded == self.key:
+                if stale_vars:
+                    return True
+            elif same_assignment and (self.role not in ("dev", "fix") or record.get("status") != "open"):
                 raise CloseError("REPLAY.CONFLICT", "recorded verdict or sha differs", "Use the original vars for a replay or start a new review assignment.")
+            elif stale_vars:
+                raise CloseError("REPLAY.CONFLICT", "older assignment vars have a different verdict or sha", "Use the vars generated for the current task assignment.")
+        return False
 
     def stack_top(self):
         stack = f"{self.config['bead_prefix']}-phase-{self.values['phase']}.stack"
@@ -294,11 +319,32 @@ class Hook:
         dirty = self.run(["git", "status", "--porcelain"], git=True).stdout.strip()
         if dirty:
             raise CloseError("HEAD.DIRTY", dirty, "Commit or remove worktree changes before retrying.")
-        remote = self.run(["git", "ls-remote", "origin", f"refs/heads/{values['branch']}"], git=True).stdout.split()
-        if not remote or remote[0] != head:
-            raise CloseError("HEAD.NOT_PUSHED", "origin head differs from HEAD", "Push this branch and retry.")
+        remote_available = False
+        remote_ref = f"refs/heads/{values['branch']}"
+        for _attempt in range(3):
+            try:
+                remote = self.run(["git", "ls-remote", "origin", remote_ref], git=True, check=False)
+                if remote.returncode:
+                    continue
+                remote_fields = remote.stdout.split()
+                if not remote_fields or remote_fields[0] != head:
+                    raise CloseError("HEAD.NOT_PUSHED", "origin head differs from HEAD", "Push this branch and retry.")
+                fetched = self.run(["git", "fetch", "origin"], git=True, check=False)
+                if fetched.returncode:
+                    continue
+                remote_available = True
+                break
+            except CloseError as error:
+                if error.code != "COMMAND.FAILED":
+                    raise
+        if not remote_available:
+            self.github = "unavailable"
+            tracking_ref = f"refs/remotes/origin/{values['branch']}"
+            tracking = self.run(["git", "rev-parse", tracking_ref], git=True).stdout.strip()
+            if tracking != head:
+                raise CloseError("HEAD.NOT_PUSHED", "cached origin head differs from HEAD",
+                                 "Push this branch and refresh origin before retrying.")
         top, _head = self.stack_top()
-        self.run(["git", "fetch", "origin"], git=True)
         ancestor = self.run(["git", "merge-base", "--is-ancestor", f"origin/{top}", head], git=True, check=False)
         if ancestor.returncode == 1:
             raise CloseError("BASE.NOT_ANCESTOR", top, f"Rebase onto origin/{top}, push, then rerun the hook.")
@@ -309,6 +355,8 @@ class Hook:
         if not match:
             raise CloseError("COMMAND.INVALID", "origin does not name owner/repository", "Configure the repository origin.")
         owner, repo = match.groups()
+        if self.github == "unavailable":
+            return
         for _attempt in range(3):
             try:
                 prs = self.json(["gh", "api", f"repos/{owner}/{repo}/pulls?head={owner}:{values['branch']}&state=open"], git=True)
@@ -373,7 +421,8 @@ class Hook:
         values = self.values
         template = "fix-complete.md.j2" if self.role == "fix" else "dev-complete.md.j2"
         self.render(template)
-        self.check_replay(values["checked_bead"])
+        if self.check_replay(values["checked_bead"]):
+            return
         record = self.bead(values["checked_bead"])
         sanity = (record.get("metadata") or {}).get("sanity_bead")
         if not sanity:
@@ -419,7 +468,8 @@ class Hook:
         values = self.values
         bead = values["sanity_bead"]
         verdict = values["verdict"]
-        self.check_replay(bead)
+        if self.check_replay(bead):
+            return
         if verdict == "CANNOT_RUN":
             self.render("dev-sanity-complete.md.j2")
             metadata = self.bead(bead).get("metadata") or {}
@@ -465,7 +515,8 @@ class Hook:
 
     def qa(self):
         values = self.values
-        self.check_replay(values["qa_bead"])
+        if self.check_replay(values["qa_bead"]):
+            return
         self.render("qa-complete.md.j2")
         self.metadata(values["qa_bead"], {"task_close_key": self.key, "task_close_assignment": self.assignment_id})
         self.close_bead(values["qa_bead"], f"{values['verdict']} at {values['commit']}")
@@ -484,6 +535,7 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
     try:
         args = parser.parse_args(argv)
         values = read_vars(args.vars)
+        validate_shared_vars(values, args.role)
         validate(values, args.role)
         hook = Hook(args.role, values, args.vars, runner, clock)
         started = clock()
