@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stack_top import select_stack_top
+from stack_top import select_stack_top, stack_bead_id
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
@@ -100,7 +100,7 @@ def descends(runner: Runner, lower: str, base: str, git: list[str] | None = None
 
 
 def stack_top(runner: Runner, args: argparse.Namespace) -> str:
-    rows = json.loads(run(runner, "bd", "show", f"{args.root}.stack", "--json", cwd=str(PRIMARY)))
+    rows = json.loads(run(runner, "bd", "show", stack_bead_id(args.root), "--json", cwd=str(PRIMARY)))
     if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
         raise ValueError("stack bead lookup must return exactly one bead object")
     branch, _head = select_stack_top(

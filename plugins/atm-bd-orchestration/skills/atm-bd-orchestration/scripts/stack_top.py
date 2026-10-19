@@ -1,6 +1,11 @@
 """Select a phase's current stack top from its canonical bead ledger."""
 
 
+def stack_bead_id(root: str) -> str:
+    """Return the stack ledger bead ID for a phase root."""
+    return f"{root}.stack"
+
+
 def select_stack_top(bead, pr_target, resolve_head):
     metadata = bead.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):

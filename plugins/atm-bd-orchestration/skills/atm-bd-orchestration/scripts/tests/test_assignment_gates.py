@@ -288,8 +288,9 @@ class AssignmentGateTests(unittest.TestCase):
     def test_stack_top_reads_bead_in_primary_and_resolves_fallback_in_worktree(self):
         runner = FakeRunner({("bd", "show", "phase.stack", "--json"): (0, "[{}]"),
                              ("git", "-C", "/wt", "rev-parse", "origin/trunk"): (0, "abc")})
-        with redirect_stdout(io.StringIO()):
+        with redirect_stdout(io.StringIO()), patch.object(gates, "stack_bead_id", wraps=gates.stack_bead_id) as stack_id:
             assert gates.main(["stack-top", "--root", "phase", "--pr-target", "trunk", "--worktree", "/wt"], runner) == 0
+        stack_id.assert_called_once_with("phase")
         assert runner.calls == [(str(gates.PRIMARY), ("bd", "show", "phase.stack", "--json")),
                                 (None, ("git", "-C", "/wt", "rev-parse", "origin/trunk"))]
 

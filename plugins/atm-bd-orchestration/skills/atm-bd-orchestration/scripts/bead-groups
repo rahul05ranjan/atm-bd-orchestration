@@ -71,6 +71,7 @@ import bead_formulas  # noqa: E402
 import repo_config  # noqa: E402
 import sprint_index_common  # noqa: E402
 from bead_formulas import Bd, BdError, attach_id  # noqa: E402
+from stack_top import stack_bead_id  # noqa: E402
 
 SCHEMA = "atm-bd-orchestration/bead-groups/v1"
 SUCCESS, FAILED, USAGE, PROBLEMS = 0, 2, 3, 5
@@ -208,7 +209,7 @@ class Run:
         sidecar = self.sidecar("finding-group")
         option = self.option_for(sidecar)
         import bead_schema
-        stack_id = f"{sprint_index_common.load_phase_config(self.repo, str(meta['phase']))['root']}.stack"
+        stack_id = stack_bead_id(sprint_index_common.load_phase_config(self.repo, str(meta['phase']))['root'])
         stack = self.show(stack_id)
         issues = bead_schema.problems(stack, bead_schema.StackBead)
         if issues:
