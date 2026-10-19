@@ -121,8 +121,8 @@ only then run `atm-task-close.py --role sanity --vars <file>`. If the result
 includes `reclaimed`, send the lead one plain message naming the former holder
 and claim time. On `rebase_required`, or the pre-claim split `COMMIT_MISMATCH`,
 reopen the checked bead to the dev, keep the PASS in the ledger, leave
-`sanity_round` unchanged and close nothing. Send the dev on its open task using
-`atm send <dev> --task-id <dev-task> --template
+`sanity_round` unchanged and close nothing. Send the dev a plain notice using
+`atm send <dev> --template
 .claude/skills/atm-bd-orchestration/templates/rebase-required.xml.j2 --vars
 <file>`; include the current stack top in the `stacked` variable.
 
