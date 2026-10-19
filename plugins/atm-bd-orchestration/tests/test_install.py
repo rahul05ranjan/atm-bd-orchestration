@@ -587,6 +587,15 @@ def test_fresh_install(tmp_path, capsys):
 
 
 @needs_sc_compose
+def test_install_places_sanity_stack_agent_and_linker(tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    rc, err = run(repo, *QA, capsys=capsys)
+    assert rc == 0, err
+    assert (repo / ".claude/agents/sanity-stack.md").is_file()
+    assert (repo / ".claude/skills/atm-bd-orchestration/scripts/sanity-stack-link").is_file()
+
+
+@needs_sc_compose
 def test_rerun_is_idempotent(tmp_path, capsys):
     repo = make_repo(tmp_path)
     assert run(repo, *QA)[0] == 0
