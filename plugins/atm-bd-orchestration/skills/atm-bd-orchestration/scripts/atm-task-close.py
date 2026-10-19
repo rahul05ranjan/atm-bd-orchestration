@@ -32,6 +32,10 @@ class CloseError(RuntimeError):
         self.code, self.fix = code, fix
 
 
+class ReplayDone(Exception):
+    """A stale or terminal invocation must make no further writes."""
+
+
 class Parser(argparse.ArgumentParser):
     def error(self, message):
         raise CloseError("ARGS.INVALID", message, "Supply --role dev|fix|sanity|qa and --vars <shared-vars.json>.")
@@ -151,12 +155,9 @@ def validate_command_json(argv, data):
         for index, event in enumerate(events):
             field = f"$.events[{index}]"
             require(isinstance(event, dict), field, "an event object")
-            if event.get("event") in ("assigned", "updated", "reassigned"):
+            if event.get("event") in ("assigned", "updated", "reassigned", "reopened"):
                 require(isinstance(event.get("at"), str) and bool(event["at"]), field + ".at", "a timestamp string")
                 require(bool(event.get("message_id")) or isinstance(event.get("seq"), int), field + ".message_id/seq", "an assignment event identifier")
-    elif argv[:2] == ["atm", "search"]:
-        require(isinstance(data, dict), "$", "an object")
-        require(isinstance(data.get("hits"), list), "$.hits", "an array")
     elif argv[:2] == ["gh", "api"]:
         require(isinstance(data, list), "$", "an array of PR objects")
         for index, pr in enumerate(data):
@@ -236,18 +237,22 @@ class Hook:
         self.closed, self.assigned = [], []
         self.task = values[{"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role]]
         self.events = self.json(["atm", "task", "events", self.task, "--all", "--json"]).get("events", [])
-        assignments = [event for event in self.events if event.get("event") in ("assigned", "updated", "reassigned")]
+        assignments = [event for event in self.events if event.get("event") in ("assigned", "updated", "reassigned", "reopened")]
         if not assignments:
             raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
         self.assignment = assignments[-1]
         self.assignment_id = self.assignment.get("message_id") or self.assignment["seq"]
         latest_assignment = max(index for index, event in enumerate(self.events)
-                                if event.get("event") in ("assigned", "updated", "reassigned"))
+                                if event.get("event") in ("assigned", "updated", "reassigned", "reopened"))
         self.assignment_round = 1 + sum(event.get("event") == "completed"
                                         for event in self.events[:latest_assignment])
         self.key = [self.task, values["verdict"], values.get("commit", "")]
 
-    def run(self, argv, *, lead=False, git=False, check=True):
+    def run(self, argv, *, lead=False, git=False, check=True, guard=True):
+        write = argv[:2] in (["bd", "update"], ["bd", "close"], ["atm", "send"]) or argv[:3] in (
+            ["atm", "task", "assign"], ["atm", "task", "close"])
+        if write and guard and self.check_replay(self.task):
+            raise ReplayDone()
         try:
             result = self.runner(list(argv), cwd=self.worktree if git else self.root,
                                  env=self.lead_env if lead else self.env, capture_output=True, text=True,
@@ -281,33 +286,53 @@ class Hook:
     def update(self, bead, **fields):
         argv = ["bd", "update", bead]
         for name, value in fields.items():
-            argv += ["--" + name.replace("_", "-"), json.dumps(value) if name == "metadata" else str(value)]
+            if name == "metadata":
+                for key, item in value.items():
+                    encoded = json.dumps(item, separators=(",", ":")) if isinstance(item, (list, dict)) else str(item)
+                    argv += ["--set-metadata", f"{key}={encoded}"]
+            else:
+                argv += ["--" + name.replace("_", "-"), str(value)]
         self.run([*argv, "--actor", self.identity])
 
     def metadata(self, bead, values):
         current = self.bead(bead).get("metadata") or {}
         if all(current.get(name) == value for name, value in values.items()):
             return
-        self.update(bead, metadata={**current, **values})
+        self.update(bead, metadata={key: value for key, value in values.items() if current.get(key) != value})
 
     def check_replay(self, bead):
         record = self.bead(bead)
         metadata = record.get("metadata") or {}
-        recorded = metadata.get("task_close_key")
-        recorded_assignment = metadata.get("task_close_assignment", self.assignment_id)
-        if isinstance(recorded, list) and len(recorded) == 4:
-            recorded_assignment = recorded[1]
-            recorded = [recorded[0], *recorded[2:]]
-        same_assignment = recorded_assignment == self.assignment_id
-        if recorded and recorded[0] == self.task:
-            stale_vars = self.role == "sanity" and self.values["round"] < self.assignment_round
-            if recorded == self.key:
-                if stale_vars:
+        events = self.json(["atm", "task", "events", self.task, "--all", "--json"]).get("events", [])
+        latest = events[-1] if events else {}
+        assignments = [event for event in events if event.get("event") in ("assigned", "updated", "reassigned", "reopened")]
+        if not assignments:
+            raise CloseError("REPLAY.CONFLICT", f"{self.task} has no assignment event", "Assign the tracked task before closing it.")
+        current_assignment = assignments[-1].get("message_id") or assignments[-1]["seq"]
+        if self.role == "sanity" and latest.get("event") == "refused":
+            return True
+        count_key = metadata.get("sanity_round_key")
+        if isinstance(count_key, str):
+            try:
+                count_key = json.loads(count_key)
+            except ValueError:
+                raise CloseError("BEAD.INVALID", "invalid sanity_round_key", "Repair the recorded sanity_round_key.") from None
+        if self.role == "sanity" and isinstance(count_key, list) and len(count_key) == 4:
+            recorded = [count_key[0], count_key[2], count_key[3]]
+            if current_assignment != self.assignment_id and recorded == self.key:
+                return True
+            if self.values["round"] < self.assignment_round:
+                if recorded == self.key:
                     return True
-            elif same_assignment and (self.role not in ("dev", "fix") or record.get("status") != "open"):
-                raise CloseError("REPLAY.CONFLICT", "recorded verdict or sha differs", "Use the original vars for a replay or start a new review assignment.")
-            elif stale_vars:
                 raise CloseError("REPLAY.CONFLICT", "older assignment vars have a different verdict or sha", "Use the vars generated for the current task assignment.")
+            if count_key[1] == self.assignment_id and recorded != self.key:
+                raise CloseError("REPLAY.CONFLICT", "recorded verdict or sha differs", "Use the original vars for a replay or start a new review assignment.")
+        if current_assignment != self.assignment_id:
+            raise CloseError("REPLAY.CONFLICT", "task was reassigned during the hook", "Run the hook with the current assignment's vars.")
+        if self.role in ("sanity", "qa") and record.get("status") == "closed":
+            expected = f"{self.values['verdict']} at {self.values['commit']}"
+            if record.get("close_reason") != expected:
+                raise CloseError("REPLAY.CONFLICT", "recorded verdict or sha differs", "Use the original vars for a replay or start a new review assignment.")
         return False
 
     def stack_top(self):
@@ -375,35 +400,19 @@ class Hook:
             return
         self.github = "unavailable"
 
-    def delivered(self, template_type, *, recipient=None, text=None, extra=(), values=None, sender=None):
-        values = self.values if values is None else values
-        argv = ["atm", "search"]
-        if text:
-            argv.append(text)
-        else:
-            argv += ["--type", template_type, "--var", f"checked_bead={values['checked_bead']}",
-                     "--var", f"round={values['round']}"]
-            if "commit" in values:
-                argv += ["--var", f"commit={values['commit']}"]
-        argv += ["--from", sender or self.identity, "--since", self.assignment["at"], "--limit", "1", "--json"]
-        if recipient:
-            argv += ["--agent", recipient]
-        argv += list(extra)
-        return bool(self.json(argv).get("hits"))
-
     def render(self, template, values=None):
         try:
             return sc_render.render(TEMPLATES / template, self.values if values is None else values)
         except sc_render.RenderError as error:
             raise CloseError("VARS.INVALID", str(error), f"Supply vars compatible with {template}.") from error
 
-    def send(self, recipient, template, template_type):
-        if not self.delivered(template_type, recipient=recipient):
-            self.run(["atm", "send", recipient, "--template", str(TEMPLATES / template), "--vars", str(self.path)])
+    def send(self, recipient, template):
+        self.run(["atm", "send", recipient, "--template", str(TEMPLATES / template), "--vars", str(self.path)])
 
     def assign(self, member, bead, template, *, path=None):
-        template_type = header(TEMPLATES / template)["metadata"]["type"]
-        if not self.delivered(template_type, recipient=member, sender=self.lead):
+        events = self.json(["atm", "task", "events", bead, "--all", "--json"]).get("events", [])
+        terminal = events and events[-1].get("to_state") in ("complete", "completed", "refused", "cancelled")
+        if not events or (terminal and self.bead(bead).get("status") == "open"):
             self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
                       "--vars", str(path or self.path)], lead=True)
         self.assigned.append(bead)
@@ -411,7 +420,7 @@ class Hook:
     def close_task(self, task, template=None, *, outcome="completed", lead=False):
         events = self.json(["atm", "task", "events", task, "--all", "--json"]).get("events", [])
         latest = events[-1] if events else {}
-        if latest.get("to_state") not in ("completed", "refused", "cancelled"):
+        if latest.get("to_state") not in ("complete", "completed", "refused", "cancelled"):
             argv = ["atm", "task", "close", task, outcome]
             if template:
                 argv += ["--template", str(TEMPLATES / template), "--vars", str(self.path)]
@@ -419,9 +428,12 @@ class Hook:
 
     def close_bead(self, bead, reason):
         record = self.bead(bead)
+        wrote = False
         if record.get("status") != "closed":
             self.run(["bd", "close", bead, "--reason", reason, "--actor", self.identity])
+            wrote = True
         self.closed.append(bead)
+        return wrote
 
     def dev(self, skip):
         values = self.values
@@ -454,21 +466,21 @@ class Hook:
     def finish_dev(self, sanity, template, *, path=None):
         values = self.values
         assignment_values = json.loads(Path(path).read_text()) if path else values
-        self.metadata(values["checked_bead"], {"commit": assignment_values["commit"], "branch": assignment_values["branch"], "pr_number": values.get("pr_number", ""),
-                                             "pr_url": values["pr_url"], "task_close_key": self.key, "task_close_assignment": self.assignment_id})
-        assigned = self.delivered("dev-sanity-task", recipient=self.config["dev_sanity_member"],
-                                  sender=self.lead, values=assignment_values)
         sanity_events = self.json(["atm", "task", "events", sanity, "--all", "--json"]).get("events", [])
-        if sanity_events and sanity_events[-1].get("to_state") in ("completed", "refused", "cancelled"):
-            if self.bead(sanity).get("status") == "open":
-                assigned = False
+        terminal = sanity_events and sanity_events[-1].get("to_state") in ("complete", "completed", "refused", "cancelled")
+        assign = not terminal or self.bead(sanity).get("status") == "open"
+        checked_metadata = self.bead(values["checked_bead"]).get("metadata") or {}
+        if not assign and checked_metadata.get("commit") != assignment_values["commit"]:
+            raise CloseError("REPLAY.CONFLICT", "sanity is closed at a different sha", "Request a new sanity assignment before changing the checked sha.")
+        self.metadata(values["checked_bead"], {"commit": assignment_values["commit"], "branch": assignment_values["branch"], "pr_number": values.get("pr_number", ""),
+                                             "pr_url": values["pr_url"]})
         reason = f"not reproducible: {values['evidence']}" if values["outcome"] == "not_reproducible" else f"{'fixed' if self.role == 'fix' else 'dev complete'} at {values['commit']}"
-        self.close_bead(values["checked_bead"], reason)
-        if not assigned:
+        closed_now = self.close_bead(values["checked_bead"], reason)
+        if assign:
             self.run(["atm", "task", "assign", self.config["dev_sanity_member"], "--task-id", sanity,
-                      "--template", str(TEMPLATES / "dev-sanity-template.xml.j2"), "--vars", str(path or self.path)], lead=True)
+                      "--template", str(TEMPLATES / "dev-sanity-template.xml.j2"), "--vars", str(path or self.path)], lead=True, guard=not closed_now)
         self.assigned.append(sanity)
-        self.send(self.lead, template, "fix-complete" if self.role == "fix" else "dev-complete")
+        self.send(self.lead, template)
 
     def sanity(self):
         values = self.values
@@ -478,8 +490,9 @@ class Hook:
             return
         if verdict == "CANNOT_RUN":
             self.render("dev-sanity-complete.md.j2")
-            metadata = self.bead(bead).get("metadata") or {}
-            self.update(bead, status="open", assignee="", metadata={**metadata, "task_close_key": self.key, "task_close_assignment": self.assignment_id})
+            record = self.bead(bead)
+            if record.get("status") != "open" or record.get("assignee"):
+                self.update(bead, status="open", assignee="")
             self.close_task(bead, "dev-sanity-complete.md.j2", outcome="refused")
             return
         self.render("dev-sanity-complete.md.j2")
@@ -493,7 +506,6 @@ class Hook:
                 raise CloseError("VARS.INVALID", "fix QA requires carry_forward", "Supply the checked fix bead as carry_forward.")
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
-            self.metadata(bead, {"task_close_key": self.key, "task_close_assignment": self.assignment_id})
             self.close_bead(bead, f"PASS at {values['commit']}")
             self.close_task(values["dev_task_id"], lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
@@ -504,19 +516,23 @@ class Hook:
         metadata = record.get("metadata") or {}
         count_key = [self.task, self.assignment_id, values["verdict"], values.get("commit", "")]
         count = sanity_round(metadata, bead)
-        if metadata.get("sanity_round_key") != count_key:
+        prior_key = metadata.get("sanity_round_key")
+        if isinstance(prior_key, str):
+            prior_key = json.loads(prior_key)
+        if prior_key != count_key:
             count += 1
-            self.metadata(bead, {"sanity_round": count, "sanity_round_key": count_key, "task_close_key": self.key, "task_close_assignment": self.assignment_id})
+            self.metadata(bead, {"sanity_round": count, "sanity_round_key": count_key})
         if count > self.config["max_sanity_rounds"]:
             message = f"SANITY.ROUND_CAP {bead} {values['commit']} assignment={self.assignment_id} undone=" + ",".join(str(item["number"]) for item in values["undone"])
-            if not self.delivered(None, recipient=self.lead, text=message):
-                self.run(["atm", "send", self.lead, message])
+            self.run(["atm", "send", self.lead, message])
             self.close_task(bead, "dev-sanity-complete.md.j2")
             return "SANITY.ROUND_CAP"
         checked = self.bead(values["checked_bead"])
-        self.update(values["checked_bead"], status="open", assignee=checked["assignee"])
-        self.update(bead, status="open", assignee="")
-        self.send(checked["assignee"], "sanity-fail.xml.j2", "sanity-fail")
+        if checked.get("status") != "open":
+            self.update(values["checked_bead"], status="open", assignee=checked["assignee"])
+        if record.get("status") != "open" or record.get("assignee"):
+            self.update(bead, status="open", assignee="")
+        self.send(checked["assignee"], "sanity-fail.xml.j2")
         self.close_task(bead, "dev-sanity-complete.md.j2")
 
     def qa(self):
@@ -524,12 +540,10 @@ class Hook:
         if self.check_replay(values["qa_bead"]):
             return
         self.render("qa-complete.md.j2")
-        self.metadata(values["qa_bead"], {"task_close_key": self.key, "task_close_assignment": self.assignment_id})
         self.close_bead(values["qa_bead"], f"{values['verdict']} at {values['commit']}")
         self.close_task(values["qa_bead"], "qa-complete.md.j2")
         message = f"QA {values['verdict']} {values['qa_bead']} commit={values['commit']} round={values['round']}"
-        if not self.delivered(None, recipient=self.lead, text=message):
-            self.run(["atm", "send", self.lead, message])
+        self.run(["atm", "send", self.lead, message])
 
 
 def main(argv=None, runner=subprocess.run, clock=time.monotonic, command_timeout=COMMAND_TIMEOUT):
@@ -545,7 +559,10 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, command_timeout
         validate(values, args.role)
         hook = Hook(args.role, values, args.vars, runner, clock, command_timeout)
         started = clock()
-        escalated = hook.dev(args.skip_checks) if args.role in ("dev", "fix") else hook.sanity() if args.role == "sanity" else hook.qa()
+        try:
+            escalated = hook.dev(args.skip_checks) if args.role in ("dev", "fix") else hook.sanity() if args.role == "sanity" else hook.qa()
+        except ReplayDone:
+            escalated = None
         result = {"role": args.role, "bead": hook.task, "commit": values.get("commit", ""), "pr_number": values.get("pr_number", ""),
                   "github": hook.github, "assigned": hook.assigned, "closed": hook.closed, "elapsed_s": max(0, clock() - started)}
         if escalated:

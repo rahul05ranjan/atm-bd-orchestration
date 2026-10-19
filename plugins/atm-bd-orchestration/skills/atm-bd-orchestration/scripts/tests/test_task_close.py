@@ -40,12 +40,15 @@ class World:
         self.beads[self.values["checked_bead"]]["metadata"]["sanity_bead"] = self.values["sanity_bead"]
         self.beads[self.values["sanity_bead"]]["metadata"]["dev_bead"] = self.values["checked_bead"]
         self.beads["atm-phase-bj.stack"] = json.loads((SCRIPTS / "tests/fixtures/stack-bead.json").read_text())
-        self.tasks = {self.values[name]: [self.assignment(1)] for name in ("dev_task_id", "sanity_task_id", "qa_task_id")}
+        self.tasks = {self.values[name]: [] for name in ("dev_task_id", "sanity_task_id", "qa_task_id")}
+        self.tasks[self.values["dev_task_id"]].append(self.assignment(1))
         self.messages, self.calls, self.writes = [], [], []
         self.fail_after = None
         self.github_failure = False
         self.git_network_failure = None
         self.timeout_command = None
+        self.concurrent_metadata = None
+        self.reassign_after_write = None
         self.overrides = {}
         monkeypatch.setenv("ATM_IDENTITY", "caller")
 
@@ -55,6 +58,9 @@ class World:
 
     def run(self, role="dev", *, command_timeout=hook.COMMAND_TIMEOUT, **changes):
         self.values.update(changes)
+        task = self.values.get({"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role])
+        if task in self.tasks and not self.tasks[task]:
+            self.tasks[task].append(self.assignment(1))
         self.path.write_text(json.dumps(self.values))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -82,10 +88,22 @@ class World:
         elif argv[:2] == ["bd", "update"]:
             write = True
             record = self.beads[argv[2]]
+            if self.concurrent_metadata:
+                record["metadata"].update(self.concurrent_metadata)
+                self.concurrent_metadata = None
             for name in ("status", "assignee", "metadata"):
                 if "--" + name in argv:
                     value = argv[argv.index("--" + name) + 1]
                     record[name] = json.loads(value) if name == "metadata" else value
+            for index, flag in enumerate(argv):
+                if flag == "--set-metadata":
+                    key, value = argv[index + 1].split("=", 1)
+                    try:
+                        parsed = json.loads(value)
+                    except ValueError:
+                        parsed = value
+                    # bd infers scalars, but treats JSON arrays/objects as strings.
+                    record["metadata"][key] = value if isinstance(parsed, (list, dict)) else parsed
         elif argv[:2] == ["bd", "close"]:
             write = True
             self.beads[argv[2]]["status"] = "closed"
@@ -99,19 +117,6 @@ class World:
                 body = hook.sc_render.render(argv[argv.index("--template") + 1], values)
                 assert argv[3] in body
             self.tasks[argv[3]].append(dict(event=argv[4], to_state=argv[4]))
-        elif argv[:2] == ["atm", "search"]:
-            matches = self.messages
-            for flag, key in (("--type", "type"), ("--from", "sender"), ("--agent", "recipient")):
-                if flag in argv:
-                    matches = [item for item in matches if item[key] == argv[argv.index(flag) + 1]]
-            for index, token in enumerate(argv):
-                if token == "--var":
-                    name, value = argv[index + 1].split("=", 1)
-                    matches = [item for item in matches if str(item["values"].get(name)) == value]
-            if argv[2] != "--type":
-                matches = [item for item in matches if argv[2] in item["body"]]
-            since = argv[argv.index("--since") + 1]
-            output = {"hits": [item for item in matches if item["at"] >= since]}
         elif argv[:2] == ["atm", "send"] or argv[:3] == ["atm", "task", "assign"]:
             write = True
             recipient = argv[3] if argv[1] == "task" else argv[2]
@@ -126,7 +131,11 @@ class World:
             if argv[1] == "task":
                 task = argv[argv.index("--task-id") + 1]
                 assert task in body
-                self.tasks[task].append(self.assignment(len(self.tasks[task]) + 1))
+                events = self.tasks[task]
+                event = self.assignment(len(events) + 1)
+                if events:
+                    event["event"] = "reopened" if events[-1].get("to_state") in ("complete", "completed", "refused", "cancelled") else "reassigned"
+                events.append(event)
             self.messages.append(dict(type=template_type, values=values, sender=kwargs["env"]["ATM_IDENTITY"],
                                       recipient=recipient, body=body, at="2026-10-19T23:00:00Z"))
         elif argv[0] == "git":
@@ -150,6 +159,11 @@ class World:
             raise AssertionError(argv)
         if write:
             self.writes.append((copy.deepcopy(argv), kwargs["env"]["ATM_IDENTITY"]))
+            if len(self.writes) == self.reassign_after_write:
+                task = self.values["sanity_task_id"]
+                event = self.assignment(2)
+                event["event"] = "reopened"
+                self.tasks[task].append(event)
             if len(self.writes) == self.fail_after:
                 return subprocess.CompletedProcess(argv, 1, "", "failed after committed effect")
         return subprocess.CompletedProcess(argv, 0, output if isinstance(output, str) else json.dumps(output), "")
@@ -408,6 +422,18 @@ def test_failure_cap_exceeds_limit_and_counts_distinct_assignments(world, cap):
             assert world.beads[bead]["status"] == "in_progress"
 
 
+def test_metadata_update_preserves_concurrent_keys_and_writes_fail_counter_atomically(world):
+    bead = world.values["sanity_bead"]
+    world.concurrent_metadata = {"concurrent": "preserved"}
+    result = world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "missing"}])
+    assert "ok" in result
+    assert world.beads[bead]["metadata"]["concurrent"] == "preserved"
+    update = next(argv for argv, _ in world.writes if argv[:3] == ["bd", "update", bead])
+    entries = [update[i + 1].split("=", 1)[0] for i, flag in enumerate(update) if flag == "--set-metadata"]
+    assert {"sanity_round", "sanity_round_key"} <= set(entries)
+    assert "--metadata" not in update
+
+
 def test_cannot_run_resets_sanity_and_refuses_without_notice(world):
     assert "ok" in world.run("sanity", verdict="CANNOT_RUN")
     assert world.beads[world.values["sanity_bead"]]["status"] == "open"
@@ -418,7 +444,7 @@ def test_cannot_run_resets_sanity_and_refuses_without_notice(world):
 @pytest.mark.parametrize("verdict", ["PASS", "FAIL"])
 def test_qa_closes_bead_before_task_and_sends_lead_status(world, verdict):
     assert "ok" in world.run("qa", verdict=verdict)
-    assert [argv[:2] for argv, _sender in world.writes] == [["bd", "update"], ["bd", "close"], ["atm", "task"], ["atm", "send"]]
+    assert [argv[:2] for argv, _sender in world.writes] == [["bd", "close"], ["atm", "task"], ["atm", "send"]]
     assert world.messages[0]["recipient"] == "phase-lead"
     assert world.messages[0]["type"] is None
     assert world.messages[0]["body"] == f"QA {verdict} {world.values['qa_bead']} commit={world.values['commit']} round=1"
@@ -429,11 +455,11 @@ def test_close_key_is_triple_and_only_fail_counter_key_adds_assignment(world):
     assert "ok" in world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "not implemented"}])
     bead = world.values["sanity_bead"]
     metadata = world.beads[bead]["metadata"]
-    assert metadata["task_close_key"] == [bead, "FAIL", world.values["commit"]]
-    assert metadata["sanity_round_key"] == [bead, "assignment-1", "FAIL", world.values["commit"]]
+    assert "task_close_key" not in metadata and "task_close_assignment" not in metadata
+    assert json.loads(metadata["sanity_round_key"]) == [bead, "assignment-1", "FAIL", world.values["commit"]]
     world.tasks[bead] = [world.assignment(2)]
     assert "ok" in world.run("sanity", verdict="PASS")
-    assert world.beads[bead]["metadata"]["task_close_key"] == [bead, "PASS", world.values["commit"]]
+    assert world.beads[bead]["close_reason"] == f"PASS at {world.values['commit']}"
 
 
 def test_old_sanity_fail_replay_after_dev_reclose_does_not_touch_new_round(world):
@@ -448,7 +474,6 @@ def test_old_sanity_fail_replay_after_dev_reclose_does_not_touch_new_round(world
     sanity = world.values["sanity_bead"]
     assert world.beads[checked]["status"] == "closed"
     assert world.beads[checked]["metadata"]["commit"] == new_commit
-
     writes_before = copy.deepcopy(world.writes)
     messages_before = copy.deepcopy(world.messages)
     task_events_before = copy.deepcopy(world.tasks[sanity])
@@ -461,6 +486,14 @@ def test_old_sanity_fail_replay_after_dev_reclose_does_not_touch_new_round(world
     assert world.tasks[sanity] == task_events_before
     assert world.beads[checked]["status"] == "closed"
     assert world.beads[checked]["metadata"]["commit"] == new_commit
+
+
+def test_new_assignment_between_fail_writes_stops_stale_hook(world):
+    world.reassign_after_write = 1
+    assert "ok" in world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "missing"}])
+    assert len(world.writes) == 1
+    assert world.beads[world.values["sanity_bead"]]["metadata"]["sanity_round"] == 1
+    assert world.beads[world.values["checked_bead"]]["status"] == "in_progress"
 
 
 def test_same_head_failures_on_distinct_assignments_increment_twice(world):
@@ -481,7 +514,7 @@ def test_existing_four_part_state_allows_a_new_assignment(world):
     bead = world.values["sanity_bead"]
     world.beads[bead]["metadata"]["task_close_key"] = [bead, "assignment-0", "FAIL", "old-head"]
     assert "ok" in world.run("sanity")
-    assert world.beads[bead]["metadata"]["task_close_key"] == [bead, "PASS", world.values["commit"]]
+    assert world.beads[bead]["close_reason"] == f"PASS at {world.values['commit']}"
 
 
 @pytest.mark.parametrize("role,verdict", [("dev", "PASS"), ("fix", "PASS"), ("sanity", "PASS"), ("sanity", "FAIL"), ("sanity", "CANNOT_RUN"), ("qa", "PASS"), ("qa", "FAIL")])
@@ -502,8 +535,14 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
         assert "ok" in result, (boundary, result)
         assert world.beads == baseline.beads
         for task in baseline.tasks:
-            assert world.tasks[task] == baseline.tasks[task]
-        assert [(item["type"], item["recipient"]) for item in world.messages] == [(item["type"], item["recipient"]) for item in baseline.messages]
+            if role in ("dev", "fix") and task == world.values["sanity_bead"]:
+                assert world.tasks[task][-1]["to_state"] == "assigned"
+            else:
+                assert world.tasks[task] == baseline.tasks[task]
+        expected = {(item["type"], item["recipient"]) for item in baseline.messages}
+        actual = {(item["type"], item["recipient"]) for item in world.messages}
+        assert actual == expected
+        assert not any(argv[:2] == ["atm", "search"] for argv, _ in world.calls)
 
 
 def test_replay_with_changed_verdict_or_head_is_conflict(world):
@@ -520,19 +559,24 @@ def test_fix_pass_requires_its_own_carry_forward(world):
     assert world.messages[-1]["values"]["carry_forward"] == world.values["checked_bead"]
 
 
-def test_cannot_run_replay_rejects_changed_verdict(world):
+def test_cannot_run_terminal_refusal_is_a_noop_until_new_assignment(world):
     assert "ok" in world.run("sanity", verdict="CANNOT_RUN")
-    assert world.run("sanity", verdict="PASS")["err"]["code"] == "REPLAY.CONFLICT"
+    writes = list(world.writes)
+    assert "ok" in world.run("sanity", verdict="PASS", commit="c" * 40)
+    assert world.writes == writes
+    world.tasks[world.values["sanity_bead"]].append(world.assignment(2))
+    assert "ok" in world.run("sanity", verdict="PASS")
 
 
-def test_round_cap_replay_sends_escalation_once(world):
+def test_round_cap_replay_may_repeat_notice_but_not_increment_counter(world):
     bead = world.values["sanity_bead"]
     world.beads[bead]["metadata"]["sanity_round"] = 5
     world.beads[world.values["checked_bead"]]["status"] = "closed"
     result = world.run("sanity", verdict="FAIL", undone=[{"number": 7, "reason": "not implemented"}])
     assert result["ok"]["escalated"] == "SANITY.ROUND_CAP"
     assert world.run("sanity")["ok"]["escalated"] == "SANITY.ROUND_CAP"
-    assert len(world.messages) == 1
+    assert len(world.messages) == 2
+    assert world.messages[0]["body"] == world.messages[1]["body"]
     assert world.beads[bead]["metadata"]["sanity_round"] == 6
 
 
@@ -544,7 +588,26 @@ def test_same_head_dev_retry_reassigns_sanity_after_fail(world):
     assert world.tasks[sanity][-1]["to_state"] == "assigned"
     assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 2
     assert "ok" in world.run("dev")
-    assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 2
+    assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 3
+
+
+@pytest.mark.parametrize("role", ["dev", "fix"])
+def test_rebase_required_rerun_updates_same_open_sanity_task(world, role):
+    assert "ok" in world.run(role)
+    sanity = world.values["sanity_bead"]
+    old = world.values["commit"]
+    original_close_reason = world.beads[world.values["checked_bead"]]["close_reason"]
+    world.messages.append(dict(type="rebase-required", recipient="developer", sender="phase-lead",
+                               body="rebase and rerun", values={}, at="2026-10-19T23:00:01Z"))
+    new = "c" * 40
+    assert "ok" in world.run(role, commit=new)
+    assignments = [message for message in world.messages if message["type"] == "dev-sanity-task"]
+    assert [message["values"]["commit"] for message in assignments] == [old, new]
+    assert world.tasks[sanity][-1]["to_state"] == "assigned"
+    assert world.tasks[sanity][-1]["event"] == "reassigned"
+    assert world.beads[world.values["checked_bead"]]["metadata"]["commit"] == new
+    assert world.beads[world.values["checked_bead"]]["close_reason"] == original_close_reason
+    assert len([task for task in world.tasks if task == sanity]) == 1
 
 
 def test_dev_replay_does_not_bypass_round_cap(world):
@@ -555,6 +618,14 @@ def test_dev_replay_does_not_bypass_round_cap(world):
     assert "ok" in world.run("dev", verdict="PASS", undone=[])
     assert world.tasks[sanity][-1]["to_state"] == "completed"
     assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 1
+
+
+def test_dev_changed_sha_after_completed_sanity_is_conflict(world):
+    assert "ok" in world.run("dev")
+    assert "ok" in world.run("sanity")
+    writes = list(world.writes)
+    assert world.run("dev", commit="c" * 40)["err"]["code"] == "REPLAY.CONFLICT"
+    assert world.writes == writes
 
 
 @pytest.mark.parametrize("boundary", [1, 2, 3, 4])
@@ -571,7 +642,7 @@ def test_not_reproducible_retry_uses_current_stack_top(world, boundary):
     assert len(assignments) == (2 if boundary >= 3 else 1)
     assert assignments[-1]["values"]["branch"] == "moved-top"
     assert assignments[-1]["values"]["commit"] == "c" * 40
-    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == 1
+    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == (2 if boundary == 4 else 1)
 
 
 def test_shared_contract_covers_all_role_templates_and_ids(world):
@@ -600,8 +671,8 @@ def test_each_role_example_renders_every_shared_template(role):
 @pytest.mark.parametrize("role, expected_writes", [
     ("dev", [["bd", "update"], ["bd", "close"], ["atm", "task", "assign"], ["atm", "send"]]),
     ("fix", [["bd", "update"], ["bd", "close"], ["atm", "task", "assign"], ["atm", "send"]]),
-    ("sanity", [["bd", "update"], ["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
-    ("qa", [["bd", "update"], ["bd", "close"], ["atm", "task", "close"], ["atm", "send"]]),
+    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
+    ("qa", [["bd", "close"], ["atm", "task", "close"], ["atm", "send"]]),
 ])
 def test_each_role_command_order_and_identity(world, role, expected_writes):
     if role == "fix":
