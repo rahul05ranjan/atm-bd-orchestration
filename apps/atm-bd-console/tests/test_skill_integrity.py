@@ -4,6 +4,7 @@ Every source is a fixture tree with controlled bytes; git and GitHub are injecte
 """
 from __future__ import annotations
 
+import gc
 import importlib.util
 import io
 import json
@@ -13,7 +14,6 @@ import tomllib
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import MethodType, SimpleNamespace
 
 import pytest
 import sc_sha
@@ -26,10 +26,6 @@ APP = Path(__file__).resolve().parents[1]
 REPO = APP.parents[1]
 UV = shutil.which("uv")
 VERSION = tomllib.loads((APP / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-
-
-class WeakReferenceableNamespace(SimpleNamespace):
-    pass
 
 
 def sha(data: bytes) -> str:
@@ -478,98 +474,24 @@ def _archive_manifest(archive: Path) -> dict:
         return json.loads(source.extractfile(member).read())
 
 
-def test_build_hook_includes_a_manifest_for_a_fixture_tree(tmp_path: Path) -> None:
+def test_failed_build_hook_cleans_manifest_and_generated_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spec = importlib.util.spec_from_file_location("atm_bd_hatch_build", APP / "hatch_build.py")
     assert spec is not None and spec.loader is not None
     hatch_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hatch_build)
+    monkeypatch.setattr(hatch_build.tempfile, "tempdir", str(tmp_path))
 
-    source = make_tree(tmp_path / "plugin")
-    hook = WeakReferenceableNamespace(target_name="wheel", _manifest_dir=None, _generated_identity=False)
-    hook._dest = lambda name: f"atm_bd_console/{name}"
-    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
-    build_data = {"force_include": {}}
+    def fail_after_hook_initialization() -> None:
+        hook = hatch_build.CustomBuildHook(str(APP), {}, {}, None, str(APP), "wheel")
+        hook.initialize(VERSION, {"force_include": {}})
+        raise RuntimeError("simulated artifact build failure")
 
-    hatch_build.CustomBuildHook._include_manifest(hook, APP, source, build_data, "0.17.4")
+    with pytest.raises(RuntimeError, match="simulated artifact build failure"):
+        fail_after_hook_initialization()
+    gc.collect()
 
-    generated, destination = next(iter(build_data["force_include"].items()))
-    assert destination == "atm_bd_console/skill-manifest.json"
-    manifest_path = Path(generated)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest == skill_integrity.build_manifest(source, "0.17.4")
-    hatch_build.CustomBuildHook.finalize(hook, "0.17.4", build_data, "fixture.whl")
-    assert not manifest_path.exists()
-
-
-def test_build_hook_registered_finalizer_cleans_manifest_after_build_failure(tmp_path: Path) -> None:
-    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build_finalizer", APP / "hatch_build.py")
-    assert spec is not None and spec.loader is not None
-    hatch_build = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hatch_build)
-    source = make_tree(tmp_path / "plugin")
-    hook = WeakReferenceableNamespace(target_name="wheel", _manifest_dir=None, _generated_identity=False)
-    hook._dest = lambda name: f"atm_bd_console/{name}"
-    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
-    build_data = {"force_include": {}}
-
-    hatch_build.CustomBuildHook._include_manifest(hook, APP, source, build_data, "0.17.4")
-
-    temporary = hook._manifest_dir
-    finalizer = hook._manifest_finalizer
-    assert temporary.is_dir()
-    assert finalizer.alive and finalizer.atexit
-    finalizer()
-    assert not temporary.exists()
-    assert not finalizer.alive
-    hatch_build.CustomBuildHook.finalize(hook, "0.17.4", build_data, "fixture.whl")
-    assert hook._manifest_dir is None and hook._manifest_finalizer is None
-
-
-def test_build_hook_cleans_manifest_temp_dir_when_initialization_fails(tmp_path: Path) -> None:
-    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build_cleanup", APP / "hatch_build.py")
-    assert spec is not None and spec.loader is not None
-    hatch_build = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hatch_build)
-    hook = SimpleNamespace(_manifest_dir=None, _generated_identity=False)
-    temporary = tmp_path / "manifest-temp"
-    temporary.mkdir()
-    (temporary / "skill-manifest.json").write_text("{}\n", encoding="utf-8")
-
-    def fail_initialization(_version, _build_data):
-        hook._manifest_dir = temporary
-        raise RuntimeError("fixture build failure")
-
-    hook._initialize = fail_initialization
-    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
-    with pytest.raises(RuntimeError, match="fixture build failure"):
-        hatch_build.CustomBuildHook.initialize(hook, "0.17.4", {"force_include": {}})
-
-    assert not temporary.exists() and hook._manifest_dir is None
-
-
-def test_build_hook_runs_registered_finalizer_when_initialization_fails(tmp_path: Path) -> None:
-    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build_init_finalizer", APP / "hatch_build.py")
-    assert spec is not None and spec.loader is not None
-    hatch_build = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hatch_build)
-    source = make_tree(tmp_path / "plugin")
-    hook = WeakReferenceableNamespace(target_name="wheel")
-    hook._dest = lambda name: f"atm_bd_console/{name}"
-    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
-    created = []
-
-    def fail_initialization(_version, build_data):
-        hatch_build.CustomBuildHook._include_manifest(hook, APP, source, build_data, "0.17.4")
-        created.append((hook._manifest_dir, hook._manifest_finalizer))
-        raise RuntimeError("fixture build failure")
-
-    hook._initialize = fail_initialization
-    with pytest.raises(RuntimeError, match="fixture build failure"):
-        hatch_build.CustomBuildHook.initialize(hook, "0.17.4", {"force_include": {}})
-
-    temporary, finalizer = created[0]
-    assert not temporary.exists() and not finalizer.alive
-    assert hook._manifest_dir is None and hook._manifest_finalizer is None
+    assert list(tmp_path.glob("atm-bd-skill-manifest-*")) == []
+    assert not (APP / "src" / "atm_bd_console" / "_build_identity.py").exists()
 
 
 def _bundled(archive: Path) -> dict[str, bytes]:

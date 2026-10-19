@@ -369,6 +369,19 @@ def test_tag_install_does_not_blame_the_ref_for_host_or_target_failures(
     assert capsys.readouterr().err == f"atm-bd skill: {message}\n"
 
 
+def test_outer_install_failure_does_not_fabricate_a_bundled_source(monkeypatch, capsys) -> None:
+    failure = RuntimeError("installer setup failed")
+    monkeypatch.setattr(skill, "_installer", lambda: (_ for _ in ()).throw(failure))
+    monkeypatch.setattr(
+        skill.skill_source,
+        "install_failure_message",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("the outer fallback has no resolved source")),
+    )
+
+    assert skill.run(["0.16.0"]) == 1
+    assert capsys.readouterr().err == "atm-bd skill: installer setup failed\n"
+
+
 def test_fetched_installer_file_is_never_loaded_or_executed(installer, tmp_path: Path, monkeypatch) -> None:
     fake, _ = installer
     marker = tmp_path / "executed"

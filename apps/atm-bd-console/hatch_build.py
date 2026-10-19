@@ -15,15 +15,12 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
-        self._generated_identity = False
         self._manifest_dir: Path | None = None
         self._manifest_finalizer: weakref.finalize | None = None
         try:
             self._initialize(version, build_data)
         except Exception:
             self._cleanup_manifest()
-            if self._generated_identity:
-                (Path(self.root) / "src" / "atm_bd_console" / "_build_identity.py").unlink(missing_ok=True)
             raise
 
     def _initialize(self, version: str, build_data: dict[str, object]) -> None:
@@ -61,8 +58,9 @@ class CustomBuildHook(BuildHookInterface):
         major, minor, _patch = package_version.split(".", 2)
         identity = f"{major}.{minor}.{count}+g{revision}{'-dirty' if dirty else ''}"
         self._include_skills(package, root, build_data, package_version)
+        assert self._manifest_dir is not None
+        output = self._manifest_dir / "_build_identity.py"
         output.write_text(f'IDENTITY = {identity!r}\nCOMMIT = {commit!r}\n')
-        self._generated_identity = True
         self._include_identity(output, build_data)
 
     def _include_identity(self, output: Path, build_data: dict[str, object]) -> None:
@@ -95,14 +93,10 @@ class CustomBuildHook(BuildHookInterface):
         if self._manifest_finalizer is not None:
             self._manifest_finalizer()
             self._manifest_finalizer = None
-        elif self._manifest_dir is not None:
-            shutil.rmtree(self._manifest_dir, ignore_errors=True)
         self._manifest_dir = None
 
     def finalize(self, version: str, build_data: dict[str, object], artifact_path: str) -> None:
         self._cleanup_manifest()
-        if self._generated_identity:
-            (Path(self.root) / "src" / "atm_bd_console" / "_build_identity.py").unlink(missing_ok=True)
 
 
 def _load_integrity(path: Path):

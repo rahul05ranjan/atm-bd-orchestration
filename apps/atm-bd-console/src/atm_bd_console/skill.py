@@ -112,7 +112,6 @@ def run(argv: list[str] | None = None) -> int:
         print(f"atm-bd skill: {error}", file=sys.stderr)
         return 1
     except skill_source.INSTALL_ERROR_TYPES as error:
-        message = skill_source.install_failure_message("bundled", error)
-        print(f"atm-bd skill: {message}", file=sys.stderr)
+        print(f"atm-bd skill: {error}", file=sys.stderr)
         return 1
     return 0

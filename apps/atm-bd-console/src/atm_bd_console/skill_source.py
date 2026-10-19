@@ -198,9 +198,7 @@ def resolve_source(*, version: str | None = None, latest: bool = False) -> Itera
                 raise RepositoryError(f"{REPOSITORY}: git rev-parse HEAD returned an invalid commit: {commit!r}")
         except RepositoryError:
             raise
-        except SkillSourceError as error:
-            raise SkillSourceError(install_failure_message(ref, error)) from error
-        except OSError as error:
+        except (SkillSourceError, OSError) as error:
             raise SkillSourceError(install_failure_message(ref, error)) from error
         # Outside the translation: errors raised by the caller's work with the tree are not the ref's.
         yield SkillSource(name, pkg_dir, commit, manifest)
