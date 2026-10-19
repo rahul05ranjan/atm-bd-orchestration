@@ -111,7 +111,7 @@ def _not_ready_kind(bead: dict[str, Any]) -> str:
     return "other"
 
 
-def _resolve(args, repo_root: Path) -> tuple[str, str | None, Path]:
+def _resolve(args, repo_root: Path) -> tuple[str, str | None, Path, str | None]:
     if args.phase:
         result = atm_bd.phase_file(str(repo_root), args.phase)
         if isinstance(result, Err):
@@ -125,13 +125,13 @@ def _resolve(args, repo_root: Path) -> tuple[str, str | None, Path]:
             integration_branch = tomllib.loads(phase_path.read_text(encoding="utf-8")).get("integration_branch")
         except (OSError, tomllib.TOMLDecodeError) as error:
             raise QueueFailure(f"{phase_path}: {error}: repair the phase file") from error
-        return result.value.root_id, integration_branch, Path(code_repo.value[0])
+        return result.value.root_id, integration_branch, Path(code_repo.value[0]), code_repo.value[1]
     root = args.root
     phase = root.rsplit("-phase-", 1)[-1]
     if not phase or phase == root:
         raise QueueFailure(f"atm-bd queues --root {root}: root must be <prefix>-phase-<phase>: provide a phase root id")
     # The root row supplies the integration branch when --root bypasses the phase file.
-    return root, None, repo_root
+    return root, None, repo_root, None
 
 
 def _valid_id(row: dict[str, Any], command_name: str) -> str:
@@ -144,7 +144,7 @@ def _valid_id(row: dict[str, Any], command_name: str) -> str:
 def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.run) -> dict[str, Any]:
     """Read open, ready, task and relevant closed rows once each and classify the phase."""
     now = now or datetime.now(UTC)
-    root, integration_branch, code_root = _resolve(args, repo_root)
+    root, integration_branch, code_root, github_repo = _resolve(args, repo_root)
     phase = root.rsplit("-phase-", 1)[-1]
     label = f"phase-{phase}"
     scoped = ["-l", label, "--exclude-label", "anchor", "-n", "0", "--json"]
@@ -257,7 +257,17 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
 
     stack_note = "not checked (--stack reads it)"
     if args.stack:
-        stack_note = stacks(str(integration_branch), queues, now, code_root, runner) if integration_branch else "no integration_branch: stack not checked"
+        if not integration_branch:
+            stack_note = "no integration_branch: stack not checked"
+        else:
+            if not github_repo:
+                result = runner(["git", "remote", "get-url", "origin"], "set origin to a GitHub repository URL", cwd=code_root)
+                if isinstance(result, Err):
+                    raise QueueFailure(_command_error(result))
+                github_repo = config._github_repo(result.value.stdout.strip())
+                if github_repo is None:
+                    raise QueueFailure("git remote get-url origin: expected a GitHub repository URL: set origin to a GitHub repository URL")
+            stack_note = stacks(str(integration_branch), queues, now, code_root, github_repo, runner)
     for rows in queues.values():
         rows.sort(key=lambda row: (row["priority"] if row["priority"] is not None else 9, row["id"]))
     return {"schema": SCHEMA, "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "root": root,
@@ -295,10 +305,11 @@ def _stack_view(trunk: str, candidates: list[str], repo_root: Path, runner=comma
     raise QueueFailure(f"gh stack view --json: {reason}: check out a worktree on the phase stack")
 
 
-def stacks(trunk: str, queues: dict[str, list[dict[str, Any]]], now: datetime, repo_root: Path, runner=command.run) -> str:
-    pages = run_json(["gh", "api", "--paginate", "--slurp", "repos/{owner}/{repo}/stacks?per_page=100"], cwd=repo_root, runner=runner)
+def stacks(trunk: str, queues: dict[str, list[dict[str, Any]]], now: datetime, repo_root: Path, github_repo: str, runner=command.run) -> str:
+    endpoint = f"repos/{github_repo}/stacks?per_page=100"
+    pages = run_json(["gh", "api", "--paginate", "--slurp", endpoint], cwd=repo_root, runner=runner)
     if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
-        raise QueueFailure("gh api repos/{owner}/{repo}/stacks: expected pages of stack objects: repair GitHub JSON output")
+        raise QueueFailure(f"gh api {endpoint}: expected pages of stack objects: repair GitHub JSON output")
     heads = [pr["head"]["ref"] for page in pages for stack in page if isinstance(stack, dict) and stack.get("open")
              and (stack.get("base") or {}).get("ref") in (trunk, None)
              for pr in reversed(stack.get("pull_requests") or [])

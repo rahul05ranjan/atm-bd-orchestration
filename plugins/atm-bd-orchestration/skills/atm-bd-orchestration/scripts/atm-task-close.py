@@ -30,6 +30,10 @@ COMPLETED = "completed"
 REFUSED = "refused"
 
 
+def is_terminal(events):
+    return bool(events) and events[-1].get("to_state") in TERMINAL_STATES
+
+
 class CloseError(RuntimeError):
     def __init__(self, code, message, fix):
         super().__init__(message)
@@ -439,18 +443,18 @@ class Hook:
     def send(self, recipient, template):
         self.run(["atm", "send", recipient, "--template", str(TEMPLATES / template), "--vars", str(self.path)])
 
-    def assign(self, member, bead, template, *, path=None):
+    def assign(self, member, bead, template, *, path=None, due=None):
         events = self.task_history[bead]
-        terminal = events and events[-1].get("to_state") in TERMINAL_STATES
-        if not events or (terminal and self.bead(bead).get("status") == "open"):
+        if due is None:
+            due = not events or (is_terminal(events) and self.bead(bead).get("status") == "open")
+        if due:
             self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
                       "--vars", str(path or self.path)], lead=True)
         self.assigned.append(bead)
 
     def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False):
         events = self.task_history[task]
-        latest = events[-1] if events else {}
-        if latest.get("to_state") not in TERMINAL_STATES:
+        if not is_terminal(events):
             argv = ["atm", "task", "close", task, outcome]
             if template:
                 argv += ["--template", str(TEMPLATES / template), "--vars", str(self.path)]
@@ -498,7 +502,7 @@ class Hook:
         values = self.values
         assignment_values = json.loads(Path(path).read_text()) if path else values
         sanity_events = self.task_history[sanity]
-        terminal = sanity_events and sanity_events[-1].get("to_state") in TERMINAL_STATES
+        terminal = is_terminal(sanity_events)
         open_assignment = bool(sanity_events) and not terminal
         checked_metadata = self.bead(values["checked_bead"]).get("metadata") or {}
         sha_changed = checked_metadata.get("commit") != assignment_values["commit"]
@@ -511,10 +515,7 @@ class Hook:
         self.close_bead(values["checked_bead"], reason)
         if assign and not open_assignment:
             self.send(self.lead, template)
-        if assign:
-            self.run(["atm", "task", "assign", self.config["dev_sanity_member"], "--task-id", sanity,
-                      "--template", str(TEMPLATES / "dev-sanity-template.xml.j2"), "--vars", str(path or self.path)], lead=True)
-        self.assigned.append(sanity)
+        self.assign(self.config["dev_sanity_member"], sanity, "dev-sanity-template.xml.j2", path=path, due=assign)
 
     def sanity(self):
         values = self.values
@@ -558,7 +559,7 @@ class Hook:
                 return
         if count > self.config["max_sanity_rounds"]:
             events = self.task_history[bead]
-            if not (events and events[-1].get("to_state") in TERMINAL_STATES):
+            if not is_terminal(events):
                 message = f"SANITY.ROUND_CAP {bead} {values['commit']} assignment={self.assignment_id} undone=" + ",".join(str(item["number"]) for item in values["undone"])
                 self.run(["atm", "send", self.config["team_lead_member"], message])
             self.close_task(bead, "dev-sanity-complete.md.j2")
@@ -569,7 +570,7 @@ class Hook:
         if record.get("status") != "open" or record.get("assignee"):
             self.update(bead, status="open", assignee="")
         events = self.task_history[bead]
-        if not (events and events[-1].get("to_state") in TERMINAL_STATES):
+        if not is_terminal(events):
             self.send(checked["assignee"], "sanity-fail.xml.j2")
         self.close_task(bead, "dev-sanity-complete.md.j2")
 
@@ -580,7 +581,7 @@ class Hook:
         self.render("qa-complete.md.j2")
         self.close_bead(values["qa_bead"], f"{values['verdict']} at {values['commit']}")
         events = self.task_history[values["qa_bead"]]
-        if not (events and events[-1].get("to_state") in TERMINAL_STATES):
+        if not is_terminal(events):
             message = f"QA {values['verdict']} {values['qa_bead']} commit={values['commit']} round={values['round']}"
             self.run(["atm", "send", self.lead, message])
         self.close_task(values["qa_bead"], "qa-complete.md.j2")

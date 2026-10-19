@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Append one PR under a bead claim, keeping bd's TTL alive with 120 s heartbeats.
-
-ATM_STACK_VIEW_SCRIPT may override the default ~/.claude/scripts/gh_stack_view.py.
-"""
+"""Append one PR under a bead claim, keeping bd's TTL alive with 120 s heartbeats."""
 from __future__ import annotations
 
 import argparse
@@ -66,6 +63,8 @@ class Linker:
         self.held = False
         self.heartbeat_at = 0
         self.reclaimed = None
+        self.mode = None
+        self.lean_reason = None
 
     def command(self, argv, *, check=True, allow_transport_failure=False):
         if self.held and argv[:2] != ['bd', 'heartbeat'] and self.clock() - self.heartbeat_at >= HEARTBEAT_INTERVAL:
@@ -146,13 +145,20 @@ class Linker:
 
     def lean_mode(self):
         if self.values['budget'] == 'lean':
-            return True
-        try:
+            self.lean_reason = 'budget_lean'
+        else:
             quota = self.command(['gh', 'api', 'rate_limit', '--jq', '.resources.graphql'], check=False, allow_transport_failure=True)
-            available = quota.returncode == 0 and json.loads(quota.stdout)['remaining'] > 0
-        except (ValueError, KeyError, TypeError):
-            available = False
-        return not available
+            if quota.returncode:
+                self.lean_reason = 'rate_limit_call_failed'
+            else:
+                try:
+                    self.lean_reason = None if json.loads(quota.stdout)['remaining'] > 0 else 'graphql_remaining_0'
+                except (ValueError, KeyError, TypeError):
+                    self.lean_reason = 'rate_limit_response_invalid'
+        self.mode = 'lean' if self.lean_reason else 'full'
+        if self.lean_reason:
+            print(f'sanity-stack-link: lean mode: {self.lean_reason}', file=sys.stderr)
+        return self.mode == 'lean'
 
     def stacks(self):
         result = self.command(['gh', 'api', 'repos/{owner}/{repo}/stacks', '--paginate', '--jq', STACK_FILTER])
@@ -275,25 +281,22 @@ class Linker:
             raise StackError(f"pull request base {candidate['base']} differs from stack top {base}")
         new = {'branch': self.values['branch'], 'pr': self.values['pr_number'], 'head': self.values['commit'], 'base': base, 'linked': False}
         if not lean and layers:
-            view = Path(os.environ.get('ATM_STACK_VIEW_SCRIPT', str(Path.home() / '.claude/scripts/gh_stack_view.py'))).expanduser()
-            if not view.is_file() or not os.access(view, os.R_OK):
-                raise StackError(f'stack view dependency is missing or unreadable: {view} (set ATM_STACK_VIEW_SCRIPT)')
             pending = [entry for entry in layers if not entry['linked']] + [new]
             stack_number = metadata.get('stack_number')
             if stack_number is None:
                 self.command(['gh', 'stack', 'link', '--base', metadata['trunk']] + [str(entry['pr']) for entry in pending])
-                hosted = self.stacks()
-                matches = [stack for stack in hosted if stack['base'] == metadata['trunk'] and stack['prs'] == [entry['pr'] for entry in layers] + [new['pr']]]
-                if len(matches) != 1:
-                    raise StackError('new hosted stack identity is missing or ambiguous')
-                stack_number = matches[0]['number']
-                metadata['stack_number'] = stack_number
             else:
                 for entry in pending:
                     self.command(['gh', 'stack', 'link', str(stack_number), str(entry['pr'])])
+            hosted = self.stacks()
+            expected = [entry['pr'] for entry in layers] + [new['pr']]
+            matches = [stack for stack in hosted if stack['base'] == metadata['trunk'] and stack['prs'] == expected
+                       and (stack_number is None or stack['number'] == stack_number)]
+            if len(matches) != 1:
+                raise StackError('linked hosted stack identity or order is missing or ambiguous')
+            metadata['stack_number'] = matches[0]['number']
             for entry in pending:
                 entry['linked'] = True
-            self.command(['python3', str(view), '--stack', str(stack_number), '--refresh', '--json'])
         layers.append(new)
         self.write(metadata)
         return {'result': 'stacked', 'top': new, 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
@@ -302,6 +305,7 @@ class Linker:
 def main(argv=None, runner=subprocess.run, clock=time.time, sleep=time.sleep):
     parser = Parser(description=__doc__)
     parser.add_argument('--input', required=True, type=Path)
+    linker = None
     try:
         args = parser.parse_args(argv)
         values = json.loads(args.input.read_text(encoding='utf-8'))
@@ -338,6 +342,8 @@ def main(argv=None, runner=subprocess.run, clock=time.time, sleep=time.sleep):
                     result = {'result': 'stack_failed', 'evidence': f'release failed after {result["result"]}: {error}'}
     except (StackError, OSError, ValueError, TypeError) as error:
         result = {'result': 'stack_failed', 'evidence': str(error)}
+    if linker is not None and linker.mode is not None:
+        result.update(mode=linker.mode, lean_reason=linker.lean_reason)
     print(json.dumps(result))
     return int(result['result'] == 'stack_failed')
 

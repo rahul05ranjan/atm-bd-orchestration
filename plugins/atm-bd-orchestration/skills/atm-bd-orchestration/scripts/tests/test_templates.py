@@ -12,6 +12,28 @@ from rendering import render
 
 ROOT = Path(__file__).parents[2]
 class TemplateContractTests(unittest.TestCase):
+    def test_refusal_assignments_do_not_require_workflow_class_beads_or_citations(self):
+        for name in (
+            "dev-template",
+            "fix-assignment",
+            "qa-template",
+            "review-template",
+            "plan-review-template",
+        ):
+            with self.subTest(template=name):
+                result = render(ROOT / f"templates/{name}.xml.j2", ROOT / f"examples/{name}-vars.json")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for forbidden in (
+                    "workflow class",
+                    "class bead",
+                    "class id",
+                    "class-id",
+                    "workflow-issue",
+                    "class or escalation",
+                ):
+                    self.assertNotIn(forbidden, result.stdout.lower())
+                self.assertIn("reason_md", result.stdout)
+
     def test_sanity_fail_report_explains_handoff_without_finding_beads(self):
         variables = {
             "generated_at": "2026-01-01T00:00:00Z",

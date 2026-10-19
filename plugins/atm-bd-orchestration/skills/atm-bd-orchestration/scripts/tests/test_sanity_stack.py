@@ -36,9 +36,6 @@ class Clock:
 class World:
     def __init__(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ATM_IDENTITY", "sanity")
-        self.view_script = tmp_path / "gh_stack_view.py"
-        self.view_script.write_text("# controlled view tool\n")
-        monkeypatch.setenv("ATM_STACK_VIEW_SCRIPT", str(self.view_script))
         self.root = tmp_path / "repo"
         origin = tmp_path / "origin.git"
         subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
@@ -57,9 +54,10 @@ class World:
         self.stacks = []
         self.calls = []
         self.unavailable = False
+        self.quota_failure = None
         self.fail_link = False
         self.cas_fail = False
-        self.fail_view = False
+        self.fail_verification = False
         self.release_failure = None
         self.advance_on_pulls = 0
         self.task_list_failure = None
@@ -122,13 +120,25 @@ class World:
             else:
                 output = json.dumps([{"assignee": self.bead["assignee"], "state": "active", "task_id": "holder-task"}])
         elif argv[:3] == ["gh", "api", "rate_limit"]:
-            output = json.dumps({"remaining": 0 if self.unavailable else 500})
+            if self.quota_failure == "timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            if self.quota_failure == "oserror":
+                raise OSError("quota endpoint unavailable")
+            if self.quota_failure == "nonzero":
+                status, error = 1, "quota call failed"
+            elif self.quota_failure == "invalid-json":
+                output = "not JSON"
+            else:
+                output = json.dumps({"remaining": 0 if self.unavailable else 500})
         elif argv[:3] == ["gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100"]:
             self.clock.now += self.advance_on_pulls
             self.advance_on_pulls = 0
             output = json.dumps(self.pulls)
         elif argv[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"]:
-            output = json.dumps(self.stacks)
+            if self.fail_verification and self.stacks:
+                status, error = 1, "injected hosted verification failure"
+            else:
+                output = json.dumps(self.stacks)
         elif argv[:3] == ["gh", "stack", "link"]:
             if self.fail_link:
                 status, error = 1, "injected link failure"
@@ -137,9 +147,6 @@ class World:
             else:
                 stack = next(item for item in self.stacks if item["number"] == int(argv[3]))
                 stack["prs"].append(int(argv[4]))
-        elif argv[0] == "python3":
-            if self.fail_view:
-                status, error = 1, "injected view failure"
         elif argv[0] == "git":
             return subprocess.run(argv, cwd=self.root, **kwargs)
         else:
@@ -203,42 +210,58 @@ def test_three_passes_link_in_verdict_order(world):
     assert all(item["linked"] for item in metadata["layers"])
     assert metadata["stack_number"] == 7
     assert world.bead["assignee"] == ""
-    assert [call[1] for call in world.calls if call[0] == "python3"] == [str(world.view_script)] * 2
+    assert not any(call[0] == "python3" for call in world.calls)
 
 
 @pytest.mark.parametrize("existing_stack", [False, True])
-def test_missing_view_tool_fails_before_link_and_preserves_ledger(world, monkeypatch, tmp_path, existing_stack):
+def test_full_mode_verifies_hosted_stack_without_view_helper(world, monkeypatch, tmp_path, existing_stack):
     first = world.branch("first", "trunk", 1)
     second = world.branch("second", "first", 2)
     assert world.link(first)["result"] == "stacked"
     if existing_stack:
         assert world.link(second)["result"] == "stacked"
         second = world.branch("third", "second", 3)
-    before = copy.deepcopy(world.bead["metadata"])
-    missing = tmp_path / "missing-view.py"
-    monkeypatch.setenv("ATM_STACK_VIEW_SCRIPT", str(missing))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ATM_STACK_VIEW_SCRIPT", raising=False)
+    assert not (tmp_path / ".claude/scripts/gh_stack_view.py").exists()
     world.calls.clear()
     result = world.link(second)
-    assert result["result"] == "stack_failed"
-    assert "stack view" in result["evidence"].lower()
-    assert str(missing) in result["evidence"]
-    assert not any(call[:3] == ["gh", "stack", "link"] or "--metadata" in call for call in world.calls)
-    assert world.bead["metadata"] == before
+    assert result["result"] == "stacked"
+    assert result["mode"] == "full"
+    assert result["lean_reason"] is None
+    assert result["top"]["linked"] is True
+    assert [call for call in world.calls if call[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"]]
+    assert not any(call[0] == "python3" for call in world.calls)
+    assert world.stacks == [{"number": 7, "base": "trunk", "prs": [1, 2, 3] if existing_stack else [1, 2]}]
     assert world.bead["assignee"] == ""
 
 
-def test_default_view_tool_path_is_used_when_no_override(world, monkeypatch, tmp_path):
+@pytest.mark.parametrize("budget,failure,unavailable,mode,reason", [
+    ("lean", None, False, "lean", "budget_lean"),
+    ("full", None, True, "lean", "graphql_remaining_0"),
+    ("full", "nonzero", False, "lean", "rate_limit_call_failed"),
+    ("full", "timeout", False, "lean", "rate_limit_call_failed"),
+    ("full", "oserror", False, "lean", "rate_limit_call_failed"),
+    ("full", "invalid-json", False, "lean", "rate_limit_response_invalid"),
+    ("full", None, False, "full", None),
+])
+def test_mode_and_lean_cause_are_reported(world, capsys, budget, failure, unavailable, mode, reason):
     first = world.branch("first", "trunk", 1)
     second = world.branch("second", "first", 2)
     assert world.link(first)["result"] == "stacked"
-    view = tmp_path / ".claude" / "scripts" / "gh_stack_view.py"
-    view.parent.mkdir(parents=True)
-    view.write_text("# controlled default view tool\n")
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("ATM_STACK_VIEW_SCRIPT")
+    second["budget"] = budget
+    world.quota_failure = failure
+    world.unavailable = unavailable
     world.calls.clear()
-    assert world.link(second)["result"] == "stacked"
-    assert any(call[:2] == ["python3", str(view)] for call in world.calls)
+    capsys.readouterr()
+    result = world.link(second)
+    assert result["result"] == "stacked"
+    assert (result["mode"], result["lean_reason"]) == (mode, reason)
+    assert result["top"]["linked"] is (mode == "full")
+    assert capsys.readouterr().err.splitlines() == ([f"sanity-stack-link: lean mode: {reason}"] if reason else [])
+    if mode == "lean":
+        assert not any(call[:3] in (["gh", "api", "repos/{owner}/{repo}/stacks"], ["gh", "stack", "link"])
+                       for call in world.calls)
 
 
 def test_lean_run_does_not_require_view_tool(world, monkeypatch, tmp_path):
@@ -326,7 +349,7 @@ def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
     fourth = world.branch("fourth", "deferred", 4)
     world.calls.clear()
     assert world.link(fourth)["result"] == "stacked"
-    assert len([call for call in world.calls if call[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"]]) == 1
+    assert len([call for call in world.calls if call[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"]]) == 2
     assert all(layer["linked"] for layer in world.bead["metadata"]["layers"])
     assert [call for call in world.calls if call[:3] == ["gh", "stack", "link"]] == [
         ["gh", "stack", "link", "7", "3"],
@@ -455,10 +478,10 @@ def test_retry_recovers_hosted_only_torn_link(world):
     second = world.branch("second", "first", 2)
     assert world.link(first)["result"] == "stacked"
     before = copy.deepcopy(world.bead["metadata"])
-    world.fail_view = True
+    world.fail_verification = True
     assert world.link(second)["result"] == "stack_failed"
     assert world.bead["metadata"] == before
-    world.fail_view = False
+    world.fail_verification = False
     world.calls.clear()
     assert world.link(second)["result"] == "stacked"
     assert [item["pr"] for item in world.bead["metadata"]["layers"]] == [1, 2]
@@ -470,9 +493,9 @@ def test_next_verdict_recovers_prior_hosted_only_torn_link(world):
     second = world.branch("second", "first", 2)
     third = world.branch("third", "second", 3)
     assert world.link(first)["result"] == "stacked"
-    world.fail_view = True
+    world.fail_verification = True
     assert world.link(second)["result"] == "stack_failed"
-    world.fail_view = False
+    world.fail_verification = False
     assert world.link(third)["result"] == "stacked"
     assert [(item["pr"], item["linked"]) for item in world.bead["metadata"]["layers"]] == [(1, True), (2, True), (3, True)]
 

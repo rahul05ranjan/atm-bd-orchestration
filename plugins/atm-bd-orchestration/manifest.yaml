@@ -127,7 +127,9 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_task_close.py
     - skills/atm-bd-orchestration/scripts/tests/test_templates.py
     - skills/atm-bd-orchestration/scripts/tests/test_transitions.py
+    - skills/atm-bd-orchestration/scripts/tests/test_wrap_jev_receipt.py
     - skills/atm-bd-orchestration/scripts/transitions.py
+    - skills/atm-bd-orchestration/scripts/wrap_jev_receipt.py
     - skills/atm-bd-orchestration/templates/arch-qa-assignment.json.j2
     - skills/atm-bd-orchestration/templates/dev-complete.md.j2
     - skills/atm-bd-orchestration/templates/dev-sanity-assignment.json.j2

@@ -6,7 +6,7 @@ import pytest
 
 COMMAND_TIMEOUT = 30
 HANG_GUARD_SECONDS = 60
-SUITE_TIMEOUT = None   # a suite's verdict is its own result, never a wall-clock race; the CI job timeout is the hang backstop
+SUITE_TIMEOUT = 1200  # generous hang backstop, shorter than the 30-minute CI job timeout
 OUTPUT_TAIL = 16000
 
 

@@ -11,7 +11,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 3. Work only on the assigned branch and worktree. Never run `gh stack link/sync/rebase/merge` or `bd sync` (the lead is the stack writer and owns sync); `--actor "$ATM_IDENTITY"` on every `bd` write.
 4. Before claiming: dev rebases onto `origin/<pr_target>` (a conflict is part of the work); dev-fix and fix only fetch (their branch was cut from the stack top). Then run `assignment-gates.py dev`; `READY`: `bd update <bead> --claim`, then `atm task start <bead> "<one line>"`.
 5. `NOT_READY`: do not claim or start; find the blockers; close the task `refused` (`bead_state` open), `reason_md` = bead, cause, who must move and the dependency to add (`bd dep add <bead> --blocked-by <blocker>`). A blocker met mid-task (work another bead or agent owns that is not done; a shared change you can make yourself is a quick fix, 26, and the task continues): return the bead open, unassigned, blocker in notes, close the task `refused` the same way. Never wait.
-6. Any other gate code: reuse a matching workflow class bead (append task id, head, command, evidence) and cite it in the refusal; none matches: report the signature to the task assigner and cite that message; never create a per-task bead.
+6. Any other gate code: close the task `refused` with the code, command and failure evidence in `reason_md`; leave the bead unchanged when the gate fails before claim.
 7. Commit as items land and push early; a push or `atm send` closes nothing.
 8. Never weaken a test, skip a criterion, or leave a placeholder; run `<test_command>` and `<lint_command>` (dev and dev-fix: also the bead's validation commands) to zero failures, including lint failures inherited from a lower layer.
 9. Before closing, the dev rebases onto the stack's current top (`assignment-gates.py stack-top --root <phase-root> --pr-target <pr_target> --worktree <worktree>`; any other exit is a code to refuse with, never a guess), re-runs the tests, force-pushes and opens the PR against that top (never draft; a quick-fix finding fixed on a branch that already has its PR keeps that PR), then runs `/sc-gh-stack-view`.
@@ -24,7 +24,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 13. Read `policy_path` and every guideline it names for the languages touched.
 14. Read the complete plan and enumerate all tasks that must be completed in the primary and any child beads; create an itemized private checklist outside the tracked tree with every task identified; work through the checklist one item at a time; then go through it again one item at a time and confirm each is fully met; nothing outside the bead's scope.
 15. Close: `bd close --reason "dev complete at <short sha>"` + `dev-complete.md.j2` with the deliverable inventory and gate output; deletion work adds a before/after inventory.
-16. Cannot complete: class bead or report (6); `bd update --status blocked --assignee "" --append-notes "DEV_CANNOT_COMPLETE; ..."`; never `bd close` (it would release the sanity check); task `refused`. Unfinished is a failure.
+16. Cannot complete: include the reason, command and failure evidence in the task refusal's `reason_md`; `bd update --status blocked --assignee "" --append-notes "DEV_CANNOT_COMPLETE; ..."`; never `bd close` (it would release the sanity check); task `refused`. Unfinished is a failure.
 
 ### Dev-fix (`dev-fix`)
 
@@ -39,7 +39,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 22. Confirm the defect at the cited file:line; absent: no work, close `not_reproducible` with the file:line checked.
 23. Fix every in-scope occurrence of the pattern; touch only what the remedy needs.
 24. Close: `bd close --reason "fixed at <short sha>"` (or `"not reproducible: <file:line>"`) + `fix-complete.md.j2`, outcome `fixed` (with commit and PR) or `not_reproducible` (none).
-25. Cannot fix: class bead or report (6); return the bead open, unassigned, `FIX_CANNOT_COMPLETE` in notes; task `refused`. Never close a finding unfixed.
+25. Cannot fix: include the reason, command and failure evidence in the task refusal's `reason_md`; return the bead open, unassigned, `FIX_CANNOT_COMPLETE` in notes; task `refused`. Never close a finding unfixed.
 
 ### Parallel quick fix (finder)
 
