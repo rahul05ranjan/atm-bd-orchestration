@@ -24,7 +24,7 @@ from atm_bd_console.enums import SprintState
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.result import Ok
 from atm_bd_console.state import acquire_lock
-from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepView
+from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepResult, StepView
 
 
 def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
@@ -41,9 +41,16 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     class Node:
         size = SimpleNamespace(width=120, height=40)
         active = "dispatch"
+        highlighted = None
 
         def update(self, value):
             self.value = value
+
+        def clear_options(self):
+            pass
+
+        def add_options(self, _options):
+            pass
 
     nodes = {}
 
@@ -51,7 +58,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            config=replace(CONFIG, repo_root=str(tmp_path)),
+                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_runs=[], quality_runs=[], runs_error=None,
                             show_pr_history=False, status_error=None, status_text="",
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
@@ -70,10 +77,15 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     ConsoleApp.refresh_views(dummy)
     assert nodes["#status-table"].display is True
     assert seen == [RUNNING, RUNNING]
+    dummy.runs_error = "open bead read failed"
+    ConsoleApp.refresh_views(dummy)
+    assert nodes["#quality-error"].display is True
+    assert "open bead read failed" in nodes["#quality-error"].value.plain
+    assert "open bead read failed" in nodes["#sanity-list"].value.plain
 
 
 class RaisingStep:
-    def __call__(self, *_args) -> tuple[Snapshot, State]:
+    def __call__(self, *_args) -> StepResult:
         raise RuntimeError("step exploded")
 
 
@@ -84,12 +96,12 @@ class BlockingStep(FakeStep):
         self.release = threading.Event()
         self.completed = threading.Event()
 
-    def __call__(self, config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+    def __call__(self, config: Config, state: State, force_github: bool) -> StepResult:
         self.calls.append(force_github)
         self.started.set()
         assert self.release.wait(HANG_GUARD_S), "test must release the blocked step"
         self.completed.set()
-        return self.snapshot, state
+        return StepResult(self.snapshot, state)
 
 
 def test_error_snapshot_keeps_the_app_running_and_shows_the_error() -> None:
@@ -251,11 +263,14 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             assert app.query_one("#dashboard").region.y == 2  # tabs, underline, content
             await pilot.resize_terminal(80, 30)
             await settle(pilot)
-            assert build.display and build.region.right == 80 and build.region.x > tabs_right
-            await pilot.resize_terminal(40, 30)  # no room right of the tab strip: hidden, every tab clickable
+            assert not build.display
+            assert all(tab.display and tab.region.right <= 80 for tab in app.query("ContentTab"))
+            await pilot.resize_terminal(40, 30)  # the overflowing tab strip remains keyboard navigable
             await settle(pilot)
             assert not build.display
-            await pilot.click("#--content-tab-diagnostics")
+            from textual.widgets import Tabs
+            app.query_one(Tabs).focus()
+            await pilot.press("left")  # wrap from Dispatch to Diagnostics
             await settle(pilot)
             assert app.query_one("TabbedContent").active == "diagnostics"
             shown = app.query_one("#diagnostics-text").render().plain
@@ -270,7 +285,7 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
 
 def test_raised_multiline_error_fits_dashboard_and_header_after_resize() -> None:
     class LongRaisingStep:
-        def __call__(self, *_args) -> tuple[Snapshot, State]:
+        def __call__(self, *_args) -> StepResult:
             raise RuntimeError("first error detail is far too long for a narrow terminal\nsecond line should be normalized")
 
     async def scenario() -> None:
@@ -364,12 +379,12 @@ def test_forced_refresh_waits_for_slow_render_and_keeps_snapshot_order(monkeypat
     rendered: list[str] = []
     shown: list[str] = []
 
-    def step(_config: Config, state: State, force_github: bool) -> tuple[Snapshot, State]:
+    def step(_config: Config, state: State, force_github: bool) -> StepResult:
         calls.append(force_github)
         if len(calls) == 2:
             second_step_done.set()
-            return second, state
-        return first, state
+            return StepResult(second, state)
+        return StepResult(first, state)
 
     original_show = ConsoleApp._show
 

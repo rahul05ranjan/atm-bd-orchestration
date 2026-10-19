@@ -66,6 +66,14 @@ MARKER_HARD = "💎"
 MARKER_FAST = "⚡"
 MARKER_QA = "🔍"
 MARKER_FIX_QA = "🛠️"
+# Layout C individual/index.md: QA pass/fail use U+F029B (#2EA043/#F85149).
+# Lead ruling 2026-10-19 applies those entries to sanity verdicts as well.
+# Layout C has no API_FAILURE entry; the lead ruled to retain U+F0026 #D29922.
+SANITY_VERDICT_ICONS: dict[str, Icon] = {
+    "PASS": ("\U000f029b", "#2EA043"),
+    "FAIL": ("\U000f029b", "#F85149"),
+    "API_FAILURE": ("\U000f0026", "#D29922"),
+}
 
 
 def icon(member: AgentIcon | SprintState | CiState | PrState) -> Icon:

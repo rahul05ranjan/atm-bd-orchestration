@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from datetime import UTC, datetime
 
+import pytest
 from conftest import FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, PHASE, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
 from textual import events
+from textual.widgets._markdown import MarkdownBlock
 
-from atm_bd_console.app import ConsoleApp, sprint_steps, status_header
-from atm_bd_console.enums import PrState, SprintState
+from atm_bd_console import findings_renderer, render, runs
+from atm_bd_console.app import (
+    ConsoleApp,
+    _agent_name,
+    _quality_run_label,
+    _verdict,
+    sanity_text,
+    sprint_steps,
+    status_header,
+)
+from atm_bd_console.enums import PrState, QaState, SprintState
+from atm_bd_console.icons import icon_for
 from atm_bd_console.model import _sprint_views
 from atm_bd_console.prs import render_prs
 from atm_bd_console.render import dashboard, status_bar
@@ -35,6 +49,239 @@ SNAPSHOT = replace(
     sprints=SPRINTS,
     mermaid=f"graph TD\n  {WIDE}",
 )
+
+
+def capture_updates(monkeypatch, widget):
+    pending = []
+    original = widget.update
+
+    def update(content):
+        result = original(content)
+        pending.append(result)
+        return result
+
+    monkeypatch.setattr(widget, "update", update)
+    return pending
+
+
+def test_sanity_rows_show_local_time_icon_name_and_api_failure() -> None:
+    dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness="codex-cli", model="terra")
+    reviewer = replace(RUNNING.agents[0], name="sanity-jev", agent_type="sanity", harness="codex-cli", model="sol")
+    rows = [{"run_id": "r", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-4", "pr_number": 42,
+             "iteration": 1, "final_verdict": "PASS", "dev": "alice", "reviewer": "sanity-jev",
+             "kind": "API_FAILURE", "jev_elapsed_s": 4.2, "error": {"message": "Jev is unavailable"}},
+            {"run_id": "r", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-4", "reviewer": "sanity-llm",
+             "verdict": "PASS", "llm_elapsed_s": 1.2}]
+    main, errors = sanity_text(runs.sanity_runs(rows), (dev, reviewer), local_zone=UTC)
+    assert "13:14" in main.plain
+    assert render.clock(datetime.fromisoformat("2026-10-02T13:14:00Z"), local_zone=UTC) == "13:14"
+    assert "\U000f01e7 alice" in main.plain
+    assert "\U000f0026" in main.plain and "4.2s" in main.plain and "1.2s" in main.plain
+    assert "\U000f01a6 sanity-jev" in errors.plain and "Jev is unavailable" in errors.plain
+
+
+@pytest.mark.parametrize(("verdict", "glyph", "color"), [
+    ("PASS", "\U000f029b", "#2EA043"),
+    ("FAIL", "\U000f029b", "#F85149"),
+    ("API_FAILURE", "\U000f0026", "#D29922"),
+])
+def test_sanity_verdict_uses_layout_c_glyph_and_color(verdict: str, glyph: str, color: str) -> None:
+    rendered = _verdict({"kind": "API_FAILURE"} if verdict == "API_FAILURE" else {"verdict": verdict})
+    assert rendered.plain == glyph
+    assert str(rendered.style) == color
+
+
+@pytest.mark.parametrize(("harness", "model", "dev_icon"), [
+    ("claude-code", "Haiku", ("\U000f0156", "#FF6533")),
+    ("codex-cli", "GPT-5.6-Terra", ("\U000f01e7", "#2DE057")),
+])
+@pytest.mark.parametrize("reviewer_name", ["sanity-jev", "sanity-llm", "dev-sanity"])
+def test_sanity_reviewer_and_severity_cells_use_roster_icon_style(
+    harness: str, model: str, dev_icon: tuple[str, str], reviewer_name: str,
+) -> None:
+    member = replace(RUNNING.agents[0], name=reviewer_name, agent_type="sanity", harness=harness, model=model)
+    dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness=harness, model=model)
+    agents = (member, dev)
+    row = {"reviewer": reviewer_name, "kind": "API_FAILURE", "error": "unavailable"}
+    # Drive the renderer directly: the ledger parser accepts only its two producer reviewer names.
+    run = runs.SanityRun("r", "2026-10-02T13:14:00Z", "bj-4", 42, "alice", 1, "FAIL", row, None)
+    main, severity_table = sanity_text([run], agents, local_zone=UTC)
+
+    sanity_glyph, sanity_color = "\U000f01a6", "#E551BA"
+    assert icon_for(member) == (sanity_glyph, sanity_color)
+    reviewer_cell = _agent_name(reviewer_name, agents)
+    assert reviewer_cell.plain == f"{sanity_glyph} {reviewer_name}"
+    assert str(reviewer_cell.style) == sanity_color
+    token = f"{sanity_glyph} {reviewer_name}"
+    start = severity_table.plain.index(token)
+    assert any(span.start == start and span.end == start + len(token)
+               and str(span.style) == sanity_color for span in severity_table.spans)
+
+    glyph, color = dev_icon
+    assert icon_for(dev) == dev_icon
+    token = f"{glyph} alice"
+    start = main.plain.index(token)
+    assert any(span.start <= start < span.end and str(span.style) == color for span in main.spans)
+
+
+@pytest.mark.parametrize("detail", [
+    {"code": "SANITY.JEV_UNAVAILABLE", "message": "Jev unavailable", "recoverable": True,
+     "suggested_action": "retry", "context": {"part": 2}},
+    "raw error: λ",
+])
+def test_sanity_api_failure_displays_the_entire_error(detail) -> None:
+    row = {"run_id": "r", "reviewer": "sanity-jev", "kind": "API_FAILURE", "error": detail}
+    _, errors = sanity_text(runs.sanity_runs([row]), ())
+    expected = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+    assert errors.plain.splitlines()[-1].endswith(expected)
+
+
+def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> None:
+    qa = {"id": "qa-1", "status": "closed", "started_at": "2026-10-02T13:00:00Z",
+          "closed_at": "2026-10-02T13:14:00Z", "close_reason": "FAIL found",
+          "metadata": {"sprint": "bj-4", "round": 1}, "checked_bead_data": {"metadata": {"pr_number": 42}}}
+    finding = {"id": "f1", "description": "missing test", "design": "add a test",
+               "metadata": {"severity": "important", "reviewer": "req-qa"},
+               "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
+    assert "13:14" in _quality_run_label(runs.qa_runs([qa])[0], [], local_zone=UTC)
+    rendered = []
+    monkeypatch.setattr(findings_renderer, "render_findings", lambda _root, findings: rendered.extend(findings) or "# Findings\n\nmissing test")
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(SNAPSHOT, ([], runs.qa_runs([qa]), [finding])), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            tabs = app.query_one("TabbedContent")
+            tabs.active = "sanity"
+            assert app.query_one("#sanity-list") and app.query_one("#sanity-errors")
+            tabs.active = "quality"
+            options = app.query_one("#quality-runs")
+            assert options.option_count == 1
+            label = str(options.get_option_at_index(0).prompt)
+            assert "bj-4" in label and "1/0" in label and "FAIL" in label
+            assert label.endswith("840s")
+            widget = app.query_one("#quality-findings")
+            pending = capture_updates(monkeypatch, widget)
+            app._show_findings("qa-1")
+            await pending[-1]
+            assert rendered and rendered[-1]["id"] == "f1"
+            assert widget
+
+    run_scenario(scenario())
+
+
+@pytest.mark.parametrize(("status", "reason", "qa_state", "color"), [
+    ("open", None, QaState.RUNNING, "#4A5AF8"),
+    ("closed", "PASS", QaState.PASS, "#2EA043"),
+    ("closed", "FAIL", QaState.FAIL, "#F85149"),
+])
+def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_path, status, reason, qa_state, color) -> None:
+    qa = {"id": "qa-1", "status": status, "closed_at": "2026-10-02T13:14:00Z", "close_reason": reason,
+          "metadata": {"sprint": "bj-4", "round": 1}}
+    finding = {"id": "f1", "description": "issue", "design": "correction", "severity": "important",
+               "reviewer": "req-qa", "issue": "issue", "required_correction": "correction",
+               "metadata": {"severity": "important", "reviewer": "req-qa"},
+               "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
+    reviewer = replace(RUNNING.agents[0], name="req-qa", agent_type="qa")
+    assert icon_for(replace(reviewer, qa_state=qa_state)) == ("\U000f029b", color)
+    snapshot = replace(SNAPSHOT, agents=(reviewer,))
+    monkeypatch.setattr(runs, "run_findings", lambda *_args: [finding])
+    rendered = []
+
+    def render_findings(_root, findings):
+        rendered.extend(findings)
+        return f"**Reviewer:** {findings[0]['reviewer_display']}"
+
+    monkeypatch.setattr(findings_renderer, "render_findings", render_findings)
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(snapshot, ([], runs.qa_runs([qa]), [finding])), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "quality"
+            widget = app.query_one("#quality-findings")
+            pending = capture_updates(monkeypatch, widget)
+            app._show_findings("qa-1")
+            await pending[-1]
+            blocks = widget.query(MarkdownBlock)
+            content = next(block._content for block in blocks if "req-qa" in block._content.plain)
+            assert content.plain == "Reviewer: \U000f029b req-qa"
+            reviewer_start = len("Reviewer: ")
+            assert any(span.start == reviewer_start and span.end == len(content.plain)
+                       and str(span.style) == color for span in content.spans)
+            assert finding["reviewer"] == "req-qa"
+            assert rendered[0]["reviewer"] == "req-qa"
+            assert rendered[0]["reviewer_display"] == "\U000f029b req-qa"
+
+    run_scenario(scenario())
+
+
+@pytest.mark.parametrize(("reviewer_name", "harness", "model"), [
+    (name, harness, model)
+    for harness, model in (("claude-code", "Haiku"), ("codex-cli", "GPT-5.6-Terra"))
+    for name in ("sanity-jev", "sanity-llm", "dev-sanity")
+])
+def test_quality_sanity_reviewer_display_uses_roster_icon_without_mutating_reviewer(
+    monkeypatch, tmp_path, reviewer_name: str, harness: str, model: str,
+) -> None:
+    qa = {"id": "qa-1", "status": "closed", "closed_at": "2026-10-02T13:14:00Z", "close_reason": "FAIL found",
+          "metadata": {"sprint": "bj-4", "round": 1}}
+    expected = ("\U000f01a6", "#E551BA")
+    member = replace(RUNNING.agents[0], name=reviewer_name, agent_type="sanity", harness=harness, model=model)
+    assert icon_for(member) == expected
+    display = f"{expected[0]} {reviewer_name}"
+    finding = {"id": "f1", "severity": "important", "category": "correctness", "refs": [],
+               "issue": f"A separate issue mentions {display}.", "required_correction": "Preserve reviewer identity.",
+               "reviewer": reviewer_name}
+    snapshot = replace(SNAPSHOT, agents=(member,))
+    monkeypatch.setattr(runs, "run_findings", lambda *_args: [finding])
+    rendered = []
+
+    def render_findings(_root, findings):
+        rendered.extend(findings)
+        return f"**Issue:** A separate issue mentions {display}.\n\n**Reviewer:** {findings[0]['reviewer_display']}"
+
+    monkeypatch.setattr(findings_renderer, "render_findings", render_findings)
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(snapshot, ([], runs.qa_runs([qa]), [finding])), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "quality"
+            widget = app.query_one("#quality-findings")
+            pending = capture_updates(monkeypatch, widget)
+            app._show_findings("qa-1")
+            await pending[-1]
+            blocks = widget.query(MarkdownBlock)
+            issue = next(block for block in blocks if block._content.plain.startswith("Issue:"))
+            reviewer = next(block for block in blocks if block._content.plain.startswith("Reviewer:"))
+            assert display in issue._content.plain and display in reviewer._content.plain
+            assert not any(str(span.style) == expected[1] for span in issue._content.spans)
+            reviewer_start = len("Reviewer: ")
+            assert any(span.start == reviewer_start and span.end == len(reviewer._content.plain)
+                       and str(span.style) == expected[1] for span in reviewer._content.spans)
+            assert finding["reviewer"] == reviewer_name
+            assert rendered[0]["reviewer"] == reviewer_name
+            assert rendered[0]["reviewer_display"] == display
+
+    run_scenario(scenario())
+
+
+@pytest.mark.parametrize(("harness", "model", "expected"), [
+    ("claude-code", "unknown", ("\U000f0382", "#FF784D")),
+    ("codex-cli", "unknown", ("\U000f01e7", "#2DE057")),
+    ("claude-code", "HAIKU", ("\U000f0156", "#FF6533")),
+    ("codex-cli", "SOL", ("\U000f05a8", "#FFA60D")),
+])
+def test_run_dev_cell_uses_roster_model_and_fallback_icon(harness, model, expected) -> None:
+    dev = replace(RUNNING.agents[0], name="alice", agent_type="dev", harness=harness, model=model)
+    label = _agent_name("alice", (dev,))
+    assert label.plain == f"{expected[0]} alice"
+    assert icon_for(dev) == expected
+    assert str(label.style) == expected[1]
 
 
 def lines(app: ConsoleApp, selector: str) -> list[str]:

@@ -14,7 +14,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 6. Any other gate code: reuse a matching workflow class bead (append task id, head, command, evidence) and cite it in the refusal; none matches: report the signature to the task assigner and cite that message; never create a per-task bead.
 7. Commit as items land and push early; a push or `atm send` closes nothing.
 8. Never weaken a test, skip a criterion, or leave a placeholder; run `<test_command>` and `<lint_command>` (dev and dev-fix: also the bead's validation commands) to zero failures, including lint failures inherited from a lower layer.
-9. Before closing, the dev rebases onto the stack's current top (`assignment-gates.py stack-top`; any other exit is a code to refuse with, never a guess), re-runs the tests, force-pushes and opens the PR against that top (never draft; a quick-fix finding fixed on a branch that already has its PR keeps that PR), then runs `/sc-gh-stack-view`.
+9. Before closing, the dev rebases onto the stack's current top (`assignment-gates.py stack-top --root <phase-root> --pr-target <pr_target> --worktree <worktree>`; any other exit is a code to refuse with, never a guess), re-runs the tests, force-pushes and opens the PR against that top (never draft; a quick-fix finding fixed on a branch that already has its PR keeps that PR), then runs `/sc-gh-stack-view`.
 10. Close bead and task together with the close template, `bd close` first and the task only if it succeeded; the close carries the pushed head, the top rebased onto, the PR and the verbatim `/sc-gh-stack-view` output. The task close is the report; it returns to the task assigner.
 
 ### Dev (`dev-template`)
@@ -44,12 +44,12 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 ### Parallel quick fix (finder)
 
 26. A change other live branches need never goes in your layer: stop and tell the task assigner the change and the branches it breaks.
-27. The lead picks the quick fix's `pr_target` (a lower bound); the finder cuts `fix/<thing>` from the stack's current top (`stack-top --pr-target <pr_target>`) in its own worktree: only the change, compiler-forced implementors/call sites, one test for a bug; test passes; push; PR against that top as a new layer, never into a lower layer or the integration branch; report the PR by plain `atm send`.
+27. The lead picks the quick fix's `pr_target` (a lower bound); the finder cuts `fix/<thing>` from the stack's current top (`stack-top --root <phase-root> --pr-target <pr_target> --worktree <worktree>`) in its own worktree: only the change, compiler-forced implementors/call sites, one test for a bug; test passes; push; PR against that top as a new layer, never into a lower layer or the integration branch; report the PR by plain `atm send`.
 28. Sprint task stays open; continue on the rebased layer.
 
 ### Scripts
 
-29. `assignment-gates.py dev` prints one code; exit 0 `READY`, 2 `GATE_CANNOT_RUN`, 5 otherwise. `stack-top --pr-target <b>` prints, exit 0, the head of the last open PR of the one open stack based on or containing `<b>` (its base when none is open); with no stack, the top of the one chain of open unlinked PRs based on `<b>`, else `<b>`; several stacks or a branching chain: `STACK_AMBIGUOUS` (5); `GATE_CANNOT_RUN` (2).
+29. `assignment-gates.py dev` prints one code; exit 0 `READY`, 2 `GATE_CANNOT_RUN`, 5 otherwise. `stack-top --root <phase-root> --pr-target <b> --worktree <worktree>` prints the last layer's branch from `<phase-root>.stack` on exit 0. With no layers it resolves `origin/<b>` and prints `<b>`; unreadable or invalid ledger data or an unresolvable fallback returns `GATE_CANNOT_RUN` (2).
 30. Checks in order: `validate-plan` (`PLAN_INVALID`), in `bd ready` (`NOT_READY`), open and unassigned or self (`UNCLAIMABLE`), `pr_target` (the sprint container's for a poured dev bead) is `--pr-target` or its ancestor (`PR_TARGET_MISMATCH`), `origin/<pr_target>` ancestor of HEAD (`WRONG_BASE`).
 31. Difficulty models (substring): hard fable/opus/astra; normal terra/opus/sonnet; fast luna/haiku.
 

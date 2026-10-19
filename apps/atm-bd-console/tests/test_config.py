@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from atm_bd_console.command import Output
 from atm_bd_console.config import load_config, repo_root
-from atm_bd_console.result import ConfigInvalid, Err, IoFailed, Ok
+from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, IoFailed, Ok
 
 
 def _team_config(root) -> None:
     shutil.copytree(Path(__file__).parent / "fixtures/beads/repo", root, dirs_exist_ok=True)
     (root / ".atm.toml").write_text('[atm]\ndefault_team = "atm-dev"\n')
+    subprocess.run(("git", "init", "-q", str(root)), check=True)
+    subprocess.run(("git", "-C", str(root), "remote", "add", "origin", "https://github.com/example/repo.git"), check=True)
 
 
 def test_repo_root_resolves_the_current_directory(monkeypatch, tmp_path) -> None:
@@ -24,13 +28,17 @@ def test_repo_root_resolves_the_current_directory(monkeypatch, tmp_path) -> None
 def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:
     _team_config(tmp_path)
     default = load_config(tmp_path, "bh")
-    assert default == Ok(default.value.__class__("bh", "fenix", "atm-dev", "graphql", 60, False, False, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh")))
+    assert default == Ok(default.value.__class__("bh", "fenix", "atm-dev", "graphql", 60, False, False,
+                                                  str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh"),
+                                                  code_root=str(tmp_path), github_repo="example/repo"))
     assert default.value.notification_sender == "atm-bd@tool"
     path = tmp_path / ".atm-bd"
     path.mkdir(exist_ok=True)
     (path / "console.toml").write_text("[console]\ngithub = 'rest'\ninterval = 90\n")
     loaded = load_config(tmp_path, "bh", github="off", interval_s=120, dry_run=True, no_fetch=True)
-    assert loaded == Ok(loaded.value.__class__("bh", "fenix", "atm-dev", "off", 120, True, True, str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh")))
+    assert loaded == Ok(loaded.value.__class__("bh", "fenix", "atm-dev", "off", 120, True, True,
+                                               str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh"),
+                                               code_root=str(tmp_path), github_repo="example/repo"))
 
 
 def test_notification_sender_only_uses_repo_yaml_not_environment_or_console_toml(tmp_path, monkeypatch) -> None:
@@ -77,6 +85,85 @@ def test_github_budget_configuration_and_validation(tmp_path) -> None:
     for values in ({"github_poll_interval_s": 0}, {"github_poll_interval_s": True},
                    {"github_quota_threshold": -1}, {"github_quota_threshold": 101}):
         assert isinstance(load_config(tmp_path, "bh", **values), Err)
+
+
+def test_code_checkout_override_uses_phase_path_and_explicit_github_identity(tmp_path, monkeypatch) -> None:
+    beads_root, code_root = tmp_path / "atm-core", tmp_path / "atm-bd-orchestration"
+    beads_root.mkdir()
+    code_root.mkdir()
+    _team_config(beads_root)
+    phase = beads_root / ".atm-bd" / "phase-bh.toml"
+    phase.write_text(phase.read_text().replace("[templates]", 'code_checkout = "../atm-bd-orchestration"\n\n[templates]'))
+    calls = []
+
+    def fake_run(argv, _fix, *, cwd, **_kwargs):
+        calls.append((tuple(argv), Path(cwd)))
+        if argv == ("git", "rev-parse", "--show-toplevel"):
+            return Ok(Output(0, str(code_root.resolve())))
+        if argv == ("git", "remote", "get-url", "origin"):
+            return Ok(Output(0, "git@github.com:sample/code.git\n"))
+        raise AssertionError(argv)
+
+    monkeypatch.setattr("atm_bd_console.config.command.run", fake_run)
+    loaded = load_config(beads_root, "bh")
+    assert isinstance(loaded, Ok)
+    assert loaded.value.repo_root == str(beads_root)
+    assert loaded.value.state_dir == str(beads_root / ".atm-bd/atm-bd/atm-phase-bh")
+    assert loaded.value.code_root == str(code_root.resolve())
+    assert loaded.value.github_repo == "sample/code"
+    assert calls == [
+        (("git", "rev-parse", "--show-toplevel"), code_root.resolve()),
+        (("git", "remote", "get-url", "origin"), code_root.resolve()),
+    ]
+
+
+def test_invalid_code_checkout_is_a_named_configuration_error(tmp_path, monkeypatch) -> None:
+    _team_config(tmp_path)
+    phase = tmp_path / ".atm-bd" / "phase-bh.toml"
+    phase.write_text(phase.read_text().replace("[templates]", 'code_checkout = "../not-a-repo"\n\n[templates]'))
+
+    def fake_run(argv, _fix, **_kwargs):
+        assert argv == ("git", "rev-parse", "--show-toplevel")
+        return Err(CommandFailed("command_failed", argv, 128, "not a git repository", "fix it"))
+
+    monkeypatch.setattr("atm_bd_console.config.command.run", fake_run)
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert result.error.key == "code_checkout"
+    assert "primary checkout" in result.error.fix
+
+
+def test_non_github_origin_is_a_named_configuration_error(tmp_path, monkeypatch) -> None:
+    _team_config(tmp_path)
+    calls = []
+
+    def fake_run(argv, _fix, *, cwd, **_kwargs):
+        calls.append(argv)
+        if argv == ("git", "rev-parse", "--show-toplevel"):
+            return Ok(Output(0, str(Path(cwd).resolve())))
+        return Ok(Output(0, "https://gitlab.example/group/project.git\n"))
+
+    monkeypatch.setattr("atm_bd_console.config.command.run", fake_run)
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert result.error.key == "code_checkout.origin"
+    assert "GitHub repository URL" in result.error.fix
+    assert calls == [("git", "rev-parse", "--show-toplevel"), ("git", "remote", "get-url", "origin")]
+
+
+def test_missing_origin_is_a_named_configuration_error(tmp_path, monkeypatch) -> None:
+    _team_config(tmp_path)
+
+    def fake_run(argv, _fix, *, cwd, **_kwargs):
+        if argv == ("git", "rev-parse", "--show-toplevel"):
+            return Ok(Output(0, str(Path(cwd).resolve())))
+        return Err(CommandFailed("command_failed", argv, 2, "no such remote: origin", "set origin"))
+
+    monkeypatch.setattr("atm_bd_console.config.command.run", fake_run)
+    result = load_config(tmp_path, "bh")
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
+    assert result.error.key == "code_checkout.origin"
+    assert "no such remote: origin" in result.error.fix
 
 
 def test_invalid_github_and_short_interval_name_key_value_and_fix(tmp_path) -> None:

@@ -27,6 +27,8 @@ from contract_samples import (
 )
 
 from atm_bd_console import log, runner
+from atm_bd_console.beads_source import closed_phase_rows, open_rows
+from atm_bd_console.command import Output
 from atm_bd_console.enums import QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
@@ -118,7 +120,8 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((BEAD,)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
+    monkeypatch.setattr(runner.beads_source, "closed_phase_rows", lambda *_args, **_kwargs: Ok([]))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(PHASE))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -140,6 +143,46 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     monkeypatch.setattr(runner.github_source, "open_prs", github)
     return Store(), calls, events, inputs
+
+
+def test_tick_reports_open_read_failure_without_collecting_runs(monkeypatch, github_runtime):
+    store, _, _, _ = github_runtime
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.ledger_source, "collect", lambda *_: pytest.fail("must not collect incomplete rows"))
+    result = runner.step(CONFIG, RUNNING_STATE, False, store)
+    assert result.run_data is None
+    assert result.runs_error == str(TIMEOUT)
+
+
+@pytest.mark.parametrize("open_failed", [False, True])
+def test_tick_owns_exactly_one_open_and_only_reads_closed_after_success(monkeypatch, github_runtime, open_failed):
+    store, _, _, _ = github_runtime
+    calls = []
+
+    def run(argv, _fix, **_kwargs):
+        calls.append(argv)
+        if open_failed:
+            return Err(TIMEOUT)
+        return Ok(Output(0, "[]"))
+
+    monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
+    monkeypatch.setattr(runner.beads_source, "closed_phase_rows", closed_phase_rows)
+    monkeypatch.setattr(runner.beads_source.command, "run", run)
+
+    def collect(*_args):
+        assert not open_failed, "must not collect incomplete rows"
+        return [], [], []
+
+    monkeypatch.setattr(runner.ledger_source, "collect", collect)
+    result = runner.step(CONFIG, RUNNING_STATE, False, store)
+    assert result.runs_error == (str(TIMEOUT) if open_failed else None)
+    expected = [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"]]
+    if not open_failed:
+        expected.append(["bd", "list", "-l", f"phase-{CONFIG.phase}", "--status", "closed", "-n", "0", "--json"])
+    assert calls == expected
+    if open_failed:
+        assert result.run_data is None
+    assert all("--all" not in argv for argv in calls)
 
 
 def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> None:
@@ -221,13 +264,14 @@ def test_runner_uses_closed_qa_reason_after_task_leaves_active_queue(monkeypatch
             return Ok(())
         return Ok((sprint,))
 
-    def open_beads(_label):
-        return Ok((active_qa,) if active[0] else ())
+    def open_rows(_label):
+        values = (active_qa,) if active[0] else ()
+        return Ok(runner.beads_source.BeadRows(values, ()))
 
     monkeypatch.setattr(runner.atm_bd, "phase_file", phase_file)
     monkeypatch.setattr(runner.atm_bd, "repo_config", repo_config)
     monkeypatch.setattr(runner.beads_source, "show", show)
-    monkeypatch.setattr(runner.beads_source, "open_beads", open_beads)
+    monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     def members(*_args):
         return Ok((Member("quality-mgr", "active", NOW, agent_type="qa"),))
@@ -288,7 +332,7 @@ def test_stopped_tick_surfaces_malformed_action_history_from_real_store(monkeypa
 
 def test_closed_phase_forced_github_refresh_uses_sprint_groups(monkeypatch, tmp_path):
     closed = replace(BEAD, id=PHASE_FILE.root_id, status=SprintState.CLOSED)
-    config = replace(CONFIG, repo_root=str(tmp_path), github="rest", dry_run=True)
+    config = replace(CONFIG, repo_root=str(tmp_path), code_root=str(tmp_path), github="rest", dry_run=True)
     calls = []
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
@@ -354,7 +398,8 @@ def test_idle_stop_skips_every_expensive_source_unless_forced(monkeypatch) -> No
         raise AssertionError("idle-stop must not poll this boundary")
 
     for source, name in (
-        (runner.beads_source, "open_beads"), (runner.beads_source, "ready"),
+        (runner.beads_source, "open_rows"), (runner.beads_source, "ready"),
+        (runner.beads_source, "closed_phase_rows"),
         (runner.atm_source, "members"), (runner.atm_source, "tasks"),
         (runner.git_source, "worktrees"), (runner.git_source, "fetch"),
         (runner.git_source, "remote_refs"), (runner.git_source, "merge"),
@@ -374,7 +419,7 @@ def test_forced_refresh_resumes_when_work_became_active(monkeypatch, tmp_path) -
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(active))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -412,7 +457,7 @@ def test_forced_github_read_leaves_an_idle_cron_stopped(monkeypatch, tmp_path) -
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((root,)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, steps=())))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
@@ -528,7 +573,7 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
@@ -538,7 +583,7 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
 
 def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
-    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True)
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True, assignee=None)
     phase = replace(PHASE, closed=False, step_errors=(), steps=(candidate,))
     state = replace(RUNNING_STATE, last_cycle=NOW)
     assigned = Task(candidate.bead_id, "quality-mgr", "active", 0, ACTION.at, ACTION.at, "running")
@@ -572,6 +617,92 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     runner.step(replace(CONFIG, no_fetch=False), state, False, store)
 
     assert due_calls == [(state, phase, REPO_CONFIG.bead_prefix, CONFIG.github, NOW, (assigned,), Due(False, (), False))]
+
+
+def test_ready_is_read_before_tasks_each_active_tick(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    reads = []
+
+    def ready(*_args):
+        reads.append("ready")
+        return Ok(())
+
+    def tasks(*_args):
+        reads.append("tasks")
+        return Ok(())
+
+    monkeypatch.setattr(runner.beads_source, "ready", ready)
+    monkeypatch.setattr(runner.atm_source, "tasks", tasks)
+    runner.step(CONFIG, STATE, True, store)
+    assert reads == ["ready", "tasks"]
+
+
+@pytest.mark.parametrize("interleaving", ["hook_before_read", "hook_after_read", "closed_only", "in_progress", "not_ready"])
+def test_controlled_hook_dispatch_interleavings(github_runtime, monkeypatch, interleaving) -> None:
+    # A stateful in-memory ATM models #1619: assigning an existing ID updates
+    # that one row and notifies it. No thread scheduling or sleeps are involved.
+    from test_dispatch import REPO
+    from test_dispatch import phase as dispatch_phase
+    from test_dispatch import step as dispatch_step
+
+    from atm_bd_console.dispatch import dispatch
+    from atm_bd_console.enums import MergeState
+    from atm_bd_console.types import DispatchSpec, Merge, Worktree
+
+    store, _, events, _ = github_runtime
+    candidate = dispatch_step(kind="sanity", bead_id="atm-bh-6.group-sanity")
+    if interleaving == "in_progress":
+        candidate = replace(candidate, status=SprintState.IN_PROGRESS, assignee="dev-sanity")
+    phase = dispatch_phase(candidate)
+    original = Task(candidate.bead_id, "dev-sanity", "closed", 0, ACTION.at, ACTION.at, "old round")
+    tasks = {candidate.bead_id: original}
+    operations = []
+
+    def assign(source):
+        existing = tasks.get(candidate.bead_id)
+        operation = "update+notify" if existing and existing.state != "closed" else "assign+notify"
+        operations.append((source, operation))
+        tasks[candidate.bead_id] = replace(original, state="assigned")
+
+    def ready(*_args):
+        if interleaving == "hook_before_read":
+            assign("hook")
+        return Ok((replace(BEAD, id=candidate.bead_id),) if candidate.status == SprintState.OPEN and interleaving != "not_ready" else ())
+
+    def read_tasks(*_args):
+        snapshot = tuple(tasks.values())
+        if interleaving == "hook_after_read":
+            assign("hook")
+        return Ok(snapshot)
+
+    def tick(value, state, now, _spec):
+        outcome = dispatch(value.phase.value, value.tasks.value,
+                           (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
+                           (RemoteRef("sprint/bh-6", "abc123"),),
+                           (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), now),),
+                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})))
+        return SNAPSHOT, outcome.actions, state
+
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda _file, _root, _opened, ready, _shown:
+                        Ok(replace(phase, steps=(replace(candidate, ready=any(bead.id == candidate.bead_id for bead in ready)),))))
+    monkeypatch.setattr(runner.beads_source, "ready", ready)
+    monkeypatch.setattr(runner.atm_source, "tasks", read_tasks)
+    monkeypatch.setattr(runner.model, "tick", tick)
+    monkeypatch.setattr(runner.atm_source, "assign", lambda *_: (assign("dispatch"), Ok(None))[1])
+    runner.step(replace(CONFIG, dry_run=False, github="off"), RUNNING_STATE, False, store)
+
+    expected = {
+        "hook_before_read": [("hook", "assign+notify")],
+        "hook_after_read": [("hook", "assign+notify"), ("dispatch", "update+notify")],
+        "closed_only": [("dispatch", "assign+notify")],
+        "in_progress": [],
+        "not_ready": [],
+    }
+    assert operations == expected[interleaving]
+    assert len(tasks) == 1
+    assert sum(event == "action" and detail.get("effect") == "assign" for event, detail in events) == sum(
+        source == "dispatch" for source, _ in operations
+    )
 
 
 def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> None:
@@ -734,6 +865,59 @@ def test_fetch_replans_cycle_merges_from_refreshed_remote_refs(github_runtime, m
     assert due_states == [RUNNING_STATE.remotes, (fresh,)]
     assert merges == [("new-branch", "base")]
     assert inputs[0].remotes == Ok((fresh,))
+
+
+def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code", no_fetch=False)
+    calls = []
+    bead_roots = []
+
+    monkeypatch.setattr(runner.beads_source, "closed_phase_rows",
+                        lambda phase, *, cwd: bead_roots.append((phase, cwd)) or Ok([]))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda root: calls.append(("worktrees", root)) or Ok(()))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda root: calls.append(("fetch", root)) or Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs", lambda root: calls.append(("remote_refs", root)) or Ok((REMOTE_REF,)))
+    monkeypatch.setattr(runner.git_source, "merge",
+                        lambda root, branch, target: calls.append(("merge", root, branch, target)) or Ok(None))
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("feature/x", "main"),), False))
+
+    runner.step(config, RUNNING_STATE, False, store)
+
+    assert calls == [
+        ("worktrees", "/code-checkout"),
+        ("fetch", "/code-checkout"),
+        ("remote_refs", "/code-checkout"),
+        ("merge", "/code-checkout", "feature/x", "main"),
+    ]
+    assert bead_roots == [("bh", "/repo")]
+
+
+def test_refresh_github_uses_configured_code_checkout_and_repo_slug(monkeypatch) -> None:
+    from atm_bd_console import github_source
+
+    captured = {}
+    budget_instance = object()
+
+    def budget(*args):
+        captured["budget"] = args
+        return budget_instance
+
+    def open_prs(*args):
+        captured["open_prs"] = args
+        return Ok(()), GhStatus("graphql", True, None, NOW, False)
+
+    monkeypatch.setattr(github_source, "Budget", budget)
+    monkeypatch.setattr(github_source, "open_prs", open_prs)
+    config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code")
+
+    result, status = runner._refresh_github(config, NOW, GhStatus("graphql", None, None, None, False), (("branch",),))
+
+    assert isinstance(result, Ok) and status.ok
+    assert captured["budget"] == ("rest", "/code-checkout", config.github_quota_threshold,
+                                  config.github_poll_interval_s, NOW, GhStatus("graphql", None, None, None, False),
+                                  "sample/code")
+    assert captured["open_prs"] == ("rest", "/code-checkout", (("branch",),), budget_instance, "sample/code")
 
 
 def test_failed_action_is_returned_for_snapshot_errors(monkeypatch) -> None:
@@ -1075,7 +1259,7 @@ def test_step_reads_members_and_tasks_for_config_team_never_the_lead(fake_bin, m
     monkeypatch.setattr(runner.atm_bd, "phase_file", lambda *_: Ok(PHASE_FILE))
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: Ok(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok(()))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Ok(()))
     fake_bin.make("atm", 'printf "{}"\n')

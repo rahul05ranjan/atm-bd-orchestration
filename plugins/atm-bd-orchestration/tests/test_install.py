@@ -6,6 +6,7 @@ The install tests need `sc-compose` on PATH; they are skipped (and say so) witho
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -26,7 +27,7 @@ PKG = Path(__file__).resolve().parents[1]
 SC_COMPOSE = shutil.which("sc-compose") is not None
 REPO_STRINGS = ("sc-observability", "sc-obs", "obs-", "randlee/sc-", "/Users/randlee", "atm-core", "atm-dev")
 SPEC_VARIABLES = [
-    "bead_prefix", "dev_sanity_member", "qa_member", "worktree_base", "test_command",
+    "bead_prefix", "dev_sanity_member", "qa_member", "team_lead_member", "worktree_base", "test_command",
     "lint_command", "integration_branch_pattern", "plans_dir", "requirements_globs", "adr_globs",
     "policy_path", "reviewers_round1",
 ]
@@ -102,16 +103,9 @@ def test_generated_blocks_are_current():
     assert gen_manifest.main(["--check"]) == 0
 
 
-def test_bead_queues_install_command_is_rendered_from_installer_constant():
+def test_bead_queues_delegates_to_the_atm_bd_subcommand():
     source = (PKG / "skills/atm-bd-orchestration/scripts/bead-queues").read_text()
-    values = {name: f"test-{name}" for name in install.RENDER_VARIABLES}
-    values["console_install"] = install.CONSOLE_INSTALL
-
-    rendered = install.render_text(source, values)
-
-    assert "{{ console_install }}" not in rendered
-    assert rendered.count(install.CONSOLE_INSTALL) == 1
-    assert "CONSOLE_INSTALL = \"uv tool install " in rendered
+    assert source.splitlines() == ["#!/bin/sh", 'exec atm-bd queues "$@"']
 
 
 def test_manifest_lists_every_skill_and_agent_file():
@@ -147,10 +141,10 @@ def test_workflow_issue_bead_declares_parent():
     assert "  - parent\n" in text and "{{ parent | tojson }}" in text
 
 
-def test_config_template_declares_exactly_the_spec_variables_without_defaults():
+def test_config_template_declares_exactly_the_spec_variables_and_sanity_default():
     assert install.config_variables(PKG) == SPEC_VARIABLES
-    front = (PKG / install.CONFIG_TEMPLATE).read_text().split("---\n")[1]
-    assert "default" not in front
+    front = yaml.safe_load((PKG / install.CONFIG_TEMPLATE).read_text().split("---\n")[1])
+    assert front["defaults"] == {"max_sanity_rounds": 5}
     assert set(install.ROLE_KEYS) | install.LIST_VARIABLES <= set(SPEC_VARIABLES)
 
 
@@ -407,6 +401,94 @@ def test_set_wins_and_lists_parse(tmp_path):
     assert vals["dev_sanity_member"] == "my-sanity" and "qa_member" not in vals
 
 
+def test_max_sanity_rounds_installer_defaults_and_registry_override(tmp_path):
+    repo = make_repo(tmp_path)
+    assert install.resolve_config(repo, {})["max_sanity_rounds"] == 5
+    registry = repo / install.CONSUMER_REGISTRY
+    registry.write_text(registry.read_text() + "max_sanity_rounds: 2\n")
+    assert install.resolve_config(repo, {})["max_sanity_rounds"] == 2
+    assert install.resolve_config(repo, {"max_sanity_rounds": "3"})["max_sanity_rounds"] == 3
+
+
+@pytest.mark.parametrize("value, expected", [(1, 1), (7, 7), ("2", 2), ("005", 5)])
+def test_max_sanity_rounds_installer_accepts_positive_integer_overrides(tmp_path, value, expected):
+    resolved = install.resolve_config(make_repo(tmp_path), {"max_sanity_rounds": value})
+    assert resolved["max_sanity_rounds"] == expected
+    assert type(resolved["max_sanity_rounds"]) is int
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, None, 1.5, "", "0", "-1", "2.5", "two", [], {}])
+@pytest.mark.parametrize("source", ["registry", "override"])
+def test_max_sanity_rounds_installer_rejects_invalid_values(tmp_path, value, source):
+    repo = make_repo(tmp_path)
+    overrides = {"max_sanity_rounds": value}
+    if source == "registry":
+        registry = repo / install.CONSUMER_REGISTRY
+        registry.write_text(registry.read_text() + yaml.safe_dump(overrides))
+        overrides = {}
+    with pytest.raises(install.InstallError, match="max_sanity_rounds must be a positive integer"):
+        install.resolve_config(repo, overrides)
+
+
+@pytest.fixture
+def runtime_repo_config():
+    path = PKG / "skills/atm-beads/scripts/repo_config.py"
+    spec = importlib.util.spec_from_file_location("installer_test_repo_config", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("values, expected", [({}, 5), ({"max_sanity_rounds": 2}, 2)])
+def test_max_sanity_rounds_runtime_exposes_default_and_override(tmp_path, runtime_repo_config, values, expected):
+    path = tmp_path / runtime_repo_config.RELATIVE_PATH
+    path.parent.mkdir(parents=True)
+    original = yaml.safe_dump({"bead_prefix": "consumer", **values})
+    path.write_text(original)
+    config = runtime_repo_config.load(tmp_path)
+    assert config["max_sanity_rounds"] == expected
+    assert config["bead_prefix"] == "consumer"
+    assert path.read_text() == original
+
+
+@needs_sc_compose
+@pytest.mark.parametrize("overrides, expected", [({}, 5), ({"max_sanity_rounds": "2"}, 2)])
+def test_max_sanity_rounds_rendered_config_loads_as_integer(tmp_path, runtime_repo_config, overrides, expected):
+    repo = make_repo(tmp_path)
+    values = install.resolve_config(repo, {"qa_member": "quality-mgr", **overrides})
+    path = repo / runtime_repo_config.RELATIVE_PATH
+    path.parent.mkdir(parents=True)
+    path.write_bytes(install.render_config(values))
+    config = runtime_repo_config.load(repo)
+    assert config["max_sanity_rounds"] == expected
+    assert type(config["max_sanity_rounds"]) is int
+
+
+@needs_sc_compose
+@pytest.mark.parametrize("registry_value, expected", [(None, 5), (2, 2)])
+def test_install_carries_registry_max_sanity_rounds_into_consumer_config(tmp_path, capsys, registry_value, expected):
+    repo = make_repo(tmp_path)
+    if registry_value is not None:
+        registry = repo / install.CONSUMER_REGISTRY
+        registry.write_text(registry.read_text() + f"max_sanity_rounds: {registry_value}\n")
+    rc, err = run(repo, *QA, capsys=capsys)
+    assert rc == 0, err
+    installed = yaml.safe_load((repo / install.CONFIG_OUT).read_text())
+    assert installed["max_sanity_rounds"] == expected
+    assert type(installed["max_sanity_rounds"]) is int
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, None, 1.5, "2", "", [], {}])
+def test_max_sanity_rounds_runtime_rejects_invalid_values(tmp_path, runtime_repo_config, value):
+    path = tmp_path / runtime_repo_config.RELATIVE_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump({"max_sanity_rounds": value}))
+    with pytest.raises(runtime_repo_config.ConfigError, match="max_sanity_rounds must be a positive integer") as caught:
+        runtime_repo_config.load(tmp_path)
+    assert str(path) in str(caught.value)
+
+
 @pytest.mark.parametrize("removed", ["reviewers_fix_round", "reviewers_scope_locked"])
 def test_removed_reviewer_lists_are_ignored_in_registry_and_rejected_by_set(tmp_path, removed):
     """0.5.0 dropped reviewers_fix_round and reviewers_scope_locked: a leftover registry key is not read; --set names it unknown."""
@@ -472,8 +554,9 @@ def test_fresh_install(tmp_path, capsys):
         assert not install.PLACEHOLDER_RE.search((dest / rel).read_text(errors="ignore")), rel
     # the config file: every declared variable, from registry.yaml and --set
     config = yaml.safe_load((repo / install.CONFIG_OUT).read_text())
-    assert list(config) == SPEC_VARIABLES
-    assert config["qa_member"] == "quality-mgr" and "lead" not in config
+    assert list(config) == [*SPEC_VARIABLES, "max_sanity_rounds"]
+    assert config["max_sanity_rounds"] == 5
+    assert config["qa_member"] == "quality-mgr" and config["team_lead_member"] == "my-lead" and "lead" not in config
     assert config["integration_branch_pattern"] == "integrate/phase-{phase}"
     assert config["requirements_globs"] == ["docs/requirements.md", "docs/**/requirements.md"]
     assert config["reviewers_round1"] == ["req-qa", "arch-qa"]
@@ -504,6 +587,15 @@ def test_fresh_install(tmp_path, capsys):
 
 
 @needs_sc_compose
+def test_install_places_sanity_stack_agent_and_linker(tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    rc, err = run(repo, *QA, capsys=capsys)
+    assert rc == 0, err
+    assert (repo / ".claude/agents/sanity-stack.md").is_file()
+    assert (repo / ".claude/skills/atm-bd-orchestration/scripts/sanity-stack-link").is_file()
+
+
+@needs_sc_compose
 def test_rerun_is_idempotent(tmp_path, capsys):
     repo = make_repo(tmp_path)
     assert run(repo, *QA)[0] == 0
@@ -531,6 +623,15 @@ def test_missing_role_variable_names_the_roles_key(tmp_path, capsys):
     repo = make_repo(tmp_path)
     rc, err = run(repo, capsys=capsys)   # no roles.quality-mgr and no --set qa_member
     assert rc == 1 and "qa_member in .claude/agents/registry.yaml roles.quality-mgr" in err
+
+
+@needs_sc_compose
+def test_missing_roles_lead_names_team_lead_member(tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    registry = repo / ".claude/agents/registry.yaml"
+    registry.write_text(registry.read_text().replace("  lead: my-lead\n", ""))
+    rc, err = run(repo, *QA, capsys=capsys)
+    assert rc == 1 and "team_lead_member in .claude/agents/registry.yaml roles.lead" in err
 
 
 @needs_sc_compose

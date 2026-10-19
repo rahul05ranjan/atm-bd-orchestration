@@ -15,7 +15,6 @@ render:
   - agents/sc-sanity-llm.md
   - skills/atm-bd-orchestration/examples/arch-qa-assignment-vars.json
   - skills/atm-bd-orchestration/examples/dev-complete-vars.json
-  - skills/atm-bd-orchestration/examples/dev-fix-vars.json
   - skills/atm-bd-orchestration/examples/dev-sanity-assignment-context-vars.json
   - skills/atm-bd-orchestration/examples/dev-sanity-assignment-vars.json
   - skills/atm-bd-orchestration/examples/dev-sanity-complete-vars.json
@@ -38,11 +37,9 @@ render:
   - skills/atm-bd-orchestration/examples/review-template-vars.json
   - skills/atm-bd-orchestration/examples/ruthless-boundary-qa-assignment-vars.json
   - skills/atm-bd-orchestration/examples/sanity-run-record-vars.json
-  - skills/atm-bd-orchestration/examples/sanity-run-table-vars.json
   - skills/atm-bd-orchestration/examples/schema-reviewer-assignment-vars.json
   - skills/atm-bd-orchestration/examples/task-refused-vars.json
   - skills/atm-bd-orchestration/examples/workflow-issue-bead-vars.json
-  - skills/atm-bd-orchestration/scripts/bead-queues
   - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
   - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
   - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py

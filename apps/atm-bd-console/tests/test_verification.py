@@ -21,7 +21,7 @@ pytest_plugins = ("test_git_source",)
 def runtime(repo, tmp_path, monkeypatch):
     worktree = tmp_path / "clean-worktree"
     git(repo, "worktree", "add", "-q", str(worktree), "clean")
-    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, anchor=False, quick_fix=False,
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, ready=True, assignee=None, anchor=False, quick_fix=False,
                         branch="clean", target="main", worktree=str(worktree))
     phase = replace(PHASE, closed=False, steps=(candidate,), step_errors=())
     events, assigned = [], []
@@ -39,13 +39,13 @@ def runtime(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.atm_bd, "dispatch_spec", lambda context, templates: Ok(DispatchSpec(templates["qa"], {"commit": context.commit})))
     monkeypatch.setattr(runner.beads_source, "show", lambda *_: Ok((replace(BEAD, status=SprintState.OPEN),)))
-    monkeypatch.setattr(runner.beads_source, "open_beads", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Ok(runner.beads_source.BeadRows((), ())))
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "send", lambda *_: Ok(None))
     monkeypatch.setattr(runner.atm_source, "assign", lambda *args: assigned.append(args) or Ok(None))
-    config = replace(CONFIG, repo_root=str(repo), github="off", dry_run=False, no_fetch=False)
+    config = replace(CONFIG, repo_root=str(repo), code_root=str(repo), github="off", dry_run=False, no_fetch=False)
     state = replace(INITIAL_STATE, remotes=git_source.remote_refs(repo).value, last_cycle=datetime.now(UTC))
     with acquire_lock(repo, PHASE_FILE.root_id).value as store:
         clean = Merge("clean", "main", MergeState.CLEAN, (), (), datetime.now(UTC))

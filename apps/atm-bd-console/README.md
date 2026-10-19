@@ -39,6 +39,31 @@ From the repository root, run `atm-bd skill` to install the bundled skills
 without fetching a release. It reports the bundled source ref, commit SHA,
 and app version. Use `atm-bd skill --help` for release and destination options.
 
+## Skill install integrity contract
+
+`atm_bd_console.skill_integrity.write_install_record(dest, version, commit,
+manifest, installed, *, source)` writes `dest / RECORD_NAME`, where
+`RECORD_NAME` is `atm-bd-install.json`. The JSON record contains `version`,
+`commit`, `source` (`ref` and `manifest_aggregate`), and a sorted `files` list
+of `{path, sc_sha}` entries for the bytes actually installed. The `source`
+argument is the source ref string; rendered installer values mean installed
+file hashes can differ from the published manifest hashes.
+
+The installed `atm-hook-doctor.py` checks that record. Manual mode prints one
+`ok`, `modified`, `missing`, or `extra` line per checked path and a final
+`PASS`/`FAIL` line. Doctor-hook mode accepts a JSON object with `hook: doctor`
+on stdin and returns only `success`, `message`, and `findings`; an unreadable
+record produces the `install_record_unreadable` error finding. A malformed
+request produces `request_invalid` and exits 2. The record describes
+`atm-bd skill` installs only; a legacy `install.py` install has no record and
+fails closed as `install_record_missing`.
+
+If skill files were installed but the record could not be written, the CLI
+reports that partial result and gives the `atm-bd skill --overwrite` recovery
+command. Bare installs verify the packaged skill tree against the manifest
+shipped in the same wheel; this checks the packaged bytes, not release
+provenance or signatures.
+
 ## Console operational logs
 
 ## Launch settings
