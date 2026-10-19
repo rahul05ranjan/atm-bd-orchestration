@@ -139,7 +139,7 @@ jobs:
           test -n "$bin"
           install -m 0755 "$bin" "$HOME/.local/bin/bd"
 
-      # The real-bd pour tests (scripts/tests/test_bead_pour_mock.py) run bd in
+      # The real-bd pour tests (scripts/tests/test_bead_pour_real_bd.py) run bd in
       # proxied-server mode, whose backend is the dolt binary.
       - name: Install dolt 2.3.1
         shell: bash
