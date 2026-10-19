@@ -32,6 +32,16 @@ def test_assignment_details_uses_latest_assignment_and_prior_completions():
     assert hook.assignment_details(events, "task") == (latest, "latest", 2)
 
 
+@pytest.mark.parametrize(("events", "terminal"), [
+    ([], False),
+    ([{"to_state": "assigned"}], False),
+    ([{"to_state": "complete"}], True),
+    ([{"to_state": "complete"}, {"to_state": "assigned"}], False),
+])
+def test_is_terminal_reads_only_the_latest_event(events, terminal):
+    assert hook.is_terminal(events) is terminal
+
+
 def test_assignment_details_requires_an_assignment():
     with pytest.raises(hook.CloseError) as error:
         hook.assignment_details([{"event": "completed"}], "missing-task")
