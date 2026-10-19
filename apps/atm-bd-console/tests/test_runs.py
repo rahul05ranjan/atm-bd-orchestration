@@ -60,14 +60,55 @@ def test_ledger_uses_shared_primary_root_and_cached_skill_loader(monkeypatch, tm
     assert calls == [(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], str(tmp_path))]
 
 
-def test_runs_module_keeps_adapter_io_out_of_pure_transformers() -> None:
-    tree = ast.parse(Path(runs.__file__).read_text(encoding="utf-8"))
-    allowed = {"re", "dataclasses", "datetime", "typing", "enums", "model", "__future__"}
+def assert_pure_runs_imports(source: str) -> None:
+    tree = ast.parse(source)
+    stdlib = {"re", "dataclasses", "datetime", "typing", "__future__"}
+    local = {"enums", "model"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            assert all(alias.name.split(".")[0] in allowed for alias in node.names)
+            assert all(alias.name in stdlib for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            assert node.module and node.module.split(".")[0] in allowed
+            assert (node.level == 0 and node.module in stdlib) or (node.level == 1 and node.module in local)
+        elif isinstance(node, ast.Call):
+            assert not (isinstance(node.func, ast.Name) and node.func.id == "__import__")
+            assert not (isinstance(node.func, ast.Attribute) and node.func.attr in {"__import__", "import_module"})
+
+
+def test_runs_module_keeps_adapter_io_out_of_pure_transformers() -> None:
+    assert_pure_runs_imports(Path(runs.__file__).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("source", [
+    "import model",
+    "import enums as states",
+    "from model import qa_state_from_close",
+    "from enums import QaState",
+    "from .datetime import datetime",
+    "from ..enums import QaState",
+    "from .model.adapters import query",
+    "__import__('os')",
+    "importlib.import_module('os')",
+    "loader.import_module('os')",
+    "builtins.__import__('os')",
+    "import re, os",
+    "from importlib import import_module as load",
+])
+def test_runs_import_boundary_rejects_planted_bypasses(source: str) -> None:
+    with pytest.raises(AssertionError):
+        assert_pure_runs_imports(source)
+
+
+@pytest.mark.parametrize("source", [
+    "import re as regex, typing",
+    "from __future__ import annotations",
+    "from dataclasses import dataclass",
+    "from datetime import UTC, datetime",
+    "from typing import Any",
+    "from .enums import QaState",
+    "from .model import qa_state_from_close as select_state",
+])
+def test_runs_import_boundary_accepts_permitted_imports(source: str) -> None:
+    assert_pure_runs_imports(source)
 
 
 def test_sanity_merges_reviewers_newest_first_and_accepts_old_rows() -> None:
