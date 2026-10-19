@@ -232,16 +232,14 @@ class Linker:
             return {'result': 'stacked', 'top': layers[-1], 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
         base = layers[-1]['branch'] if layers else metadata['trunk']
         ancestor = self.command(['git', 'merge-base', '--is-ancestor', 'origin/' + base, self.values['commit']], check=False)
+        actual = self.command(['git', 'rev-parse', 'refs/remotes/origin/' + base]).stdout.strip()
+        if layers and actual != layers[-1]['head']:
+            raise StackError('fetched stack top differs from its recorded head')
         if ancestor.returncode == 1:
-            head = layers[-1]['head'] if layers else self.command(['git', 'rev-parse', 'refs/remotes/origin/' + base]).stdout.strip()
-            return {'result': 'rebase_required', 'top': {'branch': base, 'head': head},
+            return {'result': 'rebase_required', 'top': {'branch': base, 'head': actual},
                     'evidence': f"origin/{base} is not an ancestor of {self.values['commit']}"}
         if ancestor.returncode:
             raise StackError(f"git merge-base --is-ancestor [{ancestor.returncode}] {(ancestor.stderr or '').strip()}")
-        if layers:
-            actual = self.command(['git', 'rev-parse', 'refs/remotes/origin/' + base]).stdout.strip()
-            if actual != layers[-1]['head']:
-                raise StackError('fetched stack top differs from its recorded head')
         try:
             quota = self.command(['gh', 'api', 'rate_limit', '--jq', '.resources.graphql'], check=False, allow_transport_failure=True)
             available = quota.returncode == 0 and json.loads(quota.stdout)['remaining'] > 0

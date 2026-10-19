@@ -160,6 +160,20 @@ def test_divergence_never_links_or_writes(world):
     assert not any(call[:3] == ["gh", "stack", "link"] or "--metadata" in call for call in world.calls)
 
 
+def test_moved_ledger_top_fails_closed(world):
+    first = world.branch("first", "trunk", 1)
+    second = world.branch("second", "first", 2)
+    assert world.link(first)["result"] == "stacked"
+    before = copy.deepcopy(world.bead["metadata"])
+    world.git("checkout", "first")
+    world.git("commit", "--allow-empty", "-m", "moved")
+    world.git("push", "origin", "first")
+    result = world.link(second)
+    assert result["result"] == "stack_failed"
+    assert "recorded head" in result["evidence"]
+    assert world.bead["metadata"] == before
+
+
 @pytest.mark.parametrize("budget,unavailable", [("lean", False), ("full", True)])
 def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
     values = world.branch("first", "trunk", 1)
