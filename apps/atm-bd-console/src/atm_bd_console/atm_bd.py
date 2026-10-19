@@ -17,7 +17,8 @@ from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoCo
 # atm-bd conventions (atm-beads sprint_index_common.py): the only place they are named.
 PHASE_DIR = ".atm-bd"
 PHASE_KEYS = ("plan", "root", "integration_branch")
-TEMPLATE_PURPOSES = ("dev", "dev_fix", "fix", "sanity", "qa", "plan_review", "review")
+TEMPLATE_PURPOSES = ("dev", "fix", "sanity", "qa", "plan_review", "review")
+RETIRED_TEMPLATE_PURPOSES = frozenset({"dev_fix"})
 TEMPLATE_DIRECTORY = Path(".claude/skills/atm-bd-orchestration/templates")
 PLAN_KEYS = frozenset({"sprint", "depends_on"})
 PHASE_ID = re.compile(r"[a-z0-9]+")
@@ -138,7 +139,7 @@ def _plan(path: Path) -> Result[tuple[tuple[str, tuple[str, ...]], ...]]:
 
 def _phase_templates(root: Path, raw: object) -> Result[Mapping[str, str]]:
     templates = raw if isinstance(raw, dict) else {}
-    for purpose in sorted(templates.keys() - TEMPLATE_PURPOSES):
+    for purpose in sorted(templates.keys() - TEMPLATE_PURPOSES - RETIRED_TEMPLATE_PURPOSES):
         key = f"templates.{purpose}"
         return Err(ConfigInvalid("config_invalid", key, repr(templates[purpose]), f"remove unknown {key}; use {', '.join(TEMPLATE_PURPOSES)}"))
     for purpose in TEMPLATE_PURPOSES:

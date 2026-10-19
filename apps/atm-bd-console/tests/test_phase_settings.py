@@ -100,6 +100,29 @@ def test_missing_templates_table_names_first_required_purpose(phase_repo):
     assert result.error.key == "templates.dev"
 
 
+def test_retired_dev_fix_template_purpose_is_optional(phase_repo):
+    set_setting(phase_repo, "dev_fix", None, absent=True)
+
+    result = atm_bd.phase_file(str(phase_repo), "bh")
+
+    assert isinstance(result, Ok)
+    assert set(result.value.templates) == set(PHASE_TEMPLATES)
+    assert "dev_fix" not in result.value.templates
+
+
+def test_stale_dev_fix_template_purpose_is_ignored(phase_repo):
+    removed_template = ".claude/skills/atm-bd-orchestration/templates/dev-fix.xml.j2"
+    (phase_repo / removed_template).unlink()
+    assert not (phase_repo / removed_template).exists()
+    set_setting(phase_repo, "dev_fix", removed_template)
+
+    result = atm_bd.phase_file(str(phase_repo), "bh")
+
+    assert isinstance(result, Ok)
+    assert set(result.value.templates) == set(PHASE_TEMPLATES)
+    assert "dev_fix" not in result.value.templates
+
+
 @pytest.mark.parametrize("kind", ("sanity", "qa"))
 def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, monkeypatch, fake_bin, capsys, kind):
     template = f".claude/skills/atm-bd-orchestration/templates/custom-{kind}.xml.j2"

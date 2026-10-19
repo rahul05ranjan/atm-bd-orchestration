@@ -89,7 +89,7 @@ PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (ST
 PHASE_TEMPLATES = {
     purpose: f".claude/skills/atm-bd-orchestration/templates/{filename}.xml.j2"
     for purpose, filename in (
-        ("dev", "dev-template"), ("dev_fix", "dev-fix"), ("fix", "fix-assignment"),
+        ("dev", "dev-template"), ("fix", "fix-assignment"),
         ("sanity", "dev-sanity-template"), ("qa", "qa-template"),
         ("plan_review", "plan-review-template"), ("review", "review-template"),
     )
