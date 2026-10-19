@@ -157,19 +157,19 @@ def validate(values, role):
     if role == "dev" and values.get("outcome") == "not_reproducible":
         raise CloseError("VARS.INVALID", "not_reproducible is a fix outcome", "Use the fix role for an unreproducible finding.")
     contract = header(TEMPLATES / "task-close-vars.j2")
-    required = set(contract["required_variables"])
+    role_required = contract.get("required_variables_by_role")
+    if not isinstance(role_required, dict) or role not in role_required:
+        raise CloseError("VARS.INVALID", "task-close-vars must declare requirements by role", "Repair the role-specific required_variables mapping.")
+    required = set(role_required[role])
+    declared = set(contract["required_variables"])
     missing = required - values.keys()
-    if values.get("outcome") == "not_reproducible":
+    if role == "fix" and values.get("outcome") == "not_reproducible":
         missing -= {"branch", "commit", "pr_number"}
-    unknown = values.keys() - required - contract.get("defaults", {}).keys()
+    unknown = values.keys() - declared - contract.get("defaults", {}).keys()
     if missing:
         raise CloseError("VARS.MISSING", ", ".join(sorted(missing)), "Supply every shared template variable in the lead's vars file.")
     if unknown:
         raise CloseError("VARS.UNKNOWN", ", ".join(sorted(unknown)), "Remove variables no shared template declares.")
-    try:
-        sc_render.render(TEMPLATES / "task-close-vars.j2", values)
-    except sc_render.RenderError as error:
-        raise CloseError("VARS.INVALID", str(error), "Correct the shared vars file before retrying.") from error
     names = ["phase", "sprint", "primary_checkout", "worktree_path", "checked_bead", "dev_task_id", "sanity_task_id", "qa_task_id"]
     if values["outcome"] != "not_reproducible":
         names += ["branch", "commit", "pr_number"]
@@ -383,11 +383,7 @@ class Hook:
         if sanity != values["sanity_bead"]:
             raise CloseError("BEAD.NO_SANITY", "no matching group sanity bead", f"Ask {self.lead} to create or correct the group sanity bead.")
         if values["outcome"] == "not_reproducible":
-            previous = record.get("metadata") or {}
-            if previous.get("task_close_key") == self.key and previous.get("branch") and previous.get("commit"):
-                branch, commit = previous["branch"], previous["commit"]
-            else:
-                branch, commit = self.stack_top()
+            branch, commit = self.stack_top()
             assignment = {**values, "branch": branch, "commit": commit}
             self.render("dev-sanity-template.xml.j2", assignment)
             with tempfile.TemporaryDirectory(prefix="atm-task-close-") as directory:
@@ -432,11 +428,11 @@ class Hook:
             return
         self.render("dev-sanity-complete.md.j2")
         if verdict == "PASS":
-            if values["outcome"] != "not_reproducible" and (not isinstance(values["stacked"], dict) or values["stacked"].get("result") != "stacked"):
-                raise CloseError("SANITY.NOT_STACKED", "PASS has no stacked result", "Link the checked layer through sanity-stack before closing PASS.")
-            self.render("qa-template.xml.j2")
             checked = self.bead(values["checked_bead"])
             is_fix = (checked.get("metadata") or {}).get("role") == "fix" or "stage:fix" in checked.get("labels", [])
+            if not (is_fix and values["outcome"] == "not_reproducible") and (not isinstance(values["stacked"], dict) or values["stacked"].get("result") != "stacked"):
+                raise CloseError("SANITY.NOT_STACKED", "PASS has no stacked result", "Link the checked layer through sanity-stack before closing PASS.")
+            self.render("qa-template.xml.j2")
             if is_fix and values.get("carry_forward", "") != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "fix QA requires carry_forward", "Supply the checked fix bead as carry_forward.")
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:

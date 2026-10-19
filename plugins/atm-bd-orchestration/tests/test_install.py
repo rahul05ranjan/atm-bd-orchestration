@@ -472,6 +472,20 @@ def test_max_sanity_rounds_rendered_config_loads_as_integer(tmp_path, runtime_re
     assert type(config["max_sanity_rounds"]) is int
 
 
+@needs_sc_compose
+@pytest.mark.parametrize("registry_value, expected", [(None, 5), (2, 2)])
+def test_install_carries_registry_max_sanity_rounds_into_consumer_config(tmp_path, capsys, registry_value, expected):
+    repo = make_repo(tmp_path)
+    if registry_value is not None:
+        registry = repo / install.CONSUMER_REGISTRY
+        registry.write_text(registry.read_text() + f"max_sanity_rounds: {registry_value}\n")
+    rc, err = run(repo, *QA, capsys=capsys)
+    assert rc == 0, err
+    installed = yaml.safe_load((repo / install.CONFIG_OUT).read_text())
+    assert installed["max_sanity_rounds"] == expected
+    assert type(installed["max_sanity_rounds"]) is int
+
+
 @pytest.mark.parametrize("value", [0, -1, True, False, None, 1.5, "2", "", [], {}])
 def test_max_sanity_rounds_runtime_rejects_invalid_values(tmp_path, runtime_repo_config, value):
     path = tmp_path / runtime_repo_config.RELATIVE_PATH

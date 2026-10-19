@@ -201,12 +201,24 @@ def test_argument_errors_use_typed_json(argv):
     assert stdout.getvalue() == stderr.getvalue()
 
 
-def test_every_required_field_is_validated_before_commands(world):
+@pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
+def test_every_role_required_field_is_validated_before_commands(world, role):
     original = dict(world.values)
-    for field in hook.header(hook.TEMPLATES / "task-close-vars.j2")["required_variables"]:
+    required = hook.header(hook.TEMPLATES / "task-close-vars.j2")["required_variables_by_role"][role]
+    for field in required:
         world.values = dict(original)
         del world.values[field]
-        assert world.run()["err"]["code"] == "VARS.MISSING", field
+        assert world.run(role)["err"]["code"] == "VARS.MISSING", (role, field)
+    assert world.calls == []
+
+
+def test_not_reproducible_missing_pr_identity_is_fix_only(world):
+    for field in ("branch", "commit", "pr_number"):
+        world.values.pop(field, None)
+    assert world.run("fix", outcome="not_reproducible")["ok"]
+    world.calls.clear()
+    world.values.update(outcome="not_reproducible")
+    assert world.run("sanity")["err"]["code"] == "VARS.MISSING"
     assert world.calls == []
 
 
@@ -281,10 +293,11 @@ def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
     assert world.messages[-1]["recipient"] == "quality"
 
 
-def test_sanity_requires_stack_except_not_reproducible(world):
+def test_sanity_requires_stack_except_not_reproducible_fix(world):
     assert world.run("sanity", stacked=None)["err"]["code"] == "SANITY.NOT_STACKED"
     assert world.writes == []
-    assert "ok" in world.run("sanity", outcome="not_reproducible")
+    world.beads[world.values["checked_bead"]]["metadata"]["role"] = "fix"
+    assert "ok" in world.run("sanity", outcome="not_reproducible", carry_forward=world.values["checked_bead"])
 
 
 @pytest.mark.parametrize("cap", [2, 5])
@@ -418,31 +431,33 @@ def test_dev_replay_does_not_bypass_round_cap(world):
 
 
 @pytest.mark.parametrize("boundary", [1, 2, 3, 4])
-def test_not_reproducible_replay_pins_first_handoff_when_top_moves(world, boundary):
+def test_not_reproducible_retry_uses_current_stack_top(world, boundary):
     for field in ("branch", "commit", "pr_number"):
         del world.values[field]
     world.fail_after = boundary
     assert "err" in world.run("fix", outcome="not_reproducible")
-    world.overrides[("git", "rev-parse", "origin/integrate/phase-bj")] = (0, "c" * 40)
+    world.values["pr_target"] = "moved-top"
+    world.overrides[("git", "rev-parse", "origin/moved-top")] = (0, "c" * 40)
     world.fail_after = None
     assert "ok" in world.run("fix")
     assignments = [item for item in world.messages if item["type"] == "dev-sanity-task"]
-    assert len(assignments) == 1
-    assert assignments[0]["values"]["commit"] == "b" * 40
+    assert len(assignments) == (2 if boundary >= 3 else 1)
+    assert assignments[-1]["values"]["branch"] == "moved-top"
+    assert assignments[-1]["values"]["commit"] == "c" * 40
     assert len([item for item in world.messages if item["type"] == "fix-complete"]) == 1
 
 
 def test_shared_contract_covers_all_role_templates_and_ids(world):
     contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    declared = set(contract["required_variables"])
     names = ("dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2", "sanity-fail.xml.j2",
              "dev-sanity-complete.md.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     for name in names:
-        assert set(hook.header(hook.TEMPLATES / name)["required_variables"]) <= set(contract["required_variables"]), name
+        assert set(hook.header(hook.TEMPLATES / name)["required_variables"]) <= declared, name
         body = hook.sc_render.render(hook.TEMPLATES / name, world.values)
         role_id = "sanity_task_id" if name.startswith("dev-sanity") else "qa_task_id" if name.startswith("qa-") else "dev_task_id"
         if name != "sanity-fail.xml.j2":
             assert world.values[role_id] in body
-    assert hook.sc_render.render(hook.TEMPLATES / "task-close-vars.j2", world.values).strip() == ""
     assert "push" in hook.sc_render.render(hook.TEMPLATES / "rebase-required.xml.j2", world.values).lower()
 
 
@@ -450,9 +465,28 @@ def test_shared_contract_covers_all_role_templates_and_ids(world):
 def test_each_role_example_renders_every_shared_template(role):
     values = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
     hook.validate(values, role)
-    for name in ("task-close-vars.j2", "dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2",
+    for name in ("dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2",
                  "dev-sanity-complete.md.j2", "sanity-fail.xml.j2", "qa-template.xml.j2", "qa-complete.md.j2"):
         hook.sc_render.render(hook.TEMPLATES / name, values)
+
+
+@pytest.mark.parametrize("role, expected_writes", [
+    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "task", "assign"], ["atm", "send"]]),
+    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "task", "assign"], ["atm", "send"]]),
+    ("sanity", [["bd", "update"], ["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
+    ("qa", [["bd", "update"], ["bd", "close"], ["atm", "task", "close"], ["atm", "send"]]),
+])
+def test_each_role_command_order_and_identity(world, role, expected_writes):
+    if role == "fix":
+        world.beads[world.values["checked_bead"]]["metadata"]["role"] = "fix"
+    assert "ok" in world.run(role)
+    assert [[argv[0], *argv[1:2]] for argv, _sender in world.writes] == [item[:2] for item in expected_writes]
+    for argv, sender in world.writes:
+        expected_sender = "phase-lead" if argv[:3] == ["atm", "task", "assign"] or argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] else "caller"
+        assert sender == expected_sender, argv
+    for argv, kwargs in world.calls:
+        expected_identity = "phase-lead" if argv[:3] == ["atm", "task", "assign"] or argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] else "caller"
+        assert kwargs["env"]["ATM_IDENTITY"] == expected_identity, argv
 
 
 def test_help_describes_the_permission_only_override(capsys):
