@@ -34,6 +34,9 @@ class ManifestSource(Protocol):
     @property
     def manifest(self) -> bytes | None: ...
 
+    @property
+    def parsed_manifest(self) -> dict[str, Any] | None: ...
+
 
 @dataclass(frozen=True)
 class PathResult:
@@ -122,6 +125,8 @@ def parse_manifest(data: bytes, ref: str, *, expected_version: str | None = None
 
 def load_manifest(source: ManifestSource) -> dict[str, Any]:
     """The published manifest of the release the source resolved; absent means the install cannot be verified."""
+    if source.parsed_manifest is not None:
+        return source.parsed_manifest
     if source.manifest is None:
         raise IntegrityError(no_manifest_message(source.name))
     expected_version = None if source.name == "bundled" else source.name.removeprefix("v")

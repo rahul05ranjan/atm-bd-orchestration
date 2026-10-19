@@ -325,7 +325,7 @@ def test_release_install_verifies_the_tag_against_its_release_sdist_manifest(
 
 @pytest.mark.parametrize("version", [None, 17, "0.17.2"], ids=["missing", "non-string", "mismatch"])
 @pytest.mark.parametrize("args", [["0.17.3"], ["--latest"]], ids=["version", "latest"])
-def test_bad_release_manifest_version_refuses_before_planning_or_writing(
+def test_bad_release_manifest_version_refuses_before_cloning_or_writing(
     installer, upstream: Upstream, tmp_path: Path, capsys, args: list[str], version,
 ) -> None:
     tree = upstream.release("v0.17.3")
@@ -340,7 +340,7 @@ def test_bad_release_manifest_version_refuses_before_planning_or_writing(
 
     assert run_cli(args, tmp_path) == 1
     assert "v0.17.3" in capsys.readouterr().err
-    assert upstream.clones == ["v0.17.3"] and installer.calls == ["check_tools"]
+    assert upstream.clones == [] and installer.calls == ["check_tools"]
     assert consumer(tmp_path) == {}
 
 

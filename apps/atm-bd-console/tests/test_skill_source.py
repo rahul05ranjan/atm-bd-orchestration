@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import tarfile
 from pathlib import Path
 
 import pytest
 
-from atm_bd_console import __version__, command, skill_source
+from atm_bd_console import __version__, command, skill_integrity, skill_source
 from atm_bd_console.result import Err, Ok, Timeout
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-# resolve_source only carries the published bytes; parsing and verification are skill_integrity's (test_skill_integrity).
-PUBLISHED = b'{"published": true}'
+def published_manifest(version: str) -> bytes:
+    return json.dumps({"schema": 1, "version": version, "files": [], "aggregate": skill_integrity.aggregate([])}).encode()
+
+
+PUBLISHED = published_manifest("0.16.0")
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +24,7 @@ def published(monkeypatch):
     """Every release and the bundled tree publish a manifest unless a test removes it."""
     fetched: list[str] = []
     monkeypatch.setattr(skill_source, "bundled_manifest", lambda: PUBLISHED)
-    monkeypatch.setattr(skill_source, "release_manifest", lambda tag: fetched.append(tag) or PUBLISHED)
+    monkeypatch.setattr(skill_source, "release_manifest", lambda tag: fetched.append(tag) or published_manifest(tag.removeprefix("v")))
     monkeypatch.setattr(skill_source, "latest_release_tag", lambda: "v0.16.0")
     return fetched
 
@@ -140,7 +144,7 @@ def test_latest_clones_the_latest_release_tag_not_main(monkeypatch, published) -
     with skill_source.resolve_source(latest=True) as source:
         assert source.name == "v0.17.4"
         assert source.commit == COMMIT
-        assert source.manifest == PUBLISHED
+        assert source.manifest == published_manifest("0.17.4")
     clone = next(args for args in calls if args[0] == "clone")
     assert clone[4:6] == ["--branch", "v0.17.4"] and "main" not in clone
     assert published == ["v0.17.4"]
