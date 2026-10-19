@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from jev_receipts import CLIENT, env, receipted, split
 from rendering import render
@@ -17,6 +18,14 @@ SCRIPT = ROOT / "scripts/sanity-merge"
 TEMPLATES = ROOT / "templates"
 TASK, DEV, SPRINT, BRANCH = "{{ bead_prefix }}-d-4-sanity", "{{ bead_prefix }}-d-4", "d-4", "sprint/d-4-x"
 FINDING = {"kind": "skipped", "file": "crates/x/src/lib.rs", "line": 3, "issue": "no 503 test"}
+HANG_GUARD_SECONDS = 60
+
+
+def run_bounded(argv, **kwargs):
+    try:
+        return subprocess.run(argv, timeout=HANG_GUARD_SECONDS, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(f"command timed out: {argv!r}") from exc
 
 
 def without(envelope, key):
@@ -24,7 +33,7 @@ def without(envelope, key):
 
 
 def git(cwd, *argv):
-    return subprocess.run(["git", "-C", str(cwd), *argv], check=True, capture_output=True, text=True).stdout.strip()
+    return run_bounded(["git", "-C", str(cwd), *argv], check=True, capture_output=True, text=True).stdout.strip()
 
 
 def reviewer_vars(run_id, reviewer, results):
@@ -80,7 +89,12 @@ class SanityMerge(unittest.TestCase):
     def merge(self, results, *args):
         argv = args or (str(self.manifest), TASK, DEV, SPRINT)
         body = results if isinstance(results, str) else json.dumps(results)
-        return subprocess.run([str(SCRIPT), *argv, "--client", str(CLIENT)], input=body, capture_output=True, text=True, env=env())
+        return run_bounded([str(SCRIPT), *argv, "--client", str(CLIENT)], input=body, capture_output=True, text=True, env=env())
+
+    def test_process_timeout_names_command(self):
+        with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(["script", "--arg"], 60)):
+            with self.assertRaisesRegex(AssertionError, "script.*--arg"):
+                run_bounded(["script", "--arg"])
 
     def test_paired_reports_share_identity_preserve_conclusions_and_own_timing(self):
         self.write_manifest(run_id="shared-run", reviewers=["sanity-llm", "sanity-jev"],
@@ -164,7 +178,7 @@ class SanityMerge(unittest.TestCase):
         client_text = self.failure(code="SANITY.JEV_UNAVAILABLE", message="Jev HTTP 529; response body withheld")
         report = json.loads(self.merge([good, client_text], *args).stdout)
         self.assertEqual((report["reviewer_results"][1], report["rejected_results"]), (client_text, []))
-        no_key = subprocess.run([str(SCRIPT), *args, "--client", str(CLIENT)], input=json.dumps([good, self.result(2)]),
+        no_key = run_bounded([str(SCRIPT), *args, "--client", str(CLIENT)], input=json.dumps([good, self.result(2)]),
                                 capture_output=True, text=True, env={k: v for k, v in env().items() if k != "TYPESAFE_API_KEY"})
         self.assertIn("cannot be verified", json.loads(no_key.stdout)["reviewer_results"][0]["error"]["message"])
         llm = self.merge([{**good, "data": without(good["data"], "jev")}, bare], *args[:4], "--reviewer", "sanity-llm", *args[6:])

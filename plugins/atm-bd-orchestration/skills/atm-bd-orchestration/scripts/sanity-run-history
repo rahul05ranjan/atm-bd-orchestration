@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -217,6 +218,7 @@ def main() -> None:
 
 
 RECORD_TEMPLATE = Path(__file__).resolve().parent.parent / "templates/sanity-run-record.json.j2"
+APPEND_TIMEOUT_SECONDS = 60
 RECORD_TYPES = {
     "run_id": str, "reviewer": str, "commit": str, "task": str, "sprint": str,
     "phase": str, "started_at": str, "completed_at": str, "completed_local": str, "duration": str,
@@ -287,11 +289,19 @@ def render_record(variables):
 
 
 def append_record(log_path, record):
-    """Append one row; an identical retry of a logged run/reviewer is a no-op, a differing one fails.
-    `sc-compose render --strict --append` renders the row again from the same values and writes it as one
-    compact line under its lock, so concurrent writers never interleave."""
+    """Serialize the whole read/check/append transaction, including duplicate detection.
+
+    This lock is separate from sc-compose's append lock: taking that lock here
+    would deadlock the child. All history writers must use this sidecar lock.
+    """
     validate_record(record)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.with_suffix(log_path.suffix + ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _append_locked(log_path, record)
+
+
+def _append_locked(log_path, record):
     records = load_log(log_path)
     same_run = [r for r in records if r.get("run_id") == record["run_id"]]
     if any(any(r.get(k) != record[k] for k in ("commit", "task", "sprint", "pr_number", "iteration", "final_verdict")) for r in same_run):
@@ -307,9 +317,12 @@ def append_record(log_path, record):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as var_file:
         json.dump(record, var_file)
     try:
-        proc = subprocess.run(["sc-compose", "render", "--strict", "--root", str(RECORD_TEMPLATE.parent),
-                               "--file", str(RECORD_TEMPLATE), "--var-file", var_file.name, "--append", str(log_path)],
-                              text=True, capture_output=True)
+        try:
+            proc = subprocess.run(["sc-compose", "render", "--strict", "--root", str(RECORD_TEMPLATE.parent),
+                                   "--file", str(RECORD_TEMPLATE), "--var-file", var_file.name, "--append", str(log_path)],
+                                  text=True, capture_output=True, timeout=APPEND_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            fail(f"SANITY.LOG_APPEND_TIMEOUT: sc-compose append to {log_path} exceeded {APPEND_TIMEOUT_SECONDS}s")
     finally:
         os.unlink(var_file.name)
     if proc.returncode:

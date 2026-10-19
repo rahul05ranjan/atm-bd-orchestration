@@ -5,9 +5,12 @@ import importlib.util
 import json
 import os
 import shutil
+import socket
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -23,6 +26,15 @@ LOADER.exec_module(HISTORY)
 SPLIT_LOADER = importlib.machinery.SourceFileLoader("sanity_split_tests", str(Path(__file__).parent / "test_sanity_split.py"))
 SPLIT_TESTS = importlib.util.module_from_spec(importlib.util.spec_from_loader(SPLIT_LOADER.name, SPLIT_LOADER))
 SPLIT_LOADER.exec_module(SPLIT_TESTS)
+
+HANG_GUARD_SECONDS = 60
+
+
+def run_bounded(argv, **kwargs):
+    try:
+        return subprocess.run(argv, timeout=HANG_GUARD_SECONDS, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(f"command timed out: {argv!r}") from exc
 
 
 def record(**changes):
@@ -141,41 +153,80 @@ class SanityHistory(unittest.TestCase):
         HISTORY.append_record(self.log, record(run_id="new"))
         self.assertEqual([json.loads(line)["run_id"] for line in self.log.read_text().splitlines()], ["run-one", "new"])
 
-    def test_cli_real_render_concurrent_appends(self):
-        # Real separate writer processes and installed sc-compose. The only fake
-        # external dependency is bd (absent bead -> documented sprint fallback).
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
-        bin_dir = self.root / "bin"
-        bin_dir.mkdir()
-        bd = bin_dir / "bd"
-        bd.write_text("#!/bin/sh\nexit 1\n")
-        bd.chmod(0o755)
-        env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+    def test_partial_append_blocks_reader_and_duplicate_retry_is_noop(self):
+        reader_attempted = threading.Event()
+        reader_thread = threading.local()
+        real_flock = HISTORY.fcntl.flock
+        real_run = subprocess.run
+        calls = []
+        fake = self.root / "fake_sc_compose.py"
+        fake.write_text("""import json, os, socket, sys
+fd = int(sys.argv[1])
+args = sys.argv[2:]
+record = json.load(open(args[args.index('--var-file') + 1]))
+path = args[args.index('--append') + 1]
+data = json.dumps(record, separators=(',', ':')) + '\\n'
+with socket.socket(fileno=fd) as control, open(path, 'w') as output:
+    midpoint = len(data) // 2
+    output.write(data[:midpoint])
+    output.flush()
+    control.sendall(b'P')
+    if control.recv(1) != b'G':
+        raise RuntimeError('test did not release append')
+    output.write(data[midpoint:])
+""")
 
-        def run(index):
-            values = record(run_id=f"run-{index // 2}", reviewer="sanity-llm" if index % 2 == 0 else "sanity-jev")
-            values["reviewer_results"] = [jev_reply(1)]
-            del values["jev_receipts"]
-            values["findings_count"] = values.pop("findings")
-            del values["completed_local"]
-            var_file = self.root / f"vars-{index}.json"
-            var_file.write_text(json.dumps(values))
-            return subprocess.run([str(SCRIPTS / "sanity-run-history"), "--vars", str(var_file),
-                                   "--task", values["task"], "--bead", "dev-d-4", "--pr-number", "42",
-                                   "--iteration", "1", "--final-verdict", "PASS"],
-                                  cwd=self.root, env=env, capture_output=True, text=True)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-            results = list(executor.map(run, range(12)))
-        for result in results:
-            self.assertEqual(result.returncode, 0, result.stderr)
-        log = self.root / ".sc/sanity-log/phase-d.jsonl"
-        rows = [json.loads(line) for line in log.read_text().splitlines()]
-        self.assertEqual(len(rows), 12)
-        self.assertEqual(len({(r["run_id"], r["reviewer"]) for r in rows}), 12)
-        self.assertTrue(all(r["completed_local"] for r in rows))
-        result = run(0)  # idempotent retry
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(log.read_text().splitlines()), 12)
+        def observed_flock(fd, operation):
+            if getattr(reader_thread, "is_reader", False):
+                reader_attempted.set()
+            return real_flock(fd, operation)
+
+        def fake_compose(argv, **kwargs):
+            calls.append(argv)
+            return real_run([sys.executable, str(fake), str(child.fileno()), *argv[1:]],
+                            pass_fds=(child.fileno(),), **kwargs)
+
+        def retry():
+            reader_thread.is_reader = True
+            HISTORY.append_record(self.log, record())
+
+        parent, child = socket.socketpair()
+        with parent, child:
+            parent.settimeout(HANG_GUARD_SECONDS)
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+            try:
+                with patch.object(HISTORY.fcntl, "flock", side_effect=observed_flock), \
+                     patch.object(HISTORY.subprocess, "run", side_effect=fake_compose):
+                    writer = executor.submit(HISTORY.append_record, self.log, record())
+                    try:
+                        self.assertEqual(parent.recv(1), b"P", "writer never reached partial append")
+                        with self.assertRaises(json.JSONDecodeError):
+                            json.loads(self.log.read_text())
+                        reader = executor.submit(retry)
+                        self.assertTrue(reader_attempted.wait(HANG_GUARD_SECONDS), "retry never attempted the ledger lock")
+                    finally:
+                        parent.sendall(b"G")
+                    writer.result(timeout=HANG_GUARD_SECONDS)
+                    reader.result(timeout=HANG_GUARD_SECONDS)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()], [record()])
+
+    def test_append_timeout_is_typed_and_cleans_up_vars(self):
+        with patch.object(HISTORY.subprocess, "run", side_effect=subprocess.TimeoutExpired("sc-compose", 60)) as run:
+            with self.assertRaisesRegex(SystemExit, "SANITY.LOG_APPEND_TIMEOUT.*sc-compose"):
+                HISTORY.append_record(self.log, record())
+        argv = run.call_args.args[0]
+        self.assertEqual(run.call_args.kwargs["timeout"], HISTORY.APPEND_TIMEOUT_SECONDS)
+        self.assertFalse(Path(argv[argv.index("--var-file") + 1]).exists())
+        HISTORY.append_record(self.log, record())
+        self.assertEqual(json.loads(self.log.read_text()), record())
+
+    def test_process_timeout_names_command(self):
+        with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(["script", "--arg"], 60)):
+            with self.assertRaisesRegex(AssertionError, "script.*--arg"):
+                run_bounded(["script", "--arg"])
 
     def test_retry_under_another_time_zone_is_the_same_row(self):
         HISTORY.append_record(self.log, record())
@@ -244,7 +295,17 @@ class ShippedFlow(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.repo = SPLIT_TESTS.Repo(self.root)
+        real_run = subprocess.run
+
+        def bounded_repo_command(argv, **kwargs):
+            try:
+                return real_run(argv, timeout=HANG_GUARD_SECONDS, **kwargs)
+            except subprocess.TimeoutExpired as exc:
+                raise AssertionError(f"command timed out: {argv!r}") from exc
+
+        # The shared Repo helper also spawns git commands during construction.
+        with patch.object(SPLIT_TESTS.subprocess, "run", side_effect=bounded_repo_command):
+            self.repo = SPLIT_TESTS.Repo(self.root)
         with (self.repo.wt / ".git/info/exclude").open("a") as exclude:
             exclude.write(".sc/\n")
         bin_dir = self.root / "bin"
@@ -257,7 +318,7 @@ class ShippedFlow(unittest.TestCase):
         bead = SPLIT_TESTS.bead()
         self.bead, self.task = bead[0]["id"], "t-1-sanity"
         (self.root / "bead.json").write_text(json.dumps(bead))
-        split = subprocess.run([str(SCRIPTS / "sanity-split"), "--task", self.task, "--bead", self.bead,
+        split = run_bounded([str(SCRIPTS / "sanity-split"), "--task", self.task, "--bead", self.bead,
                                 "--worktree", str(self.repo.wt), "--branch", "sprint/x", "--commit", self.repo.sha,
                                 "--base", "develop", "--lint-command", "true", "--split-only", "--scratch", str(self.root / "scratch"),
                                 "--bead-json", str(self.root / "bead.json")], capture_output=True, text=True)
@@ -273,7 +334,7 @@ class ShippedFlow(unittest.TestCase):
 
     def merge(self, reviewer, *extra, stdin=None):
         now = time.time()
-        return subprocess.run([str(SCRIPTS / "sanity-merge"), str(self.manifest), self.task, self.bead, "d-4",
+        return run_bounded([str(SCRIPTS / "sanity-merge"), str(self.manifest), self.task, self.bead, "d-4",
                                "--reviewer", reviewer, "--started-at", str(now - 60), "--completed-at", str(now),
                                *extra, "--client", str(CLIENT)], input=stdin, capture_output=True, text=True, env=receipt_env())
 
@@ -301,7 +362,7 @@ class ShippedFlow(unittest.TestCase):
         final = json.loads(selected.stdout)["verdict"]
         logs = set()
         for reviewer in ("sanity-llm", "sanity-jev"):
-            history = subprocess.run([str(SCRIPTS / "sanity-run-history"), "--vars", str(reviewer_vars[reviewer]),
+            history = run_bounded([str(SCRIPTS / "sanity-run-history"), "--vars", str(reviewer_vars[reviewer]),
                                       "--task", self.task, "--bead", self.bead, "--pr-number", "42",
                                       "--iteration", "1", "--final-verdict", final],
                                      cwd=self.repo.wt, env=self.env, capture_output=True, text=True)
