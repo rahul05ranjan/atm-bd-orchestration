@@ -19,8 +19,8 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 from pathlib import Path
 
@@ -29,7 +29,10 @@ from rendering import render
 SKILL = Path(__file__).resolve().parents[2]
 ATM_BEADS = SKILL.parent / "atm-beads"
 sys.path.insert(0, str(ATM_BEADS / "tests"))
-from phase_fixtures import run_subprocess, write_phase
+import phase_fixtures
+from phase_fixtures import (HANG_GUARD_SECONDS, LIFELINES, SERVER_DIR, abort_server, bounded_read,
+                            owner_port, reap_killed_owner, run_subprocess, server_logs, start_server,
+                            stop_owner, stop_server, write_phase)
 
 MISSING = [tool for tool in ("bd", "dolt", "sc-compose") if shutil.which(tool) is None]
 SKIP_REASON = f"{', '.join(MISSING)} not on PATH: real-bd pour tests not run"
@@ -59,10 +62,30 @@ class Workspace:
 
     def server_logs(self) -> str:
         """The dolt server's log tail, so a dropped connection carries its cause."""
-        log = self.root / SERVER_DIR / "server.log"
-        if not log.is_file():
-            return ""
-        return "\n--- server.log (last 40 lines) ---\n" + "\n".join(log.read_text(errors="replace").splitlines()[-40:])
+        return server_logs(self.root)
+
+    @contextmanager
+    def sc_compose_shim(self, *, fail_on_attach=False):
+        with tempfile.TemporaryDirectory(prefix="sc-compose-shim-", dir=self.root) as directory:
+            wrapper_dir = Path(directory)
+            log = wrapper_dir / "operations.log"
+            wrapper = wrapper_dir / "sc-compose"
+            failure = 'if [ "$1" = bead ] && [ "$2" = attach ]; then echo "injected sc-compose failure" >&2; exit 3; fi\n' if fail_on_attach else ""
+            wrapper.write_text(f'#!/bin/sh\nprintf "%s %s\\n" "$1" "$2" >> "{log}"\n{failure}exec "{shutil.which("sc-compose")}" "$@"\n')
+            wrapper.chmod(0o755)
+            original_path = self.env["PATH"]
+            self.env["PATH"] = f"{wrapper_dir}:{original_path}"
+            try:
+                yield log
+            finally:
+                self.env["PATH"] = original_path
+
+    def write_override_formula(self, directory: Path, old: str, new: str) -> Path:
+        source = (self.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
+        assert old in source
+        formula = directory / "sprint-group.formula.toml.j2"
+        formula.write_text(source.replace(old, new, 1))
+        return formula
 
     def bd(self, *args, check=True):
         return self.run("bd", *args, check=check)
@@ -127,160 +150,6 @@ class Workspace:
         proc = self.run(sys.executable, self.scripts / "bead-groups", "--json", *args, check=False)
         assert proc.returncode == expect, f"exit {proc.returncode}\n{proc.stdout}\n{proc.stderr}{self.server_logs()}"
         return json.loads(proc.stdout)
-
-
-SERVER_DIR = ".dolt-server"   # data directory and log of the workspace's own dolt sql-server
-
-# Runs dolt as its child and stops it when the test process that started it is gone (killed, so class
-# cleanup never ran): the server must not outlive the run.
-# dolt logs this line once it is listening; it is the only readiness signal start_server waits for.
-READY_MARK = "Server ready"
-# The supervisor relays dolt's output to the workspace log and writes READY to its stdout once dolt is ready. It
-# stops dolt when its stdin reaches EOF, which happens when the process that started it dies, and it exits only after
-# dolt has exited, so its exit means the server is gone. It never polls.
-SUPERVISOR = """\
-import os, signal, subprocess, sys, threading
-log_path, server = sys.argv[1], sys.argv[2:]
-proc = subprocess.Popen(server, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-def terminate_server(*_):
-    try:
-        proc.terminate()
-    except ProcessLookupError:
-        pass
-signal.signal(signal.SIGTERM, terminate_server)
-def stop_with_parent():
-    sys.stdin.read()
-    terminate_server()
-threading.Thread(target=stop_with_parent, daemon=True).start()
-ready = False
-with open(log_path, "w") as log:
-    for line in proc.stdout:
-        log.write(line)
-        log.flush()
-        if not ready and "%s" in line:
-            ready = True
-            print("READY", flush=True)
-code = proc.wait()
-if os.environ.get("BEAD_POUR_REPORT_REAP") == "1":
-    print(f"SERVER_REAPED {proc.pid} {code}", file=sys.stderr, flush=True)
-if not ready:
-    print(f"EXITED {code}", flush=True)
-sys.exit(code)
-""" % READY_MARK
-
-# Holds each supervisor's stdin write end for the life of this process: dropping it stops that server.
-LIFELINES: dict[Path, tuple[subprocess.Popen, bool]] = {}
-HANG_GUARD_SECONDS = 60
-
-
-def bounded_read(stream, method, process, root, on_timeout):
-    result = queue.Queue(maxsize=1)
-
-    def read():
-        try:
-            result.put((getattr(stream, method)(), None))
-        except Exception as error:
-            result.put((None, error))
-
-    threading.Thread(target=read, daemon=True).start()
-    try:
-        value, error = result.get(timeout=HANG_GUARD_SECONDS)
-    except queue.Empty as timeout:
-        logs = Workspace(root).server_logs()
-        try:
-            on_timeout()
-        except Exception as cleanup_error:
-            raise AssertionError(f"{method} timed out waiting for process {process.pid}; cleanup failed: {cleanup_error}{logs}") from timeout
-        raise AssertionError(f"{method} timed out waiting for process {process.pid}{logs}") from timeout
-    if error:
-        raise AssertionError(f"{method} failed for process {process.pid}: {error}{Workspace(root).server_logs()}") from error
-    return value
-
-
-def stop_owner(owner, root):
-    try:
-        os.killpg(owner.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    try:
-        owner.wait(timeout=HANG_GUARD_SECONDS)
-    except subprocess.TimeoutExpired as timeout:
-        raise AssertionError(f"owner {owner.pid} survived cleanup{Workspace(root).server_logs()}") from timeout
-
-
-def owner_port(owner, root):
-    ready = bounded_read(owner.stdout, "readline", owner, root, lambda: stop_owner(owner, root)).strip()
-    if not ready.isdecimal():
-        detail = bounded_read(owner.stderr, "read", owner, root, lambda: stop_owner(owner, root))
-        raise AssertionError(f"owner {owner.pid} did not report a port ({ready!r}): {detail}{Workspace(root).server_logs()}")
-    return int(ready)
-
-
-def abort_server(root):
-    entry = LIFELINES.get(root)
-    if entry is not None and entry[0].poll() is None:
-        try:
-            entry[0].terminate()
-        except ProcessLookupError:
-            pass
-    stop_server(root)
-
-
-def start_server(root: Path, *, inherited_group=False) -> int:
-    """Start a dolt sql-server for the workspace on a free loopback port; return the port once dolt reports it is ready."""
-    data = root / SERVER_DIR
-    data.mkdir()
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    supervisor = data / "supervise.py"
-    supervisor.write_text(SUPERVISOR)
-    env = os.environ.copy()
-    env.pop("BEAD_POUR_REPORT_REAP", None)
-    if inherited_group:
-        env["BEAD_POUR_REPORT_REAP"] = "1"
-    server = subprocess.Popen([sys.executable, str(supervisor), str(data / "server.log"),
-                               "dolt", "sql-server", "-H", "127.0.0.1", "-P", str(port), f"--data-dir={data}"],
-                              cwd=data, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                              start_new_session=not inherited_group, env=env)
-    LIFELINES[root] = (server, not inherited_group)
-    report = bounded_read(server.stdout, "readline", server, root, lambda: abort_server(root)).strip()
-    if report != "READY":
-        log = data / "server.log"
-        tail = "\n".join(log.read_text(errors="replace").splitlines()[-40:]) if log.is_file() else ""
-        stop_server(root)
-        raise AssertionError(f"dolt sql-server on 127.0.0.1:{port} did not report ready ({report or 'EOF'}):\n{tail}")
-    return port
-
-
-def stop_server(root: Path) -> None:
-    entry = LIFELINES.pop(root, None)
-    if entry is None:
-        return
-    server, owns_group = entry
-    try:
-        server.stdin.close()
-    except BrokenPipeError:
-        pass
-    try:
-        server.wait(timeout=HANG_GUARD_SECONDS)
-    except subprocess.TimeoutExpired as timeout:
-        try:
-            server.terminate()
-        except ProcessLookupError:
-            pass
-        try:
-            server.wait(timeout=HANG_GUARD_SECONDS)
-        except subprocess.TimeoutExpired:
-            if owns_group:
-                try:
-                    os.killpg(server.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                server.kill()
-            server.wait(timeout=HANG_GUARD_SECONDS)
-        raise AssertionError(f"supervisor {server.pid} did not stop{Workspace(root).server_logs()}") from timeout
 
 
 def init_workspace(w: Workspace) -> None:
@@ -364,7 +233,7 @@ class HarnessFailureTests(unittest.TestCase):
         process = mock.Mock(pid=12345)
         process.poll.return_value = None
         with (mock.patch.dict(LIFELINES, {self.root: (process, True)}, clear=True),
-              mock.patch(f"{__name__}.stop_server") as stop):
+              mock.patch.object(phase_fixtures, "stop_server") as stop):
             abort_server(self.root)
         process.terminate.assert_called_once()
         stop.assert_called_once_with(self.root)
@@ -381,8 +250,8 @@ class HarnessFailureTests(unittest.TestCase):
         with (mock.patch.dict(LIFELINES, {}, clear=True),
               mock.patch.object(socket, "socket") as socket_factory,
               mock.patch.object(subprocess, "Popen", side_effect=launch),
-              mock.patch(f"{__name__}.bounded_read", return_value=""),
-              mock.patch(f"{__name__}.stop_server") as stop):
+              mock.patch.object(phase_fixtures, "bounded_read", return_value=""),
+              mock.patch.object(phase_fixtures, "stop_server") as stop):
             socket_factory.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 1234)
             with self.assertRaises(AssertionError) as caught:
                 start_server(root)
@@ -403,7 +272,7 @@ class HarnessFailureTests(unittest.TestCase):
 
     def test_early_owner_eof_reports_stderr_and_log(self):
         owner = mock.Mock(pid=12345)
-        with mock.patch(f"{__name__}.bounded_read", side_effect=["", "owner failed"]):
+        with mock.patch.object(phase_fixtures, "bounded_read", side_effect=["", "owner failed"]):
             with self.assertRaises(AssertionError) as caught:
                 owner_port(owner, self.root)
         self.assertIn("12345", str(caught.exception))
@@ -419,6 +288,40 @@ class HarnessFailureTests(unittest.TestCase):
         kill_group.assert_called_once_with(owner.pid, signal.SIGKILL)
         owner.wait.assert_called_once_with(timeout=HANG_GUARD_SECONDS)
 
+    def test_owner_exit_timeout_cleans_up_and_reports_original_timeout(self):
+        owner = mock.Mock(pid=12345)
+        timeout = subprocess.TimeoutExpired("owner-command", HANG_GUARD_SECONDS)
+        owner.wait.side_effect = timeout
+        with (mock.patch.object(phase_fixtures, "owner_port", return_value=1234),
+              mock.patch.object(phase_fixtures, "stop_owner") as stop):
+            with self.assertRaisesRegex(AssertionError, "(?s)owner 12345 did not exit.*diagnostic tail") as caught:
+                reap_killed_owner(owner, self.root)
+        self.assertIs(caught.exception.__cause__, timeout)
+        owner.kill.assert_called_once()
+        stop.assert_called_once_with(owner, self.root)
+
+    def test_owner_cleanup_failure_is_a_note_on_original_failure(self):
+        owner = mock.Mock(pid=12345)
+        original = AssertionError("original failure")
+        with (mock.patch.object(phase_fixtures, "owner_port", side_effect=original),
+              mock.patch.object(phase_fixtures, "stop_owner", side_effect=AssertionError("cleanup failed")) as stop):
+            with self.assertRaises(AssertionError) as caught:
+                reap_killed_owner(owner, self.root)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(original.__notes__, ["owner cleanup failed: cleanup failed"])
+        stop.assert_called_once_with(owner, self.root)
+
+    def test_owner_exit_timeout_is_preserved_when_cleanup_also_fails(self):
+        owner = mock.Mock(pid=12345)
+        timeout = subprocess.TimeoutExpired("owner-command", HANG_GUARD_SECONDS)
+        owner.wait.side_effect = timeout
+        with (mock.patch.object(phase_fixtures, "owner_port", return_value=1234),
+              mock.patch.object(phase_fixtures, "stop_owner", side_effect=AssertionError("cleanup failed"))):
+            with self.assertRaisesRegex(AssertionError, "owner 12345 did not exit") as caught:
+                reap_killed_owner(owner, self.root)
+        self.assertIs(caught.exception.__cause__, timeout)
+        self.assertEqual(caught.exception.__notes__, ["owner cleanup failed: cleanup failed"])
+
 
 @unittest.skipIf(shutil.which("dolt") is None, "dolt not on PATH: server lifetime test not run")
 class ServerLifetimeTests(unittest.TestCase):
@@ -428,31 +331,18 @@ class ServerLifetimeTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.addCleanup(stop_server, root)
         code = ("import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]);"
-                "from test_bead_pour_real_bd import start_server; print(start_server(Path(sys.argv[2]), inherited_group=True), flush=True);"
+                "from phase_fixtures import start_server; print(start_server(Path(sys.argv[2]), inherited_group=True), flush=True);"
                 "sys.stdin.read()")
-        owner = subprocess.Popen([sys.executable, "-c", code, str(Path(__file__).parent), str(root)],
+        owner = subprocess.Popen([sys.executable, "-c", code, str(ATM_BEADS / "tests"), str(root)],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                  start_new_session=True)
-        try:
-            port = owner_port(owner, root)
-            owner.kill()
-            try:
-                owner.wait(timeout=HANG_GUARD_SECONDS)
-            except subprocess.TimeoutExpired as timeout:
-                stop_owner(owner, root)
-                raise AssertionError(f"owner {owner.pid} did not exit{Workspace(root).server_logs()}") from timeout
-            detail = bounded_read(owner.stderr, "read", owner, root, lambda: stop_owner(owner, root))
-        except BaseException:
-            stop_owner(owner, root)
-            raise
+        detail = reap_killed_owner(owner, root)
         alive = [] if any(line.startswith("SERVER_REAPED ") for line in detail.splitlines()) else [detail]
         self.assertEqual(alive, [], "dolt server outlived the killed test process")
-        with self.assertRaises(OSError):
-            socket.create_connection(("127.0.0.1", port), timeout=1).close()
 
 
 @unittest.skipUnless(not MISSING, SKIP_REASON)
-class BeadPourMockTests(unittest.TestCase):
+class BeadPourRealBdTests(unittest.TestCase):
     """All tests share one workspace, created once for the class; each test uses its own phase."""
 
     @classmethod
@@ -601,19 +491,8 @@ class BeadPourMockTests(unittest.TestCase):
         ws = self.ws
         first = ws.sprint("x", 1)
         second = ws.sprint("x", 2)
-        override = Path(self.override.name)
-        override.mkdir(parents=True, exist_ok=True)
-        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
-        (override / "sprint-group.formula.toml.j2").write_text(source.replace('branch = "{{{ branch }}}"\n', ""))
-        wrapper_dir = ws.root / "sc-compose-log-bin"
-        wrapper_dir.mkdir()
-        log = ws.root / "sc-compose-operations.log"
-        wrapper = wrapper_dir / "sc-compose"
-        wrapper.write_text(f'#!/bin/sh\nprintf "%s %s\\n" "$1" "$2" >> "{log}"\nexec "{shutil.which("sc-compose")}" "$@"\n')
-        wrapper.chmod(0o755)
-        original_path = ws.env["PATH"]
-        ws.env["PATH"] = f"{wrapper_dir}:{original_path}"
-        try:
+        ws.write_override_formula(Path(self.override.name), 'branch = "{{{ branch }}}"\n', "")
+        with ws.sc_compose_shim() as log:
             before = ws.snapshot(first, second)
             for mode in (("--validate",), ()):
                 result = ws.groups(*mode, "--sprint", first, "--sprint", second, expect=5)
@@ -621,49 +500,25 @@ class BeadPourMockTests(unittest.TestCase):
                 assert all(ws.show(bead) is None for sprint in (first, second) for bead in group(sprint))
                 ws.unchanged(before)
             assert "bead attach" not in log.read_text().splitlines()
-        finally:
-            ws.env["PATH"] = original_path
-            shutil.rmtree(override)
 
     def test_injected_sc_compose_failure_stops_the_invalid_rendered_bead(self):
         ws = self.ws
         sprint = ws.sprint("y", 1)
-        override = Path(self.override.name)   # setUp points .atm-bd/formula at this directory
-        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
-        formula = override / "sprint-group.formula.toml.j2"
-        formula.write_text(source.replace('branch = "{{{ branch }}}"\n', ""))
-        wrapper_dir = ws.root / "sc-compose-fail-bin"
-        wrapper_dir.mkdir()
-        log = ws.root / "injected-sc-compose-operations.log"   # the workspace is shared by the class; keep this run's log apart
-        wrapper = wrapper_dir / "sc-compose"
-        wrapper.write_text(
-            f'#!/bin/sh\nprintf "%s %s\\n" "$1" "$2" >> "{log}"\n'
-            f'if [ "$1" = bead ] && [ "$2" = attach ]; then echo "injected sc-compose failure" >&2; exit 3; fi\n'
-            f'exec "{shutil.which("sc-compose")}" "$@"\n')
-        wrapper.chmod(0o755)
-        original_path = ws.env["PATH"]
-        ws.env["PATH"] = f"{wrapper_dir}:{original_path}"
-        try:
+        formula = ws.write_override_formula(Path(self.override.name), 'branch = "{{{ branch }}}"\n', "")
+        with ws.sc_compose_shim(fail_on_attach=True) as log:
             before = ws.snapshot(sprint)
             result = ws.groups("--sprint", sprint, expect=5)
             assert any(f"{sprint}.group-dev: branch" in problem for entry in result["targets"] for problem in entry["problems"])
             assert "bead attach" not in log.read_text().splitlines()
             assert all(ws.show(bead) is None for bead in group(sprint))
             ws.unchanged(before)
-        finally:
-            ws.env["PATH"] = original_path
             formula.unlink()
-        # with the rendered record valid again, the injected attach failure refuses the pour and leaves no bead
-        second = ws.sprint("y", 2)
-        before = ws.snapshot(sprint, second)
-        ws.env["PATH"] = f"{wrapper_dir}:{original_path}"
-        try:
+            second = ws.sprint("y", 2)
+            before = ws.snapshot(sprint, second)
             entry = target(ws.groups("--sprint", second, expect=2), second)
             assert entry["error"]["code"] == "BEAD_GROUPS_POUR_FAILED"
             assert all(ws.show(bead) is None for bead in group(second))
             ws.unchanged(before)
-        finally:
-            ws.env["PATH"] = original_path
 
     def test_finding_layer_fields_come_from_stack_ledger(self):
         ws = self.ws
@@ -775,38 +630,24 @@ class BeadPourMockTests(unittest.TestCase):
 
     def test_a_repository_override_formula_wins(self):
         ws = self.ws
-        override = Path(self.override.name)
-        override.mkdir(parents=True, exist_ok=True)
-        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
         marker = "description = \"Dev work for sprint"
-        assert marker in source
-        (override / "sprint-group.formula.toml.j2").write_text(source.replace(marker, "description = \"OVERRIDE. Dev work for sprint", 1))
-        try:
-            sprint = ws.sprint("i", 1)
-            ws.groups("--sprint", sprint)
-            assert ws.show(f"{sprint}.group-dev")["description"].startswith("OVERRIDE.")
-        finally:
-            shutil.rmtree(override)
+        ws.write_override_formula(Path(self.override.name), marker, "description = \"OVERRIDE. Dev work for sprint")
+        sprint = ws.sprint("i", 1)
+        ws.groups("--sprint", sprint)
+        assert ws.show(f"{sprint}.group-dev")["description"].startswith("OVERRIDE.")
 
 
     def test_an_unsupplied_compose_variable_is_refused(self):
         ws = self.ws
-        override = Path(self.override.name)
-        override.mkdir(parents=True, exist_ok=True)
-        source = (ws.root / ".claude/skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2").read_text()
         marker = "description = \"Dev work for sprint"
-        assert marker in source
-        (override / "sprint-group.formula.toml.j2").write_text(source.replace(marker, "description = \"{{{ extra }}} Dev work for sprint", 1))
-        try:
-            sprint = ws.sprint("u", 1)
-            for mode in (("--validate",), ()):
-                entry = target(ws.groups(*mode, "--sprint", sprint, expect=2), sprint)
-                assert entry["error"]["code"] == "BEADS_RENDER_FAILED", entry
-                assert "undefined variable: extra" in entry["error"]["message"]
-                assert "sprint-group.formula.toml.j2" in entry["error"]["message"]
-            assert all(ws.show(b) is None for b in group(sprint))
-        finally:
-            shutil.rmtree(override)
+        ws.write_override_formula(Path(self.override.name), marker, "description = \"{{{ extra }}} Dev work for sprint")
+        sprint = ws.sprint("u", 1)
+        for mode in (("--validate",), ()):
+            entry = target(ws.groups(*mode, "--sprint", sprint, expect=2), sprint)
+            assert entry["error"]["code"] == "BEADS_RENDER_FAILED", entry
+            assert "undefined variable: extra" in entry["error"]["message"]
+            assert "sprint-group.formula.toml.j2" in entry["error"]["message"]
+        assert all(ws.show(b) is None for b in group(sprint))
 
     def test_both_formulas_pour_under_every_option(self):
         ws = self.ws
