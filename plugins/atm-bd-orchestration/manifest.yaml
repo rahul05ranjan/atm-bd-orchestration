@@ -155,6 +155,7 @@ artifacts:
     - skills/atm-beads/examples/plan-root-vars.json
     - skills/atm-beads/examples/sprint-bead-vars-d-4.json
     - skills/atm-beads/examples/sprint-bead-vars-d-5.json
+    - skills/atm-beads/examples/stack-bead-vars.json
     - skills/atm-beads/references/installation-and-troubleshooting.md
     - skills/atm-beads/resources/atm-beads-plan-guidelines.md
     - skills/atm-beads/resources/dev-sanity.md
