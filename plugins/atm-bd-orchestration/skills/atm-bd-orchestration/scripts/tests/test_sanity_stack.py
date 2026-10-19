@@ -60,6 +60,7 @@ class World:
         self.fail_view = False
         self.release_failure = None
         self.advance_on_pulls = 0
+        self.task_list_failure = None
         self.hook = None
 
     def git(self, *args):
@@ -105,7 +106,18 @@ class World:
             else:
                 self.bead["assignee"] = ""
         elif argv[:3] == ["atm", "task", "list"]:
-            output = json.dumps([{"assignee": self.bead["assignee"], "state": "active", "task_id": "holder-task"}])
+            if self.task_list_failure == "nonzero":
+                status, error = 1, "task list failed"
+            elif self.task_list_failure == "invalid-json":
+                output = "not JSON"
+            elif self.task_list_failure == "invalid-schema":
+                output = json.dumps({"tasks": None})
+            elif self.task_list_failure == "timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            elif self.task_list_failure == "oserror":
+                raise OSError("ATM unavailable")
+            else:
+                output = json.dumps([{"assignee": self.bead["assignee"], "state": "active", "task_id": "holder-task"}])
         elif argv[:3] == ["gh", "api", "rate_limit"]:
             output = json.dumps({"remaining": 0 if self.unavailable else 500})
         elif argv[:3] == ["gh", "api", "repos/{owner}/{repo}/pulls?state=open&per_page=100"]:
@@ -326,6 +338,22 @@ def test_timeout_and_scoped_reclaim(world):
     result = world.link(values)
     assert result["reclaimed"] == {"holder": "other", "claimed_at": "2027-01-01T00:00:00Z"}
     assert world.other["assignee"] == "other"
+
+
+@pytest.mark.parametrize("failure", ["nonzero", "invalid-json", "invalid-schema", "timeout", "oserror"])
+def test_timeout_holder_task_lookup_is_best_effort(world, failure):
+    values = world.branch("first", "trunk", 1)
+    world.bead.update(assignee="other", started_at="2027-01-01T00:00:00Z",
+                      lease_expires_at=datetime.fromtimestamp(world.clock() + 100, timezone.utc).isoformat())
+    before = copy.deepcopy(world.bead)
+    world.task_list_failure = failure
+    start = world.clock()
+
+    assert world.link(values) == {"result": "lock_timeout", "holder": "other",
+                                  "claimed_at": "2027-01-01T00:00:00Z", "holder_task": None}
+    assert world.clock() - start == 10
+    assert world.bead == before
+    assert not any("--metadata" in call or "--if-assignee" in call for call in world.calls)
 
 
 def test_heartbeat_uses_controlled_clock(world):

@@ -113,13 +113,16 @@ class Linker:
                     continue
             remaining = deadline - self.clock()
             if remaining <= 0:
-                task = self.command(['atm', 'task', 'list', '--all', '--json'])
-                data = json.loads(task.stdout)
-                tasks = data.get('tasks', []) if isinstance(data, dict) else data
                 holder = bead.get('assignee')
-                active = next((item.get('task_id') or item.get('id') for item in tasks
-                               if isinstance(item, dict) and item.get('assignee') == holder
-                               and item.get('state', item.get('status')) in ('active', 'in_progress', 'started')), None)
+                try:
+                    task = self.command(['atm', 'task', 'list', '--all', '--json'])
+                    data = json.loads(task.stdout)
+                    tasks = data.get('tasks', []) if isinstance(data, dict) else data
+                    active = next((item.get('task_id') or item.get('id') for item in tasks
+                                   if isinstance(item, dict) and item.get('assignee') == holder
+                                   and item.get('state', item.get('status')) in ('active', 'in_progress', 'started')), None)
+                except (StackError, ValueError, TypeError):
+                    active = None
                 return {'result': 'lock_timeout', 'holder': holder, 'claimed_at': bead.get('started_at'), 'holder_task': active}
             self.sleep(min(5, remaining))
 
