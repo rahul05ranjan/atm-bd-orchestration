@@ -244,6 +244,33 @@ def test_remote_git_failures_retry_then_use_cached_local_checks(world, failed_co
     ]
 
 
+@pytest.mark.parametrize("failed_command", ["ls-remote", "fetch"])
+def test_remote_git_fallback_names_the_failed_command_and_stderr(world, failed_command):
+    world.git_network_failure = failed_command
+    expected_command = {
+        "ls-remote": f"git ls-remote origin refs/heads/{world.values['branch']}",
+        "fetch": "git fetch origin",
+    }[failed_command]
+    result = world.run()["ok"]
+    assert result["github"] == "unavailable"
+    assert result["github_error"] == f"{expected_command}: remote unavailable"
+
+
+@pytest.mark.parametrize(("failure", "stderr"), [(True, "HTTP 429"), ("raise", "GitHub unavailable")])
+def test_github_fallback_names_the_failed_api_call_and_error(world, failure, stderr):
+    world.github_failure = failure
+    result = world.run()["ok"]
+    assert result["github"] == "unavailable"
+    assert result["github_error"].startswith("gh api repos/example/repo/pulls?head=example:")
+    assert result["github_error"].endswith(f": {stderr}")
+
+
+def test_github_ok_result_carries_no_github_error(world):
+    result = world.run()["ok"]
+    assert result["github"] == "ok"
+    assert "github_error" not in result
+
+
 def test_ledger_top_overrides_static_target(world):
     metadata = world.beads["atm-phase-bj.stack"]["metadata"]
     metadata["layers"] = [

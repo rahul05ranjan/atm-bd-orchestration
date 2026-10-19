@@ -255,6 +255,7 @@ class Hook:
         self.env = dict(os.environ)
         self.lead_env = {**self.env, "ATM_IDENTITY": self.lead, "ATM_TEAM": team}
         self.github = "ok"
+        self.github_error = ""
         self.closed, self.assigned = [], []
         self.task = values[{"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role]]
         self.key = [self.task, values["verdict"], values.get("commit", "")]
@@ -274,6 +275,10 @@ class Hook:
             raise CloseError("COMMAND.FAILED", result.stderr.strip() or result.stdout.strip(),
                              f"Repair {' '.join(argv[:3])} and rerun with the same vars file.")
         return result
+
+    def record_github_failure(self, argv, detail):
+        # Each failed attempt overwrites this, so the result names the last one.
+        self.github_error = f"{' '.join(argv)}: {str(detail).strip() or 'no output'}"
 
     def json(self, argv, **kwargs):
         self.last_json_argv = list(argv)
@@ -388,20 +393,25 @@ class Hook:
         remote_ref = f"refs/heads/{values['branch']}"
         for _attempt in range(3):
             try:
-                remote = self.run(["git", "ls-remote", "origin", remote_ref], git=True, check=False)
+                argv = ["git", "ls-remote", "origin", remote_ref]
+                remote = self.run(argv, git=True, check=False)
                 if remote.returncode:
+                    self.record_github_failure(argv, remote.stderr)
                     continue
                 remote_fields = remote.stdout.split()
                 if not remote_fields or remote_fields[0] != head:
                     raise CloseError("HEAD.NOT_PUSHED", "origin head differs from HEAD", "Push this branch and retry.")
-                fetched = self.run(["git", "fetch", "origin"], git=True, check=False)
+                argv = ["git", "fetch", "origin"]
+                fetched = self.run(argv, git=True, check=False)
                 if fetched.returncode:
+                    self.record_github_failure(argv, fetched.stderr)
                     continue
                 remote_available = True
                 break
             except CloseError as error:
                 if error.code != "COMMAND.FAILED":
                     raise
+                self.record_github_failure(argv, error)
         if not remote_available:
             self.github = "unavailable"
             tracking_ref = f"refs/remotes/origin/{values['branch']}"
@@ -428,6 +438,7 @@ class Hook:
             except CloseError as error:
                 if error.code not in ("COMMAND.FAILED", "COMMAND.INVALID"):
                     raise
+                self.record_github_failure(self.last_json_argv, error)
                 continue
             if not any(str(pr["number"]) == str(values["pr_number"]) and pr["head"]["sha"] == head for pr in prs):
                 raise CloseError("PR.NOT_FOUND", "no open PR for this branch at HEAD", "Open the PR at the pushed head and supply its number.")
@@ -602,6 +613,8 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
         escalated = hook.dev(args.skip_checks) if args.role in ("dev", "fix") else hook.sanity() if args.role == "sanity" else hook.qa()
         result = {"role": args.role, "bead": hook.task, "commit": values.get("commit", ""), "pr_number": values.get("pr_number", ""),
                   "github": hook.github, "assigned": hook.assigned, "closed": hook.closed, "elapsed_s": max(0, clock() - started)}
+        if hook.github == "unavailable":
+            result["github_error"] = hook.github_error
         if escalated:
             result["escalated"] = escalated
         output = {"ok": result}
