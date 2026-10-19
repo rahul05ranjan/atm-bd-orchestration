@@ -509,7 +509,7 @@ class Hook:
                                              "pr_url": values["pr_url"]})
         reason = f"not reproducible: {values['evidence']}" if values["outcome"] == "not_reproducible" else f"{'fixed' if self.role == 'fix' else 'dev complete'} at {values['commit']}"
         self.close_bead(values["checked_bead"], reason)
-        if assign:
+        if assign and not open_assignment:
             self.send(self.lead, template)
         if assign:
             self.run(["atm", "task", "assign", self.config["dev_sanity_member"], "--task-id", sanity,

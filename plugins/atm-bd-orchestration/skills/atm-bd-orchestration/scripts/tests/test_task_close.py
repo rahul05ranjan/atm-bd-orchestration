@@ -548,6 +548,12 @@ def test_second_run_after_success_sends_nothing(tmp_path, monkeypatch, role, ver
     assert len(world.messages) == sent
 
 
+def test_changed_sha_rerun_of_open_sanity_reassigns_without_a_second_report(world):
+    assert "ok" in world.run()
+    assert "ok" in world.run(commit="c" * 40)
+    assert [item["type"] for item in world.messages] == ["dev-complete", "dev-sanity-task", "dev-sanity-task"]
+
+
 def test_replay_with_changed_verdict_or_head_is_conflict(world):
     assert "ok" in world.run("sanity")
     assert world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "different"}])["err"]["code"] == "REPLAY.CONFLICT"
@@ -649,9 +655,9 @@ def test_not_reproducible_retry_uses_current_stack_top(world, boundary):
     assert len(assignments) == (2 if boundary == 4 else 1)  # a replay after a moved top re-assigns the new sha
     assert assignments[-1]["values"]["branch"] == "moved-top"
     assert assignments[-1]["values"]["commit"] == "c" * 40
-    # a crash after the report (boundary 3) or after the old-sha assign (boundary 4) makes the replay
-    # report and assign the moved sha: the lead hears about each sha once
-    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == (2 if boundary in (3, 4) else 1)
+    # a crash after the report (boundary 3) makes the replay report again; after the assign (boundary 4)
+    # the sanity task is open, so the replay assigns the moved sha without a second report
+    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == (2 if boundary == 3 else 1)
 
 
 def test_shared_contract_covers_all_role_templates_and_ids(world):
