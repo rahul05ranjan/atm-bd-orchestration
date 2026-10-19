@@ -17,5 +17,5 @@ with the same timeout and five-second retry, then use the `sc-gh-stack` recipes
 to repair only this layer. Never rewrite a layer with children. Release the
 claim with `--if-assignee "$ATM_IDENTITY"` and retry the script once. An
 unrecoverable result remains `stack_failed`, with the lock released and the
-ledger unchanged. Make no ATM writes, do not send the dev a FAIL, and do not
-escalate to a person.
+ledger unchanged. Make no ATM writes, never refuse the task, do not send the
+dev a FAIL, and do not escalate to a person.

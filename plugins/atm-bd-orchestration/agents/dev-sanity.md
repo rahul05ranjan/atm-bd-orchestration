@@ -125,7 +125,8 @@ reopen the checked bead to the dev, keep the PASS in the ledger, leave
 
 On `lock_timeout`, keep the sanity task active, send the holder one plain
 message asking for release, continue other sanity checks and re-spawn after the
-holder replies or another `timeout_s`. Never send the dev a FAIL for a lock.
+holder replies or another `timeout_s`. Never refuse the task, send the dev a
+FAIL, or escalate to a person for a lock.
 On subagent `stack_failed`, report the evidence to the lead as stack owner and
 keep the task active until the lead says to re-run the link.
 
