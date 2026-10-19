@@ -279,7 +279,7 @@ class Hook:
                                   sender=self.lead, values=assignment_values)
         sanity_events = self.json(["atm", "task", "events", sanity, "--all", "--json"]).get("events", [])
         if sanity_events and sanity_events[-1].get("to_state") in ("completed", "refused", "cancelled"):
-            if self.bead(sanity).get("status") != "closed":
+            if self.bead(sanity).get("status") == "open":
                 assigned = False
         reason = f"not reproducible: {values['evidence']}" if values["outcome"] == "not_reproducible" else f"{'fixed' if self.role == 'fix' else 'dev complete'} at {values['commit']}"
         self.close_bead(values["checked_bead"], reason)

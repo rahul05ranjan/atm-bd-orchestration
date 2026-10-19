@@ -357,6 +357,16 @@ def test_same_head_dev_retry_reassigns_sanity_after_fail(world):
     assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 2
 
 
+def test_dev_replay_does_not_bypass_round_cap(world):
+    assert "ok" in world.run()
+    sanity = world.values["sanity_bead"]
+    world.beads[sanity]["metadata"]["sanity_round"] = 5
+    assert world.run("sanity", verdict="FAIL", undone=[{"number": 1, "reason": "not implemented"}])["ok"]["escalated"] == "SANITY.ROUND_CAP"
+    assert "ok" in world.run("dev", verdict="PASS", undone=[])
+    assert world.tasks[sanity][-1]["to_state"] == "completed"
+    assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 1
+
+
 @pytest.mark.parametrize("boundary", [1, 2, 3, 4])
 def test_not_reproducible_replay_pins_first_handoff_when_top_moves(world, boundary):
     for field in ("branch", "commit", "pr_number"):
