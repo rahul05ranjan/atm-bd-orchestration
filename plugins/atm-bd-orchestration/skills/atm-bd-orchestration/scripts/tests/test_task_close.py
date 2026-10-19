@@ -510,14 +510,19 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
     baseline = World(baseline_root, monkeypatch)
     changes = dict(verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
     assert "ok" in baseline.run(role, **changes)
+    # each baseline send, keyed by the boundary that commits it: the next write is its gating write
+    sends = [index for index, (argv, _) in enumerate(baseline.writes) if argv[:2] == ["atm", "send"]]
+    gated = {index + 1: index for index in sends if index + 1 < len(baseline.writes)}
+    # the baseline messages come from the writes that send or assign, in write order
+    notices = [index for index, (argv, _) in enumerate(baseline.writes) if argv[:2] == ["atm", "send"] or argv[:3] == ["atm", "task", "assign"]]
+    notice_of = {write: (item["type"], item["recipient"]) for write, item in zip(notices, baseline.messages)}
     for boundary in range(1, len(baseline.writes) + 1):
         root = tmp_path / f"boundary-{boundary}"
         root.mkdir()
         world = World(root, monkeypatch)
         world.fail_after = boundary
         assert "err" in world.run(role, **changes)
-        crashed = world.writes[-1][0]
-        crashed_message = (world.messages[-1]["type"], world.messages[-1]["recipient"]) if crashed[:2] == ["atm", "send"] else None
+        assert world.writes[-1][0][:3] == baseline.writes[boundary - 1][0][:3], boundary
         world.fail_after = None
         result = world.run(role)
         assert "ok" in result, (boundary, result)
@@ -529,10 +534,12 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
                 assert world.tasks[task] == baseline.tasks[task]
         expected = Counter((item["type"], item["recipient"]) for item in baseline.messages)
         actual = Counter((item["type"], item["recipient"]) for item in world.messages)
-        if crashed[:2] == ["atm", "send"]:
-            # the send committed before the write that gates it: the replay sends that one message again
-            expected[crashed_message] += 1
-        assert actual == expected, (boundary, crashed[:4])
+        if boundary in gated:
+            # a crash after a send and before its gating write: the replay sends that notice again
+            gate = baseline.writes[boundary][0]
+            assert gate[:3] in (["atm", "task", "close"], ["atm", "task", "assign"]), (boundary, gate[:4])
+            expected[notice_of[gated[boundary]]] += 1
+        assert actual == expected, (boundary, world.writes[-1][0][:4])
         assert not any(argv[:2] == ["atm", "search"] for argv, _ in world.calls)
 
 
