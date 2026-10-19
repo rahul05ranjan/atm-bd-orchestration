@@ -123,7 +123,8 @@ def validate_command_json(argv, data):
             if isinstance(metadata, dict) and "layers" in metadata:
                 layers = metadata["layers"]
                 require(isinstance(layers, list), field + ".metadata.layers", "an array")
-                for layer_index, layer in enumerate(layers):
+                if layers:
+                    layer_index, layer = len(layers) - 1, layers[-1]
                     layer_field = f"{field}.metadata.layers[{layer_index}]"
                     require(isinstance(layer, dict), layer_field, "an object")
                     for name in ("branch", "head"):
