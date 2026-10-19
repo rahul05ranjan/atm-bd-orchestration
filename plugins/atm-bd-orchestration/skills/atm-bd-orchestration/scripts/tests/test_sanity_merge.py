@@ -1,5 +1,6 @@
 """sanity-merge accepts exactly one result per deliverable, folds in the lint result and re-checks the tree."""
 import copy
+from functools import partial
 import hashlib
 import json
 from pathlib import Path
@@ -8,7 +9,7 @@ import tempfile
 import time
 import unittest
 
-from bounded_process import run_bounded
+from bounded_process import HANG_GUARD_SECONDS, run_bounded as run_process
 from jev_receipts import CLIENT, env, receipted, split
 from rendering import render
 
@@ -17,6 +18,7 @@ SCRIPT = ROOT / "scripts/sanity-merge"
 TEMPLATES = ROOT / "templates"
 TASK, DEV, SPRINT, BRANCH = "{{ bead_prefix }}-d-4-sanity", "{{ bead_prefix }}-d-4", "d-4", "sprint/d-4-x"
 FINDING = {"kind": "skipped", "file": "crates/x/src/lib.rs", "line": 3, "issue": "no 503 test"}
+run_bounded = partial(run_process, timeout=HANG_GUARD_SECONDS)
 def without(envelope, key):
     return {k: v for k, v in envelope.items() if k != key}
 

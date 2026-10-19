@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from bounded_process import HANG_GUARD_SECONDS, run_bounded
+from bounded_process import HANG_GUARD_SECONDS, run_bounded as run_process
 from jev_receipts import CLIENT, env as receipt_env, receipted, split
 from rendering import render
 
@@ -28,6 +28,7 @@ LOADER.exec_module(HISTORY)
 SPLIT_LOADER = importlib.machinery.SourceFileLoader("sanity_split_tests", str(Path(__file__).parent / "test_sanity_split.py"))
 SPLIT_TESTS = importlib.util.module_from_spec(importlib.util.spec_from_loader(SPLIT_LOADER.name, SPLIT_LOADER))
 SPLIT_LOADER.exec_module(SPLIT_TESTS)
+run_bounded = partial(run_process, timeout=HANG_GUARD_SECONDS)
 
 def record(**changes):
     value = dict(run_id="run-one", reviewer="sanity-llm", commit="a" * 40,
@@ -283,11 +284,6 @@ with socket.socket(fileno=fd) as control, open(path, 'a') as output:
                 HISTORY.append_record(self.log, next_record)
                 self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()],
                                  ([record()] if existing else []) + [next_record])
-
-    def test_process_timeout_names_command(self):
-        with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired(["script", "--arg"], 60)):
-            with self.assertRaisesRegex(AssertionError, "script.*--arg"):
-                run_bounded(["script", "--arg"])
 
     def test_retry_under_another_time_zone_is_the_same_row(self):
         HISTORY.append_record(self.log, record())

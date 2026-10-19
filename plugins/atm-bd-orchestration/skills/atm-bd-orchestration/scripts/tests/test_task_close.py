@@ -59,7 +59,7 @@ class World:
         return dict(event="assigned", message_id=f"assignment-{number}", seq=number,
                     at=f"2026-10-19T00:{number:02d}:00Z", to_state="assigned")
 
-    def run(self, role="dev", *, command_timeout=hook.COMMAND_TIMEOUT, skip_checks=False, **changes):
+    def run(self, role="dev", *, skip_checks=False, **changes):
         self.values.update(changes)
         task = self.values.get({"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role])
         if task in self.tasks and not self.tasks[task]:
@@ -68,8 +68,7 @@ class World:
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             args = ["--role", role, "--vars", str(self.path)] + (["--skip-checks"] if skip_checks else [])
-            result = hook.main(args, runner=self, clock=lambda: 42,
-                               command_timeout=command_timeout)
+            result = hook.main(args, runner=self, clock=lambda: 42)
         assert stdout.getvalue() == stderr.getvalue()
         output = json.loads(stdout.getvalue())
         assert result == int("err" in output)
@@ -323,17 +322,19 @@ def test_github_retries_and_falls_back_without_requiring_pr_base(world, failure)
 
 
 @pytest.mark.parametrize("command", [["gh", "api"], ["git", "ls-remote"], ["git", "fetch"]])
-def test_network_timeouts_retry_then_fall_back(world, command):
+def test_network_timeouts_retry_then_fall_back(world, command, monkeypatch):
+    monkeypatch.setattr(hook, "COMMAND_TIMEOUT", 7)
     world.timeout_command = command
-    assert world.run(command_timeout=7)["ok"]["github"] == "unavailable"
+    assert world.run()["ok"]["github"] == "unavailable"
     calls = [(argv, kwargs) for argv, kwargs in world.calls if argv[:len(command)] == command]
     assert len(calls) == 3
     assert all(kwargs["timeout"] == 7 for _, kwargs in world.calls)
 
 
-def test_local_timeout_is_typed_and_names_command_and_deadline(world):
+def test_local_timeout_is_typed_and_names_command_and_deadline(world, monkeypatch):
+    monkeypatch.setattr(hook, "COMMAND_TIMEOUT", 7)
     world.timeout_command = ["git", "rev-parse"]
-    error = world.run(command_timeout=7)["err"]
+    error = world.run()["err"]
     assert error["code"] == "COMMAND.FAILED"
     assert "git" in error["message"] and "rev-parse" in error["message"] and "7s" in error["message"]
 

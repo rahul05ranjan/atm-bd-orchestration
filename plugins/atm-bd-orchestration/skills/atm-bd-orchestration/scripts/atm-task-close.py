@@ -228,10 +228,9 @@ def validate(values, role):
 
 
 class Hook:
-    def __init__(self, role, values, path, runner, clock, command_timeout=COMMAND_TIMEOUT):
+    def __init__(self, role, values, path, runner, clock):
         self.role, self.values, self.path = role, values, Path(path).resolve()
         self.runner, self.clock = runner, clock
-        self.command_timeout = command_timeout
         self.root = Path(values["primary_checkout"]).resolve()
         self.worktree = Path(values["worktree_path"]).resolve()
         self.identity = os.environ.get("ATM_IDENTITY", "")
@@ -253,9 +252,9 @@ class Hook:
         try:
             result = self.runner(list(argv), cwd=self.worktree if git else self.root,
                                  env=self.lead_env if lead else self.env, capture_output=True, text=True,
-                                 timeout=self.command_timeout)
+                                 timeout=COMMAND_TIMEOUT)
         except subprocess.TimeoutExpired as error:
-            raise CloseError("COMMAND.FAILED", f"{list(argv)!r} timed out after {self.command_timeout}s",
+            raise CloseError("COMMAND.FAILED", f"{list(argv)!r} timed out after {COMMAND_TIMEOUT}s",
                              f"Repair {argv[0]} and rerun with the same vars file.") from error
         except (OSError, subprocess.SubprocessError) as error:
             raise CloseError("COMMAND.FAILED", str(error), f"Repair {argv[0]} and rerun with the same vars file.") from error
@@ -577,7 +576,7 @@ class Hook:
         self.run(["atm", "send", self.lead, message])
 
 
-def main(argv=None, runner=subprocess.run, clock=time.monotonic, command_timeout=COMMAND_TIMEOUT):
+def main(argv=None, runner=subprocess.run, clock=time.monotonic):
     parser = Parser(description=__doc__)
     parser.add_argument("--role", required=True, choices=ROLES)
     parser.add_argument("--vars", required=True, type=Path)
@@ -587,7 +586,7 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, command_timeout
         args = parser.parse_args(argv)
         values = read_vars(args.vars)
         validate_shared_vars(values, args.role)
-        hook = Hook(args.role, values, args.vars, runner, clock, command_timeout)
+        hook = Hook(args.role, values, args.vars, runner, clock)
         started = clock()
         escalated = hook.dev(args.skip_checks) if args.role in ("dev", "fix") else hook.sanity() if args.role == "sanity" else hook.qa()
         result = {"role": args.role, "bead": hook.task, "commit": values.get("commit", ""), "pr_number": values.get("pr_number", ""),

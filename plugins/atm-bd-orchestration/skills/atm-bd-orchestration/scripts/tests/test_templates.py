@@ -8,20 +8,11 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from bounded_process import run_bounded
 from rendering import render
 
 
 ROOT = Path(__file__).parents[2]
-COMMAND_TIMEOUT = 30
-
-
-def run_bounded(argv, **kwargs):
-    try:
-        return subprocess.run(argv, timeout=COMMAND_TIMEOUT, stdin=subprocess.DEVNULL, **kwargs)
-    except subprocess.TimeoutExpired as error:
-        raise AssertionError(f"{argv!r} timed out after {COMMAND_TIMEOUT}s; stdout={error.stdout!r}; stderr={error.stderr!r}") from error
-
-
 class TemplateContractTests(unittest.TestCase):
     def test_sanity_fail_report_explains_handoff_without_finding_beads(self):
         variables = {
@@ -62,6 +53,18 @@ class TemplateContractTests(unittest.TestCase):
                 run_bounded(command, capture_output=True, text=True)
         self.assertEqual(runner.call_args.kwargs["timeout"], 30)
         self.assertEqual(runner.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_bounded_command_passes_input_and_custom_runner(self):
+        calls = []
+
+        def runner(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return "result"
+
+        self.assertEqual(run_bounded(["command"], timeout=60, runner=runner, input="payload"), "result")
+        self.assertEqual(run_bounded(["command"], runner=runner, input=None), "result")
+        self.assertEqual(calls, [(["command"], {"timeout": 60, "input": "payload"}),
+                                 (["command"], {"timeout": 30, "input": None, "stdin": subprocess.DEVNULL})])
 
     def test_dev_and_fix_completion_descriptions_identify_send_report_not_task_close(self):
         import yaml

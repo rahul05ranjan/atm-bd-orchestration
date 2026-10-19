@@ -20,35 +20,18 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
+from bounded_process import run_bounded
 import rendering
 
 ROOT = Path(__file__).parents[2]
 AGENTS = ROOT.parents[1] / "agents"
 TEMPLATES = ROOT / "templates"
 EXAMPLES = ROOT / "examples"
-COMMAND_TIMEOUT = 30
-
-
-def run_bounded(argv, **kwargs):
-    try:
-        return subprocess.run(argv, timeout=COMMAND_TIMEOUT, stdin=subprocess.DEVNULL, **kwargs)
-    except subprocess.TimeoutExpired as error:
-        raise AssertionError(f"{argv!r} timed out after {COMMAND_TIMEOUT}s; stdout={error.stdout!r}; stderr={error.stderr!r}") from error
-
-
 def jev_environment():
     return {key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}
 
 
 class BoundedCommandTests(unittest.TestCase):
-    def test_timeout_reports_command_and_captured_output(self):
-        error = subprocess.TimeoutExpired(["script", "--arg"], 30, output=b"partial out", stderr=b"partial err")
-        with patch.object(subprocess, "run", side_effect=error) as runner:
-            with self.assertRaisesRegex(AssertionError, "script.*--arg.*partial out.*partial err"):
-                run_bounded(["script", "--arg"], capture_output=True, text=True)
-        self.assertEqual(runner.call_args.kwargs["timeout"], 30)
-        self.assertEqual(runner.call_args.kwargs["stdin"], subprocess.DEVNULL)
-
     def test_jev_environment_excludes_ambient_settings(self):
         with patch.dict(os.environ, {"PATH": "/test/bin", "HOME": "/test/home", "TYPESAFE_API_KEY": "secret",
                                      "JEV_URL": "ambient"}, clear=True):
