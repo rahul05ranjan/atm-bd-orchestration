@@ -41,6 +41,7 @@
   "sanity_task_id": "atm-bj-1.group-sanity",
   "sprint": "bj-1",
   "stack": "phase-bj",
+  "stack_bead": "atm-phase-bj.stack",
   "stack_view": "Not linked until sanity PASS.",
   "stacked": {
     "result": "stacked",

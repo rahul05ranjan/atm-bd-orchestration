@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -23,7 +24,9 @@ EXAMPLES = SCRIPTS.parent / "examples"
 class World:
     def __init__(self, root, monkeypatch):
         self.root = root
-        self.values = json.loads((EXAMPLES / "task-close-vars-dev.json").read_text())
+        self.values = {}
+        for role in ("qa", "sanity", "fix", "dev"):
+            self.values.update(json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text()))
         self.values.update(primary_checkout=str(root), worktree_path=str(root))
         self.values["carry_forward"] = ""
         (root / ".atm-bd").mkdir()
@@ -263,6 +266,25 @@ def test_shared_contract_strict_render_precedes_task_event_reads(world):
     assert world.calls == []
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_vars_validation_runs_once_before_live_commands(world, monkeypatch, missing):
+    original_validate = hook.validate
+    calls = []
+
+    def validate(values, role):
+        calls.append(role)
+        return original_validate(values, role)
+
+    monkeypatch.setattr(hook, "validate", validate)
+    if missing:
+        world.values.pop("base")
+        assert world.run()["err"]["code"] == "VARS.MISSING"
+        assert not world.calls
+    else:
+        assert "ok" in world.run()
+    assert calls == ["dev"]
+
+
 @pytest.mark.parametrize("argv", [[], ["--role", "other", "--vars", "/absent"], ["--vars", "/absent"]])
 def test_argument_errors_use_typed_json(argv):
     stdout, stderr = io.StringIO(), io.StringIO()
@@ -274,9 +296,11 @@ def test_argument_errors_use_typed_json(argv):
 
 @pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
 def test_every_role_required_field_is_validated_before_commands(world, role):
-    original = dict(world.values)
+    original = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    original.update(primary_checkout=str(world.root), worktree_path=str(world.root))
     required = hook.header(hook.TEMPLATES / "task-close-vars.j2")["required_variables_by_role"][role]
-    for field in required:
+    assert set(original) == set(required)
+    for field in original:
         world.values = dict(original)
         del world.values[field]
         assert world.run(role)["err"]["code"] == "VARS.MISSING", (role, field)
@@ -330,8 +354,6 @@ def test_remote_git_failures_retry_then_use_cached_local_checks(world, failed_co
 
 
 def test_ledger_top_overrides_static_target(world):
-    from bead_schema import StackMetadata
-
     metadata = world.beads["atm-phase-bj.stack"]["metadata"]
     metadata["layers"] = [
         {"branch": "irrelevant-broken-lower-layer", "pr": 350, "head": "0" * 40,
@@ -339,13 +361,33 @@ def test_ledger_top_overrides_static_target(world):
         {"branch": "new-top", "pr": 351, "head": "b" * 40,
          "base": "irrelevant-broken-lower-layer", "linked": True},
     ]
-    validated = StackMetadata.model_validate(metadata)
-    assert len(validated.layers) == 2
-    assert validated.layers[-1].branch == "new-top"
+    assert len(metadata["layers"]) == 2
+    assert metadata["layers"][-1]["branch"] == "new-top"
+    assert metadata["layers"][-1]["head"] == "b" * 40
     assert "ok" in world.run()
     calls = [argv for argv, _kwargs in world.calls]
     assert ["git", "merge-base", "--is-ancestor", "origin/new-top", world.values["commit"]] in calls
     assert not any("irrelevant-broken-lower-layer" in str(argv) for argv in calls)
+
+
+def test_stack_bead_id_comes_from_dispatch_vars(world):
+    original = "atm-phase-bj.stack"
+    selected = "an-unrelated-ledger-name"
+    world.beads[selected] = world.beads.pop(original)
+    world.beads[selected]["id"] = selected
+    assert "ok" in world.run(stack_bead=selected)
+    assert any(argv[:3] == ["bd", "show", selected] for argv, _ in world.calls)
+    assert not any(argv[:3] == ["bd", "show", original] for argv, _ in world.calls)
+
+
+def test_qa_does_not_require_stack_bead(world):
+    world.values.pop("stack_bead")
+    assert "ok" in world.run("qa")
+
+
+def test_unrelated_bead_layers_are_not_stack_schema_validated(world):
+    world.beads[world.values["checked_bead"]]["metadata"]["layers"] = "unrelated data"
+    assert "ok" in world.run()
 
 
 def test_sanity_lookup_fallback_and_actionable_missing_bead(world):
@@ -400,10 +442,12 @@ def test_sanity_requires_stack_except_not_reproducible_fix(world):
     assert "ok" in world.run("sanity", outcome="not_reproducible", carry_forward=world.values["checked_bead"])
 
 
-@pytest.mark.parametrize("cap", [2, 5])
-def test_failure_cap_exceeds_limit_and_counts_distinct_assignments(world, cap):
+@pytest.mark.parametrize("configured_cap", [None, 2])
+def test_failure_cap_exceeds_limit_and_counts_distinct_assignments(world, configured_cap):
     config = world.root / hook.repo_config.RELATIVE_PATH
-    config.write_text(config.read_text() + f"max_sanity_rounds: {cap}\n")
+    if configured_cap is not None:
+        config.write_text(config.read_text() + f"max_sanity_rounds: {configured_cap}\n")
+    cap = configured_cap if configured_cap is not None else 5
     bead = world.values["sanity_bead"]
     checked = world.values["checked_bead"]
     for number in range(1, cap + 2):
@@ -420,6 +464,25 @@ def test_failure_cap_exceeds_limit_and_counts_distinct_assignments(world, cap):
             assert output["ok"]["escalated"] == "SANITY.ROUND_CAP"
             assert world.beads[checked]["status"] == "closed"
             assert world.beads[bead]["status"] == "in_progress"
+    cap_messages = [message for message in world.messages if "SANITY.ROUND_CAP" in message["body"]]
+    assert len(cap_messages) == 1
+    assert cap_messages[0]["recipient"] == "phase-lead"
+
+
+def test_sanity_fail_message_contains_exact_undone_deliverables(world):
+    undone = [{"number": 2, "reason": "missing source evidence"},
+              {"number": 5, "reason": "line 5 needs review"}]
+    assert "ok" in world.run("sanity", verdict="FAIL", undone=undone)
+    messages = [message for message in world.messages if message["type"] == "sanity-fail"]
+    assert len(messages) == 1
+    root = ET.fromstring(messages[0]["body"])
+    assert root.attrib == {"bead": world.values["checked_bead"], "sprint": world.values["sprint"]}
+    lines = root.find("description").text.splitlines()
+    assert lines == [
+        f"{world.values['checked_title']}: sanity round {world.values['round']} of {world.values['max_sanity_rounds']}.",
+        f"Branch {world.values['branch']}, PR #{world.values['pr_number']}, commit {world.values['commit']}.",
+        "2. NOT complete: missing source evidence", "5. NOT complete: line 5 needs review",
+    ]
 
 
 def test_metadata_update_preserves_concurrent_keys_and_writes_fail_counter_atomically(world):
@@ -656,16 +719,35 @@ def test_shared_contract_covers_all_role_templates_and_ids(world):
         role_id = "sanity_task_id" if name.startswith("dev-sanity") else "qa_task_id" if name.startswith("qa-") else "dev_task_id"
         if name != "sanity-fail.xml.j2":
             assert world.values[role_id] in body
-    assert "push" in hook.sc_render.render(hook.TEMPLATES / "rebase-required.xml.j2", world.values).lower()
+    rebase = ET.fromstring(hook.sc_render.render(hook.TEMPLATES / "rebase-required.xml.j2", world.values))
+    assert rebase.attrib["bead"] == world.values["checked_bead"]
+    description = rebase.find("description").text
+    assert world.values["branch"] in description
+    assert world.values["stacked"]["top"]["branch"] in description
+    assert world.values["stacked"]["top"]["head"] in description
+    assert "push" in description.lower()
 
 
 @pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
 def test_each_role_example_renders_every_shared_template(role):
     values = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
     hook.validate(values, role)
-    for name in ("dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2",
-                 "dev-sanity-complete.md.j2", "sanity-fail.xml.j2", "qa-template.xml.j2", "qa-complete.md.j2"):
+    common = ("dev-sanity-complete.md.j2", "sanity-fail.xml.j2", "qa-template.xml.j2", "qa-complete.md.j2")
+    names = {
+        "dev": ("dev-complete.md.j2", "dev-sanity-template.xml.j2", *common, "rebase-required.xml.j2"),
+        "fix": ("fix-complete.md.j2", "dev-sanity-template.xml.j2", *common, "rebase-required.xml.j2"),
+        "sanity": common,
+        "qa": ("qa-complete.md.j2",),
+    }[role]
+    for name in names:
         hook.sc_render.render(hook.TEMPLATES / name, values)
+
+
+@pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
+def test_each_role_example_executes_its_close_path(world, role):
+    world.values = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    world.values.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    assert "ok" in world.run(role)
 
 
 @pytest.mark.parametrize("role, expected_writes", [
@@ -751,7 +833,7 @@ def test_d1_repository_config_errors_name_generated_path(world, contents):
     assert world.calls == []
 
 
-@pytest.mark.parametrize("field", ["bead_prefix", "dev_sanity_member"])
+@pytest.mark.parametrize("field", ["dev_sanity_member"])
 def test_d1_missing_repository_field_names_correction(world, field):
     path = world.root / hook.repo_config.RELATIVE_PATH
     values = hook.yaml.safe_load(path.read_text())
@@ -785,9 +867,9 @@ def test_d1_invalid_path_fields_name_the_required_string(world, field):
 
 @pytest.mark.parametrize("metadata,field", [
     ([], "$[0].metadata"),
-    ({"layers": {}}, "$[0].metadata.layers"),
-    ({"layers": ["invalid"]}, "$[0].metadata.layers[0]"),
-    ({"layers": [{"branch": "top"}]}, "$[0].metadata.layers[0].head"),
+    ({"layers": {}}, "metadata.layers"),
+    ({"layers": ["invalid"]}, "last stack layer"),
+    ({"layers": [{"branch": "top"}]}, "last stack layer"),
 ])
 def test_d1_malformed_bead_shapes_name_producer_and_field(world, metadata, field):
     bead = "atm-phase-bj.stack"

@@ -31,7 +31,6 @@
   "qa_bead": "atm-bj-1.group-qa",
   "qa_task_id": "atm-bj-1.group-qa",
   "rebased_onto": "integrate/phase-bj",
-  "resolution_md": "Implemented and verified.",
   "reviewers_md": "Required reviewers pass.",
   "reviewers_round1": [
     "req-qa"
@@ -41,6 +40,7 @@
   "sanity_task_id": "atm-bj-1.group-sanity",
   "sprint": "bj-1",
   "stack": "phase-bj",
+  "stack_bead": "atm-phase-bj.stack",
   "stack_view": "Not linked until sanity PASS.",
   "stacked": {
     "result": "stacked",

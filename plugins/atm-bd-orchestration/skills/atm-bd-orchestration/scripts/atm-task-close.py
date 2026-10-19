@@ -64,12 +64,10 @@ def read_vars(path):
 
 def validate_shared_vars(values, role):
     """Strictly render the shared dispatch contract before inspecting live state."""
+    validate(values, role)
     try:
         sc_render.render(TEMPLATES / "task-close-vars.j2", values)
     except sc_render.RenderError as error:
-        # Preserve the role-specific typed error when strict rendering rejects
-        # a missing required field; this validation performs no live reads.
-        validate(values, role)
         raise CloseError("VARS.INVALID", str(error),
                          "Supply every field required by the shared task-close vars contract.") from error
 
@@ -107,7 +105,7 @@ def read_config(root, role, verdict):
             fix = f"Repair the readable UTF-8 YAML mapping in {path} at the location reported in the error."
         raise CloseError("CONFIG.INVALID", f"{path}: {error}",
                          fix) from error
-    fields = ["bead_prefix", "dev_sanity_member"] if role in ("dev", "fix") else ["qa_member"] if role == "sanity" and verdict == "PASS" else []
+    fields = ["dev_sanity_member"] if role in ("dev", "fix") else ["qa_member"] if role == "sanity" and verdict == "PASS" else []
     for field in fields:
         value = config.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -139,15 +137,6 @@ def validate_command_json(argv, data):
             require(isinstance(row, dict), field, "a bead object")
             metadata = row.get("metadata")
             require(metadata is None or isinstance(metadata, dict), field + ".metadata", "an object or null")
-            if isinstance(metadata, dict) and "layers" in metadata:
-                layers = metadata["layers"]
-                require(isinstance(layers, list), field + ".metadata.layers", "an array")
-                if layers:
-                    layer_index, layer = len(layers) - 1, layers[-1]
-                    layer_field = f"{field}.metadata.layers[{layer_index}]"
-                    require(isinstance(layer, dict), layer_field, "an object")
-                    for name in ("branch", "head"):
-                        require(isinstance(layer.get(name), str) and bool(layer[name].strip()), layer_field + "." + name, "a non-empty string")
     elif argv[:3] == ["atm", "task", "events"]:
         require(isinstance(data, dict), "$", "an object")
         events = data.get("events")
@@ -187,6 +176,8 @@ def validate(values, role):
     if unknown:
         raise CloseError("VARS.UNKNOWN", ", ".join(sorted(unknown)), "Remove variables no shared template declares.")
     names = ["phase", "sprint", "primary_checkout", "worktree_path", "checked_bead", "dev_task_id", "sanity_task_id", "qa_task_id"]
+    if role in ("dev", "fix", "sanity"):
+        names.append("stack_bead")
     if values["outcome"] != "not_reproducible":
         names += ["branch", "commit", "pr_number"]
     elif not re.search(r"\S+:\d+", str(values["evidence"])):
@@ -194,7 +185,7 @@ def validate(values, role):
     for name in names:
         if not str(values[name] or "").strip():
             raise CloseError("VARS.EMPTY", name, f"Populate {name} in the shared vars file.")
-    for name in ("primary_checkout", "worktree_path", "phase"):
+    for name in ("primary_checkout", "worktree_path", "phase", *(["stack_bead"] if role in ("dev", "fix", "sanity") else [])):
         if not isinstance(values[name], str):
             raise CloseError("VARS.INVALID", f"{name} must be a string, got {type(values[name]).__name__}",
                              f"Set {name} to a non-empty string in the lead's shared vars file.")
@@ -336,9 +327,8 @@ class Hook:
         return False
 
     def stack_top(self):
-        stack = f"{self.config['bead_prefix']}-phase-{self.values['phase']}.stack"
         return select_stack_top(
-            self.bead(stack), self.values["pr_target"],
+            self.bead(self.values["stack_bead"]), self.values["pr_target"],
             lambda branch: self.run(["git", "rev-parse", f"origin/{branch}"], git=True).stdout.strip(),
         )
 
@@ -556,7 +546,6 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, command_timeout
         args = parser.parse_args(argv)
         values = read_vars(args.vars)
         validate_shared_vars(values, args.role)
-        validate(values, args.role)
         hook = Hook(args.role, values, args.vars, runner, clock, command_timeout)
         started = clock()
         try:
