@@ -499,19 +499,22 @@ class Hook:
         assignment_values = json.loads(Path(path).read_text()) if path else values
         sanity_events = self.task_history[sanity]
         terminal = sanity_events and sanity_events[-1].get("to_state") in TERMINAL_STATES
-        assign = not terminal or self.bead(sanity).get("status") == "open"
+        open_assignment = bool(sanity_events) and not terminal
         checked_metadata = self.bead(values["checked_bead"]).get("metadata") or {}
-        if not assign and checked_metadata.get("commit") != assignment_values["commit"]:
+        sha_changed = checked_metadata.get("commit") != assignment_values["commit"]
+        assign = (not terminal or self.bead(sanity).get("status") == "open") and (sha_changed or not open_assignment)
+        if not assign and sha_changed:
             raise CloseError("REPLAY.CONFLICT", "sanity is closed at a different sha", "Request a new sanity assignment before changing the checked sha.")
         self.metadata(values["checked_bead"], {"commit": assignment_values["commit"], "branch": assignment_values["branch"], "pr_number": values.get("pr_number", ""),
                                              "pr_url": values["pr_url"]})
         reason = f"not reproducible: {values['evidence']}" if values["outcome"] == "not_reproducible" else f"{'fixed' if self.role == 'fix' else 'dev complete'} at {values['commit']}"
         self.close_bead(values["checked_bead"], reason)
         if assign:
+            self.send(self.lead, template)
+        if assign:
             self.run(["atm", "task", "assign", self.config["dev_sanity_member"], "--task-id", sanity,
                       "--template", str(TEMPLATES / "dev-sanity-template.xml.j2"), "--vars", str(path or self.path)], lead=True)
         self.assigned.append(sanity)
-        self.send(self.lead, template)
 
     def sanity(self):
         values = self.values
@@ -565,7 +568,9 @@ class Hook:
             self.update(values["checked_bead"], status="open", assignee=checked["assignee"])
         if record.get("status") != "open" or record.get("assignee"):
             self.update(bead, status="open", assignee="")
-        self.send(checked["assignee"], "sanity-fail.xml.j2")
+        events = self.task_history[bead]
+        if not (events and events[-1].get("to_state") in TERMINAL_STATES):
+            self.send(checked["assignee"], "sanity-fail.xml.j2")
         self.close_task(bead, "dev-sanity-complete.md.j2")
 
     def qa(self):
@@ -574,9 +579,11 @@ class Hook:
             return
         self.render("qa-complete.md.j2")
         self.close_bead(values["qa_bead"], f"{values['verdict']} at {values['commit']}")
+        events = self.task_history[values["qa_bead"]]
+        if not (events and events[-1].get("to_state") in TERMINAL_STATES):
+            message = f"QA {values['verdict']} {values['qa_bead']} commit={values['commit']} round={values['round']}"
+            self.run(["atm", "send", self.lead, message])
         self.close_task(values["qa_bead"], "qa-complete.md.j2")
-        message = f"QA {values['verdict']} {values['qa_bead']} commit={values['commit']} round={values['round']}"
-        self.run(["atm", "send", self.lead, message])
 
 
 def main(argv=None, runner=subprocess.run, clock=time.monotonic):

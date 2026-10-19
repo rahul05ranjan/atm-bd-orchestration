@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+from collections import Counter
 import copy
 import importlib.util
 import inspect
@@ -78,7 +79,8 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
     assert dict(hook.os.environ) == before
     calls = [argv for argv, _kwargs in world.calls]
     close_index = next(index for index, argv in enumerate(calls) if argv[:2] == ["bd", "close"])
-    assert calls[close_index + 1][:3] == ["atm", "task", "assign"]
+    assert calls[close_index + 1][:2] == ["atm", "send"]
+    assert calls[close_index + 2][:3] == ["atm", "task", "assign"]
     assert world.tasks[world.values["dev_task_id"]][-1]["to_state"] == "assigned"
     for argv, sender in world.writes:
         assert sender == ("phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller")
@@ -428,11 +430,11 @@ def test_cannot_run_resets_sanity_and_refuses_without_notice(world):
 @pytest.mark.parametrize("verdict", ["PASS", "FAIL"])
 def test_qa_closes_bead_before_task_and_sends_lead_status(world, verdict):
     assert "ok" in world.run("qa", verdict=verdict)
-    assert [argv[:2] for argv, _sender in world.writes] == [["bd", "close"], ["atm", "task"], ["atm", "send"]]
+    assert [argv[:2] for argv, _sender in world.writes] == [["bd", "close"], ["atm", "send"], ["atm", "task"]]
     assert world.messages[0]["recipient"] == "phase-lead"
     assert world.messages[0]["type"] is None
     assert world.messages[0]["body"] == f"QA {verdict} {world.values['qa_bead']} commit={world.values['commit']} round=1"
-    assert "--template" not in world.writes[-1][0]
+    assert "--template" not in world.writes[1][0]
 
 
 def test_close_key_is_triple_and_only_fail_counter_key_adds_assignment(world):
@@ -514,6 +516,8 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
         world = World(root, monkeypatch)
         world.fail_after = boundary
         assert "err" in world.run(role, **changes)
+        crashed = world.writes[-1][0]
+        crashed_message = (world.messages[-1]["type"], world.messages[-1]["recipient"]) if crashed[:2] == ["atm", "send"] else None
         world.fail_after = None
         result = world.run(role)
         assert "ok" in result, (boundary, result)
@@ -523,10 +527,25 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
                 assert world.tasks[task][-1]["to_state"] == "assigned"
             else:
                 assert world.tasks[task] == baseline.tasks[task]
-        expected = {(item["type"], item["recipient"]) for item in baseline.messages}
-        actual = {(item["type"], item["recipient"]) for item in world.messages}
-        assert actual == expected
+        expected = Counter((item["type"], item["recipient"]) for item in baseline.messages)
+        actual = Counter((item["type"], item["recipient"]) for item in world.messages)
+        if crashed[:2] == ["atm", "send"]:
+            # the send committed before the write that gates it: the replay sends that one message again
+            expected[crashed_message] += 1
+        assert actual == expected, (boundary, crashed[:4])
         assert not any(argv[:2] == ["atm", "search"] for argv, _ in world.calls)
+
+
+@pytest.mark.parametrize("role,verdict", [("dev", "PASS"), ("fix", "PASS"), ("sanity", "PASS"), ("sanity", "FAIL"), ("sanity", "CANNOT_RUN"), ("qa", "PASS"), ("qa", "FAIL")])
+def test_second_run_after_success_sends_nothing(tmp_path, monkeypatch, role, verdict):
+    changes = dict(verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
+    root = tmp_path / "world"
+    root.mkdir()
+    world = World(root, monkeypatch)
+    assert "ok" in world.run(role, **changes)
+    sent = len(world.messages)
+    assert "ok" in world.run(role)
+    assert len(world.messages) == sent
 
 
 def test_replay_with_changed_verdict_or_head_is_conflict(world):
@@ -576,7 +595,7 @@ def test_same_head_dev_retry_reassigns_sanity_after_fail(world):
     assert world.tasks[sanity][-1]["to_state"] == "assigned"
     assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 2
     assert "ok" in world.run("dev")
-    assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 3
+    assert len([item for item in world.messages if item["type"] == "dev-sanity-task"]) == 2
 
 
 @pytest.mark.parametrize("role", ["dev", "fix"])
@@ -627,10 +646,12 @@ def test_not_reproducible_retry_uses_current_stack_top(world, boundary):
     world.fail_after = None
     assert "ok" in world.run("fix")
     assignments = [item for item in world.messages if item["type"] == "dev-sanity-task"]
-    assert len(assignments) == (2 if boundary >= 3 else 1)
+    assert len(assignments) == (2 if boundary == 4 else 1)  # a replay after a moved top re-assigns the new sha
     assert assignments[-1]["values"]["branch"] == "moved-top"
     assert assignments[-1]["values"]["commit"] == "c" * 40
-    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == (2 if boundary == 4 else 1)
+    # a crash after the report (boundary 3) or after the old-sha assign (boundary 4) makes the replay
+    # report and assign the moved sha: the lead hears about each sha once
+    assert len([item for item in world.messages if item["type"] == "fix-complete"]) == (2 if boundary in (3, 4) else 1)
 
 
 def test_shared_contract_covers_all_role_templates_and_ids(world):
@@ -676,10 +697,10 @@ def test_each_role_example_executes_its_close_path(world, role):
 
 
 @pytest.mark.parametrize("role, expected_writes", [
-    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "task", "assign"], ["atm", "send"]]),
-    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "task", "assign"], ["atm", "send"]]),
+    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
+    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
     ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
-    ("qa", [["bd", "close"], ["atm", "task", "close"], ["atm", "send"]]),
+    ("qa", [["bd", "close"], ["atm", "send"], ["atm", "task", "close"]]),
 ])
 def test_each_role_command_order_and_identity(world, role, expected_writes):
     if role == "fix":
