@@ -703,6 +703,24 @@ REPO_DEFAULTS = ("team-lead", "just validate", "just lint", "quality-policy.md",
 class ConfigVariableTests(unittest.TestCase):
     """Repository values are required dispatch variables: no defaults, so a missing one fails the render."""
 
+    def test_qa_bead_render_matches_stage_qa_schema_and_rejects_empty_branch(self):
+        import sys
+        sys.path.insert(0, str(ROOT.parent / "atm-beads" / "scripts"))
+        import bead_schema
+
+        values = _example("qa-bead-vars.json")
+        rendered = _render("qa-bead.json.j2", values)
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        bead = json.loads(rendered.stdout)
+        self.assertEqual(bead_schema.validate_phase([bead]), [])
+
+        rendered_empty_branch = _render("qa-bead.json.j2", {**values, "branch": ""})
+        self.assertEqual(rendered_empty_branch.returncode, 0, rendered_empty_branch.stderr)
+        empty_branch_bead = json.loads(rendered_empty_branch.stdout)
+        self.assertEqual(empty_branch_bead["metadata"]["branch"], "")
+        problems = bead_schema.validate_phase([empty_branch_bead])
+        self.assertTrue(any(problem.startswith(f"{empty_branch_bead['id']}: branch:") for problem in problems), problems)
+
     def test_each_config_variable_is_required(self):
         for template, names in CONFIG_VARS.items():
             values = _example(template.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json")

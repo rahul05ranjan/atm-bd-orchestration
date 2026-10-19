@@ -43,7 +43,7 @@ defaults:
     "sprint": {{ sprint | tojson }},
     "stack": {{ stack | tojson }},
     "layer": {{ (layer if layer != "" else none) | tojson }},
-    "branch": {{ (branch or none) | tojson }},
+    "branch": {{ branch | tojson }},
     "worktree": {{ worktree | tojson }},
     "commit": {{ (commit or none) | tojson }},
     "round": {{ round | tojson }},
