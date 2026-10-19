@@ -28,6 +28,10 @@ UV = shutil.which("uv")
 VERSION = tomllib.loads((APP / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 
+class WeakReferenceableNamespace(SimpleNamespace):
+    pass
+
+
 def sha(data: bytes) -> str:
     return sc_sha.calculate_hash({"utf8_file_bytes": data})["sha256"]
 
@@ -407,7 +411,7 @@ def test_build_hook_includes_a_manifest_for_a_fixture_tree(tmp_path: Path) -> No
     spec.loader.exec_module(hatch_build)
 
     source = make_tree(tmp_path / "plugin")
-    hook = SimpleNamespace(target_name="wheel", _manifest_dir=None, _generated_identity=False)
+    hook = WeakReferenceableNamespace(target_name="wheel", _manifest_dir=None, _generated_identity=False)
     hook._dest = lambda name: f"atm_bd_console/{name}"
     hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
     build_data = {"force_include": {}}
@@ -421,6 +425,30 @@ def test_build_hook_includes_a_manifest_for_a_fixture_tree(tmp_path: Path) -> No
     assert manifest == skill_integrity.build_manifest(source, "0.17.4")
     hatch_build.CustomBuildHook.finalize(hook, "0.17.4", build_data, "fixture.whl")
     assert not manifest_path.exists()
+
+
+def test_build_hook_registered_finalizer_cleans_manifest_after_build_failure(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build_finalizer", APP / "hatch_build.py")
+    assert spec is not None and spec.loader is not None
+    hatch_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hatch_build)
+    source = make_tree(tmp_path / "plugin")
+    hook = WeakReferenceableNamespace(target_name="wheel", _manifest_dir=None, _generated_identity=False)
+    hook._dest = lambda name: f"atm_bd_console/{name}"
+    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
+    build_data = {"force_include": {}}
+
+    hatch_build.CustomBuildHook._include_manifest(hook, APP, source, build_data, "0.17.4")
+
+    temporary = hook._manifest_dir
+    finalizer = hook._manifest_finalizer
+    assert temporary.is_dir()
+    assert finalizer.alive and finalizer.atexit
+    finalizer()
+    assert not temporary.exists()
+    assert not finalizer.alive
+    hatch_build.CustomBuildHook.finalize(hook, "0.17.4", build_data, "fixture.whl")
+    assert hook._manifest_dir is None and hook._manifest_finalizer is None
 
 
 def test_build_hook_cleans_manifest_temp_dir_when_initialization_fails(tmp_path: Path) -> None:
@@ -443,6 +471,31 @@ def test_build_hook_cleans_manifest_temp_dir_when_initialization_fails(tmp_path:
         hatch_build.CustomBuildHook.initialize(hook, "0.17.4", {"force_include": {}})
 
     assert not temporary.exists() and hook._manifest_dir is None
+
+
+def test_build_hook_runs_registered_finalizer_when_initialization_fails(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location("atm_bd_hatch_build_init_finalizer", APP / "hatch_build.py")
+    assert spec is not None and spec.loader is not None
+    hatch_build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hatch_build)
+    source = make_tree(tmp_path / "plugin")
+    hook = WeakReferenceableNamespace(target_name="wheel")
+    hook._dest = lambda name: f"atm_bd_console/{name}"
+    hook._cleanup_manifest = MethodType(hatch_build.CustomBuildHook._cleanup_manifest, hook)
+    created = []
+
+    def fail_initialization(_version, build_data):
+        hatch_build.CustomBuildHook._include_manifest(hook, APP, source, build_data, "0.17.4")
+        created.append((hook._manifest_dir, hook._manifest_finalizer))
+        raise RuntimeError("fixture build failure")
+
+    hook._initialize = fail_initialization
+    with pytest.raises(RuntimeError, match="fixture build failure"):
+        hatch_build.CustomBuildHook.initialize(hook, "0.17.4", {"force_include": {}})
+
+    temporary, finalizer = created[0]
+    assert not temporary.exists() and not finalizer.alive
+    assert hook._manifest_dir is None and hook._manifest_finalizer is None
 
 
 def _bundled(archive: Path) -> dict[str, bytes]:

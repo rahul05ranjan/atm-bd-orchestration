@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import weakref
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -16,6 +17,7 @@ class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict[str, object]) -> None:
         self._generated_identity = False
         self._manifest_dir: Path | None = None
+        self._manifest_finalizer: weakref.finalize | None = None
         try:
             self._initialize(version, build_data)
         except Exception:
@@ -84,14 +86,18 @@ class CustomBuildHook(BuildHookInterface):
         """Publish skill-manifest.json beside the bundled skills; it exists only in the built artifacts, never in git."""
         integrity = _load_integrity(package / "src" / "atm_bd_console" / "skill_integrity.py")
         self._manifest_dir = Path(tempfile.mkdtemp(prefix="atm-bd-skill-manifest-"))
+        self._manifest_finalizer = weakref.finalize(self, shutil.rmtree, self._manifest_dir, ignore_errors=True)
         output = self._manifest_dir / integrity.MANIFEST_NAME
         output.write_text(json.dumps(integrity.build_manifest(source, package_version), indent=2) + "\n", encoding="utf-8")
         build_data["force_include"][str(output)] = self._dest(integrity.MANIFEST_NAME)
 
     def _cleanup_manifest(self) -> None:
-        if self._manifest_dir is not None:
+        if self._manifest_finalizer is not None:
+            self._manifest_finalizer()
+            self._manifest_finalizer = None
+        elif self._manifest_dir is not None:
             shutil.rmtree(self._manifest_dir, ignore_errors=True)
-            self._manifest_dir = None
+        self._manifest_dir = None
 
     def finalize(self, version: str, build_data: dict[str, object], artifact_path: str) -> None:
         self._cleanup_manifest()
