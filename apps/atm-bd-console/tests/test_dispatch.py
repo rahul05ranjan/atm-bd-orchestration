@@ -31,7 +31,7 @@ SPRINT = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6", "sprint/bh-1", "phas
 def step(**changes) -> Step:
     value = Step(
         bead_id="atm-bh-6.group-qa", sprint="atm-bh-6", kind="qa", quick_fix=False, anchor=False,
-        status=SprintState.OPEN, ready=True, assignee="solar", branch="sprint/bh-6", target="sprint/bh-1",
+        status=SprintState.OPEN, ready=True, assignee=None, branch="sprint/bh-6", target="sprint/bh-1",
         worktree="/worktrees/bh-6", layer=6, difficulty="hard", tag="bh-6", top_epic="atm-phase-bh",
         claimed_at=None, closed_at=None, title="QA", checked_bead="atm-bh-6.group-dev",
         sprint_bead="atm-bh-6", qa_round=1, carry_forward=None,
@@ -80,6 +80,17 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
     )
     task = Task("tasked", "quality-mgr", "assigned", 1, NOW, NOW, "queued")
     assert tuple(item.bead_id for item in candidates(phase(*values), (task,))) == ("atm-bh-6.group-qa",)
+
+
+def test_candidate_filter_requires_unassigned_open_sanity_or_qa_and_ignores_closed_task() -> None:
+    values = tuple(step(bead_id=kind, kind=kind) for kind in ("sanity", "qa", "dev", "fix", "finding")) + (
+        step(bead_id="assigned", kind="sanity", assignee="dev-sanity"),
+        step(bead_id="in-progress", kind="sanity", status=SprintState.IN_PROGRESS),
+        step(bead_id="active-task", kind="qa"),
+    )
+    tasks = (Task("sanity", "dev-sanity", "closed", 1, NOW, NOW, "prior round"),
+             Task("active-task", "quality-mgr", "active", 2, NOW, NOW, "current round"))
+    assert tuple(item.bead_id for item in candidates(phase(*values), tasks)) == ("sanity", "qa")
 
 
 def test_each_hold_is_flat_and_does_not_assign() -> None:

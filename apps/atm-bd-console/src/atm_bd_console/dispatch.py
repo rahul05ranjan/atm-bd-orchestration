@@ -53,10 +53,10 @@ def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:
 
 
 def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
-    tasked = {task.id for task in tasks}
+    tasked = {task.id for task in tasks if task.state in ("assigned", "active")}
     return tuple(
         step for step in phase.steps
-        if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN
+        if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN and not step.assignee
         and not step.anchor and not step.quick_fix and step.bead_id not in tasked
     )
 

@@ -538,7 +538,7 @@ def test_github_off_never_calls_github(monkeypatch) -> None:
 
 def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
-    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True)
+    candidate = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True, assignee=None)
     phase = replace(PHASE, closed=False, step_errors=(), steps=(candidate,))
     state = replace(RUNNING_STATE, last_cycle=NOW)
     assigned = Task(candidate.bead_id, "quality-mgr", "active", 0, ACTION.at, ACTION.at, "running")
@@ -572,6 +572,24 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     runner.step(replace(CONFIG, no_fetch=False), state, False, store)
 
     assert due_calls == [(state, phase, REPO_CONFIG.bead_prefix, CONFIG.github, NOW, (assigned,), Due(False, (), False))]
+
+
+def test_ready_is_read_before_tasks_each_active_tick(github_runtime, monkeypatch) -> None:
+    store, _, _, _ = github_runtime
+    reads = []
+
+    def ready(*_args):
+        reads.append("ready")
+        return Ok(())
+
+    def tasks(*_args):
+        reads.append("tasks")
+        return Ok(())
+
+    monkeypatch.setattr(runner.beads_source, "ready", ready)
+    monkeypatch.setattr(runner.atm_source, "tasks", tasks)
+    runner.step(CONFIG, STATE, True, store)
+    assert reads == ["ready", "tasks"]
 
 
 def test_forced_github_timeout_is_visible_and_logged_once(github_runtime) -> None:
