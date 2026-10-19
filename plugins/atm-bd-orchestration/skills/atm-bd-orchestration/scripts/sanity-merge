@@ -350,7 +350,7 @@ def selected_results(args, manifest, sanity_bead, dev_bead):
             raise Reject(f"sanity-jev reply: {reason}")
     llm_by, jev_by = index_replies(llm, "llm"), index_replies(jev, "jev")
     selected, seen, sources = [], set(), {}
-    required = {"deliverable", "llm", "jev", "selected", "reason", "rerun", "checker_defect", "llm_sha256", "jev_sha256"}
+    required = {"deliverable", "llm", "jev", "selected", "reason", "rerun", "llm_sha256", "jev_sha256"}
     for entry in selection:
         if not isinstance(entry, dict) or set(entry) != required:
             raise Reject("selection entry has incorrect fields")
@@ -393,30 +393,12 @@ def selected_results(args, manifest, sanity_bead, dev_bead):
         if rerun is not None and status == "cannot_run" and "cannot_run" != entry["llm"] or \
                 rerun is not None and status == "cannot_run" and "cannot_run" != entry["jev"]:
             raise Reject(f"deliverable {number}: a failed rerun cannot replace a valid original reply")
-        if not isinstance(entry["checker_defect"], bool):
-            raise Reject(f"deliverable {number}: checker_defect must be boolean")
-        if entry["checker_defect"] and status != "undone":
-            raise Reject(f"deliverable {number}: checker_defect requires selected undone reply")
-        if entry["checker_defect"] and not entry["reason"]:
-            raise Reject(f"deliverable {number}: checker_defect requires a reason")
         sources[number] = source
         selected.append(reply)
     missing = [number for number in range(1, manifest["deliverables_total"] + 1) if number not in seen]
     if missing:
         raise Reject(f"deliverable {missing[0]}: missing selection")
     return selected, selection, sources
-
-
-def effective_findings(by_number, selection):
-    """Checker defects retain their raw selected reply but create no finding."""
-    checker_defects = {
-        entry["deliverable"] for entry in selection or []
-        if entry.get("checker_defect") is True
-    }
-    return {
-        number: [] if number in checker_defects else findings
-        for number, findings in by_number.items()
-    }
 
 
 class TaskFailure(Exception):
@@ -600,17 +582,13 @@ def main(argv):
         print(exc.args[1], file=sys.stderr)
         return 3
 
-    report_findings = effective_findings(by_number, selection)
+    report_findings = by_number
     blocks = []
     finding_records = []
     for number in sorted(report_findings):
         findings = report_findings[number]
-        checker_defect = selection is not None and next(
-            item for item in selection if item["deliverable"] == number
-        )["checker_defect"]
         blocks.append(
-            f"D{number}: done (checker defect)" if checker_defect
-            else f"D{number}: done" if not findings
+            f"D{number}: done" if not findings
             else f"D{number}:\n" + "\n".join(fmt(f) for f in findings)
         )
         for index, finding in enumerate(findings, 1):

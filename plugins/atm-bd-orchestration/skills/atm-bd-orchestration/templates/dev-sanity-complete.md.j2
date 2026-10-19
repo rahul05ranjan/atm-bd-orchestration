@@ -67,15 +67,7 @@ For a FAIL within the configured round cap, the dev was sent `sanity-fail`; a FA
 
 ## Selection
 {% for item in selection or [] %}
-- D{{ item.deliverable }}: LLM={{ item.llm }}, JEV={{ item.jev }}, selected={{ item.selected }}, checker_defect={{ item.checker_defect }}{% if item.reason %}; {{ item.reason }}{% endif %}
-{% endfor %}
-
-## Checker Defects
-{% set checker_defects = (selection or []) | selectattr("checker_defect") | list %}
-{% for item in checker_defects %}
-- D{{ item.deliverable }}: {{ item.reason }}
-{% else %}
-- None.
+- D{{ item.deliverable }}: LLM={{ item.llm }}, JEV={{ item.jev }}, selected={{ item.selected }}{% if item.reason %}; {{ item.reason }}{% endif %}
 {% endfor %}
 
 ## Findings

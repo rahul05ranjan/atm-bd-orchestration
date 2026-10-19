@@ -78,9 +78,8 @@ without changing the original parts or receipts.
 Merge each reviewer with `sanity-merge` using its own start and completion UTC
 times and raw fenced reply array. Its receipt and SHA checks apply. Then select
 one result per deliverable. `sanity-merge` accepts exactly these keys:
-`deliverable`, `llm`, `jev`, `selected`, `reason`, `rerun`, `checker_defect`,
-`llm_sha256`, `jev_sha256`. `rerun` is null or `{reviewer, context, reply}`;
-set `checker_defect` false.
+`deliverable`, `llm`, `jev`, `selected`, `reason`, `rerun`,
+`llm_sha256`, `jev_sha256`. `rerun` is null or `{reviewer, context, reply}`.
 
 A rerun supplies one unchanged reply, its reviewer, and nonempty repo-relative
 missing-context entries as `path` or `path:start-end`. Send the manifest's

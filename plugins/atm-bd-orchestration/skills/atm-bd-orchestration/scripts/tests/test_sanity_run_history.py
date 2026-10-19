@@ -426,7 +426,7 @@ class ShippedFlow(unittest.TestCase):
             reviewer_vars[reviewer].write_text(merged.stdout)
         digests = {r: json.loads(v.read_text())["reviewer_results_sha256"] for r, v in reviewer_vars.items()}
         selection = [{"deliverable": n, "llm": "done", "jev": "done" if n == 1 else "undone", "selected": "llm",
-                      "reason": "" if n == 1 else "retry.rs tests cover 404", "rerun": None, "checker_defect": False,
+                      "reason": "" if n == 1 else "retry.rs tests cover 404", "rerun": None,
                       "llm_sha256": digests["sanity-llm"], "jev_sha256": digests["sanity-jev"]} for n in (1, 2)]
         select(selection)
         (self.root / "selection.json").write_text(json.dumps(selection))

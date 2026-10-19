@@ -243,7 +243,7 @@ class SanityMerge(unittest.TestCase):
         self.assertEqual(vars_["findings_md"], "D1: done\nD2:\n- `crates/x/src/lib.rs:3` skipped: no 503 test")
         self.assertIsNone(vars_["selection"])
 
-    def test_selected_vars_render_the_completion_template(self):
+    def selected_merge_args(self):
         self.write_manifest(run_id="selected-run",
                             reviewers=["sanity-llm", "sanity-jev", "sanity-selected"],
                             operational_reviewer="sanity-selected")
@@ -256,17 +256,19 @@ class SanityMerge(unittest.TestCase):
         jev_path.write_text(json.dumps(jev_vars))
         selection_path.write_text(json.dumps([
             {"deliverable": 1, "llm": "done", "jev": "done", "selected": "llm",
-             "reason": "", "rerun": None, "checker_defect": False,
+             "reason": "", "rerun": None,
              "llm_sha256": llm_sha256, "jev_sha256": jev_sha256},
             {"deliverable": 2, "llm": "done", "jev": "undone", "selected": "jev",
-             "reason": "JEV has pinned evidence", "rerun": None, "checker_defect": False,
+             "reason": "JEV has pinned evidence", "rerun": None,
              "llm_sha256": llm_sha256, "jev_sha256": jev_sha256},
         ]))
-        completed = time.time()
-        selected_args = (str(self.manifest), TASK, DEV, SPRINT,
-                         "--reviewer", "sanity-selected", "--started-at", str(completed - 1),
-                         "--completed-at", str(completed), "--llm-vars", str(llm_path),
-                         "--jev-vars", str(jev_path), "--selection", str(selection_path))
+        return (str(self.manifest), TASK, DEV, SPRINT,
+                "--reviewer", "sanity-selected", "--started-at", "1700000000",
+                "--completed-at", "1700000001", "--llm-vars", str(llm_path),
+                "--jev-vars", str(jev_path), "--selection", str(selection_path))
+
+    def test_selected_vars_render_the_completion_template(self):
+        selected_args = self.selected_merge_args()
         waiting = self.merge([], *selected_args)
         self.assertEqual((waiting.returncode, waiting.stdout), (4, ""))
         self.lint(0)
@@ -275,9 +277,34 @@ class SanityMerge(unittest.TestCase):
         vars_ = json.loads(out.stdout)
         self.assertEqual(vars_["reviewer"], "sanity-selected")
         self.assertIsInstance(vars_["selection"], list)
-        self.assertEqual(vars_["selection"][0]["llm_sha256"], llm_sha256)
-        self.assertEqual(vars_["selection"][0]["jev_sha256"], jev_sha256)
+        self.assertEqual(vars_["selection"], json.loads((self.dir / "selection.json").read_text()))
         self.render_complete(vars_, "# Dev Sanity Check FAIL")
+
+    def test_selection_rejects_removed_checker_defect_key(self):
+        selected_args = self.selected_merge_args()
+        self.lint(0)
+        selection_path = self.dir / "selection.json"
+        selection = json.loads(selection_path.read_text())
+        for value in (False, True):
+            with self.subTest(value=value):
+                selection[1]["checker_defect"] = value
+                selection_path.write_text(json.dumps(selection))
+                out = self.merge([], *selected_args)
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("selection entry has incorrect fields", out.stderr)
+
+    def test_selected_undone_reply_keeps_its_findings(self):
+        selected_args = self.selected_merge_args()
+        self.lint(0)
+        out = self.merge([], *selected_args)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        report = json.loads(out.stdout)
+        self.assertEqual((report["verdict"], report["findings_count"]), ("FAIL", 1))
+        self.assertEqual(len(report["findings"]), 1)
+        self.assertEqual(report["findings"][0]["deliverable"], 2)
+        for key, value in FINDING.items():
+            self.assertEqual(report["findings"][0][key], value)
+        self.assertEqual(report["findings_md"], "D1: done\nD2:\n- `crates/x/src/lib.rs:3` skipped: no 503 test")
 
     def test_rejects_multiple_or_non_skipped_findings(self):
         self.lint(0)

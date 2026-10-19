@@ -144,6 +144,16 @@ class Linker:
             raise StackError('filtered pull list contains duplicate pull requests')
         return found
 
+    def lean_mode(self):
+        if self.values['budget'] == 'lean':
+            return True
+        try:
+            quota = self.command(['gh', 'api', 'rate_limit', '--jq', '.resources.graphql'], check=False, allow_transport_failure=True)
+            available = quota.returncode == 0 and json.loads(quota.stdout)['remaining'] > 0
+        except (ValueError, KeyError, TypeError):
+            available = False
+        return not available
+
     def stacks(self):
         result = self.command(['gh', 'api', 'repos/{owner}/{repo}/stacks', '--paginate', '--jq', STACK_FILTER])
         found = rows(result.stdout) if result.stdout.strip() else []
@@ -224,8 +234,9 @@ class Linker:
             branches.add(layer['branch'])
             numbers.add(layer['pr'])
         original = copy.deepcopy(metadata)
+        lean = self.lean_mode()
         pulls = self.pulls()
-        if layers or self.reclaimed:
+        if not lean and (layers or self.reclaimed):
             self.command(['git', 'fetch', 'origin'])
             self.reconcile(metadata, pulls, self.stacks())
         candidate = next((pull for pull in pulls if pull['number'] == self.values['pr_number']), None)
@@ -260,15 +271,6 @@ class Linker:
                     'evidence': f"origin/{base} is not an ancestor of {self.values['commit']}"}
         if ancestor.returncode:
             raise StackError(f"git merge-base --is-ancestor [{ancestor.returncode}] {(ancestor.stderr or '').strip()}")
-        if self.values['budget'] == 'lean':
-            lean = True
-        else:
-            try:
-                quota = self.command(['gh', 'api', 'rate_limit', '--jq', '.resources.graphql'], check=False, allow_transport_failure=True)
-                available = quota.returncode == 0 and json.loads(quota.stdout)['remaining'] > 0
-            except (ValueError, KeyError, TypeError):
-                available = False
-            lean = not available
         if (lean or not layers) and candidate['base'] != base:
             raise StackError(f"pull request base {candidate['base']} differs from stack top {base}")
         new = {'branch': self.values['branch'], 'pr': self.values['pr_number'], 'head': self.values['commit'], 'base': base, 'linked': False}

@@ -313,6 +313,7 @@ def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
     assert result["top"]["linked"] is False
     assert world.bead["metadata"]["layers"][-1]["linked"] is False
     assert len([call for call in world.calls if len(call) > 2 and "/pulls?" in call[2]]) == 1
+    assert not any(call[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"] for call in world.calls)
     assert not any(call[:2] == ["gh", "api"] and len(call) > 2 and "graphql" in call[2].lower()
                    for call in world.calls)
     assert not any(call[:3] == ["gh", "stack", "link"] for call in world.calls)
@@ -323,7 +324,9 @@ def test_lean_uses_only_rest_and_defers_link(world, budget, unavailable):
 
     world.unavailable = False
     fourth = world.branch("fourth", "deferred", 4)
+    world.calls.clear()
     assert world.link(fourth)["result"] == "stacked"
+    assert len([call for call in world.calls if call[:3] == ["gh", "api", "repos/{owner}/{repo}/stacks"]]) == 1
     assert all(layer["linked"] for layer in world.bead["metadata"]["layers"])
     assert [call for call in world.calls if call[:3] == ["gh", "stack", "link"]] == [
         ["gh", "stack", "link", "7", "3"],
@@ -433,7 +436,7 @@ def test_failures_leave_ledger_and_release(world, failure):
     assert world.bead["assignee"] == ""
 
 
-def test_torn_hosted_link_reconciles_and_preserves_lean_layer(world):
+def test_lean_preserves_ledger_without_reconciling_torn_hosted_link(world):
     first = world.branch("first", "trunk", 1)
     second = world.branch("second", "first", 2)
     third = world.branch("third", "second", 3)
@@ -443,7 +446,8 @@ def test_torn_hosted_link_reconciles_and_preserves_lean_layer(world):
     world.stacks = [{"number": 7, "base": "trunk", "prs": [1]}]
     third["budget"] = "lean"
     assert world.link(third)["result"] == "stacked"
-    assert [item["linked"] for item in world.bead["metadata"]["layers"]] == [True, False, False]
+    assert [item["linked"] for item in world.bead["metadata"]["layers"]] == [False, False, False]
+    assert world.bead["metadata"]["stack_number"] is None
 
 
 def test_retry_recovers_hosted_only_torn_link(world):
