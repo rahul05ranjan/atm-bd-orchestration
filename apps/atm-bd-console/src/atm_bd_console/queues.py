@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import tomllib
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,10 @@ QUEUES = [
 ]
 QUIET = {"in_flight", "not_ready"}
 STALL_REMINDERS = 3
+NOT_READY_KINDS = {
+    "sprint": "sprint", "group": "sprint", "dev": "dev", "fix": "fix", "finding": "fix",
+    "dev-sanity": "sane", "sanity": "sane", "qa": "qa", "plan-review": "review", "review": "review",
+}
 
 
 class QueueFailure(Exception):
@@ -94,6 +99,16 @@ def _stage(bead: dict[str, Any]) -> str:
 def _meta(bead: dict[str, Any]) -> dict[str, Any]:
     metadata = bead.get("metadata")
     return metadata if isinstance(metadata, dict) else {}
+
+
+def _not_ready_kind(bead: dict[str, Any]) -> str:
+    metadata = _meta(bead)
+    if metadata.get("sanity_finding"):
+        return "fix"
+    for value in (_stage(bead).removeprefix("stage:"), metadata.get("template_kind"), metadata.get("kind"), metadata.get("role")):
+        if isinstance(value, str) and value in NOT_READY_KINDS:
+            return NOT_READY_KINDS[value]
+    return "other"
 
 
 def _resolve(args, repo_root: Path) -> tuple[str, str | None, Path]:
@@ -172,10 +187,13 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
 
     def add(key: str, bead: dict[str, Any], when: str | None, detail: str = "") -> None:
         bead_id = _valid_id(bead, "queue row")
-        queues[key].append({"queue": key, "id": bead_id, "stage": _stage(bead).removeprefix("stage:"),
-                            "status": bead.get("status", "unknown"), "assignee": bead.get("assignee") or "-",
-                            "priority": bead.get("priority"), "since": when, "age": age(when, now),
-                            "title": bead.get("title", ""), "detail": detail})
+        row = {"queue": key, "id": bead_id, "stage": _stage(bead).removeprefix("stage:"),
+               "status": bead.get("status", "unknown"), "assignee": bead.get("assignee") or "-",
+               "priority": bead.get("priority"), "since": when, "age": age(when, now),
+               "title": bead.get("title", ""), "detail": detail}
+        if key == "not_ready":
+            row["kind"] = _not_ready_kind(bead)
+        queues[key].append(row)
 
     for task_id, task in task_by_id.items():
         bead = by_id.get(task_id) if task_id in scope else closed.get(task_id)
@@ -205,6 +223,7 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
             add("needs_dev_fix", bead, since, f"{count} open sanity finding(s)")
             continue
         if sanity_child(bead) and bead.get("parent") in by_id:
+            add("not_ready", bead, since, f"handled by dev-fix for {bead['parent']}")
             continue
         if bead.get("status") != "open" or bead_id not in ready:
             blockers = [dep for dep in deps(bead, "blocks") if dep in by_id]
@@ -361,7 +380,9 @@ def render(report: dict[str, Any], show_all: bool) -> str:
         for row in queues[key]:
             lines.append(f"  {_short(row['id'], 44):44} {_short(str(row['assignee']), 10):10} {row['age']:>6}  {_short(str(row['detail'] or row['title']), 70)}")
     if queues["not_ready"] and not show_all:
-        lines.append(f"\n({len(queues['not_ready'])} not-ready beads hidden; --all shows them with reasons)")
+        counts = Counter(row["kind"] for row in queues["not_ready"])
+        summary = " | ".join(f"{counts[kind]} {kind}" for kind in ("sprint", "dev", "fix", "sane", "qa", "review", "other") if counts[kind])
+        lines.append(f"\nbd not-ready: {summary}")
     return "\n".join(lines)
 
 

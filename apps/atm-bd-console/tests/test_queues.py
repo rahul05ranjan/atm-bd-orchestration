@@ -100,7 +100,7 @@ def test_build_classifies_each_queue_from_fixed_json_and_uses_four_batched_reads
     assert [row["id"] for row in q["minor_backlog"]] == ["finding-minor"]
     assert [row["id"] for row in q["needs_finding_fix"]] == ["finding-important"]
     assert [row["id"] for row in q["ready_other"]] == ["other-ready"]
-    assert [row["id"] for row in q["not_ready"]] == ["blocked", "prereq", "waiting"]
+    assert [row["id"] for row in q["not_ready"]] == ["blocked", "prereq", "sanity-finding", "waiting"]
     assert len(calls) == 4
     assert calls[0][0] == ["bd", "--readonly", "list", "-l", "phase-bj", "--exclude-label", "anchor", "-n", "0", "--json"]
     assert calls[1][0] == ["bd", "ready", "-l", "phase-bj", "--exclude-label", "anchor", "-n", "0", "--json"]
@@ -142,9 +142,51 @@ def test_all_mode_exposes_not_ready_reasons():
     hidden = queues.render(result, False)
     shown = queues.render(result, True)
     assert "blocked" not in hidden
-    assert "3 not-ready beads hidden" in hidden
-    assert "== Not ready (prerequisite open) (3)" in shown
+    assert "bd not-ready: 3 dev | 1 fix" in hidden
+    assert "== Not ready (prerequisite open) (4)" in shown
     assert "blocked by prereq" in shown
+    assert "handled by dev-fix for dev-parent" in shown
+
+
+def test_not_ready_summary_counts_stages_and_metadata_in_order():
+    rows = [
+        bead(ROOT, "root", metadata={"integration_branch": "integrate/phase-bj"}),
+        bead("qa-name", "sprint", parent=ROOT),
+        bead("one", "dev", parent="qa-name"),
+        bead("two", "group", parent=ROOT),
+        bead("three", "fix", parent=ROOT),
+        bead("four", "finding", parent=ROOT),
+        bead("five", "dev-sanity", parent=ROOT),
+        bead("six", "qa", parent=ROOT),
+        bead("seven", "plan-review", parent=ROOT),
+        bead("eight", "review", parent=ROOT),
+        bead("nine", "unknown", parent=ROOT, metadata={"template_kind": "qa"}),
+        bead("ten", "unknown", parent=ROOT),
+    ]
+    runner, _ = fixed_runner(open_rows=rows, ready_rows=[], task_rows=[])
+    result = queues.build(SimpleNamespace(phase=None, root=ROOT, stack=False), Path("/fixture"), now=NOW, runner=runner)
+
+    assert "bd not-ready: 2 sprint | 1 dev | 2 fix | 1 sane | 2 qa | 2 review | 1 other" in queues.render(result, False).splitlines()
+    shown = queues.render(result, True)
+    assert all(row["id"] in shown and row["detail"] in shown for row in result["queues"]["not_ready"])
+
+
+def test_not_ready_summary_omits_zero_kinds_and_classifies_unknown_as_other():
+    rows = [bead(ROOT, "root"), bead("fix-in-id", "unknown", parent=ROOT)]
+    runner, _ = fixed_runner(open_rows=rows, ready_rows=[], task_rows=[])
+    result = queues.build(SimpleNamespace(phase=None, root=ROOT, stack=False), Path("/fixture"), now=NOW, runner=runner)
+
+    assert "bd not-ready: 1 other" in queues.render(result, False).splitlines()
+
+
+def test_sanity_finding_metadata_classifies_unlabelled_child_as_fix():
+    rows = [bead(ROOT, "root"), bead("parent", "dev", parent=ROOT),
+            bead("child", "unknown", parent="parent", metadata={"sanity_finding": True})]
+    runner, _ = fixed_runner(open_rows=rows, ready_rows=[], task_rows=[])
+    result = queues.build(SimpleNamespace(phase=None, root=ROOT, stack=False), Path("/fixture"), now=NOW, runner=runner)
+
+    assert "bd not-ready: 1 fix" in queues.render(result, False).splitlines()
+    assert result["queues"]["not_ready"][0]["detail"] == "handled by dev-fix for parent"
 
 
 def test_cron_is_edge_triggered_and_rearms_after_a_row_leaves(tmp_path: Path):
