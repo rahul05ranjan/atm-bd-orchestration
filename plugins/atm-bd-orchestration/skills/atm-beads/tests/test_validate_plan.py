@@ -380,6 +380,11 @@ class FilePlan(LivePlan):
         self.assertEqual((out.returncode, out.stdout), (0, "plan valid: 2 sprints\n"), out.stderr)
         self.assertIn("warning: x-t-2: not poured yet", out.stderr)
 
+    def test_an_open_phase_requires_its_stack_bead_in_the_file(self):
+        out = self.run_file([ROOT_EPIC, container("x-t-1"), container("x-t-2")], [])
+        self.assertEqual(out.returncode, 5, out.stderr)
+        self.assertIn("x-phase-t.stack: missing stack bead", out.stdout)
+
     def test_a_plan_bead_with_an_assignee_or_no_parent_is_a_warning(self):
         orphan = {**{k: v for k, v in container("x-t-2").items() if k != "parent"}, "assignee": "my-dev"}
         out = self.run_file([ROOT_EPIC, STACK, container("x-t-1"), orphan], [])
