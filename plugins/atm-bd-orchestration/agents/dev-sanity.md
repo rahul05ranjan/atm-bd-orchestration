@@ -368,20 +368,5 @@ After the second operational FAIL for the same checked bead, report
 `SANITY.ROUND_CAP` to the task assigner with the undone deliverable numbers. No third
 round is dispatched without the lead's ruling.
 
-## Mandatory Console Report
-
-After the selected task closes, render the last ten runs (two rows each):
-
-```bash
-set -o pipefail
-test -s "$log" && tail -n 20 "$log" | jq -s '{runs: .}' | sc-compose render --strict \
-  --file .claude/skills/atm-bd-orchestration/templates/sanity-run-table.md.j2 --var-file /dev/stdin
-```
-
-Include the entire rendered table in the user-visible completion reply before
-reading ATM again. `Match` is ✓ or ✗ for the reviewer's agreement with your
-final verdict. Never rewrite the ledger.
-
-A ledger/render failure does not alter any verdict. Report
-`SANITY.STATUS_TABLE_UNAVAILABLE` with the error. `.sc/sanity-log/` is ignored
-runtime state and must never be committed.
+After the selected task closes, read ATM again. Never rewrite the ledger;
+`.sc/sanity-log/` is ignored runtime state and must never be committed.

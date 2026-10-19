@@ -23,6 +23,52 @@ def run_bounded(argv, **kwargs):
 
 
 class TemplateContractTests(unittest.TestCase):
+    def test_sanity_guidance_does_not_render_deleted_run_table(self):
+        plugin = ROOT.parents[1]
+        repository = ROOT.parents[3]
+        for path in (plugin / "agents/dev-sanity.md", repository / "docs/requirements/dev-sanity.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("sanity-run-table.md.j2", path.read_text())
+
+    def test_close_hook_requirement_distinguishes_bd_and_atm_identity(self):
+        requirement = (ROOT.parents[3] / "docs/requirements/task-close-hook.md").read_text()
+        identity = requirement.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+        self.assertIn('`bd` writes carry `--actor "$ATM_IDENTITY"`', identity)
+        self.assertIn("`atm` writes take `ATM_IDENTITY` from the environment", identity)
+
+    def test_sanity_fail_report_explains_handoff_without_finding_beads(self):
+        variables = {
+            "generated_at": "2026-01-01T00:00:00Z",
+            "task_id": "sanity-task",
+            "checked_bead": "dev-bead",
+            "sprint": "sprint",
+            "verdict": "FAIL",
+            "findings_count": 1,
+            "findings_md": "D1: not done",
+            "lint_md": "lint passed",
+            "finding_bead_ids": ["old-finding-id"],
+        }
+        for context in ("within the cap", "round cap exceeded"):
+            with self.subTest(context=context):
+                variables["notes_md"] = context
+                result = render(ROOT / "templates/dev-sanity-complete.md.j2", variables)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("within the configured round cap, the dev was sent `sanity-fail`", result.stdout)
+                self.assertIn("a FAIL exceeding the cap triggers lead escalation", result.stdout)
+                self.assertIn("No finding beads were filed", result.stdout)
+                self.assertNotIn("old-finding-id", result.stdout)
+                status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
+                self.assertNotIn("finding_bead_ids", status)
+
+        for verdict in ("PASS", "CANNOT_RUN"):
+            with self.subTest(verdict=verdict):
+                variables["verdict"] = verdict
+                result = render(ROOT / "templates/dev-sanity-complete.md.j2", variables)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                status = json.loads(result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0])
+                self.assertNotIn("finding_bead_ids", status)
+                self.assertNotIn("No finding beads were filed", result.stdout)
+
     def test_review_completion_timeout_reports_captured_output(self):
         command = ["check-review-completion.py", "vars.json"]
         error = subprocess.TimeoutExpired(command, 30, output=b"partial out", stderr=b"partial err")

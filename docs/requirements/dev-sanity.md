@@ -42,7 +42,7 @@ Sources: `agents/{dev-sanity,sc-sanity-llm,sc-sanity-jev}.md`, `templates/{dev-s
 31. Cannot run (unsplittable plan, missing worktree, unpushed commit, timeout, rejected twice): class bead or report as in 15; bead open, no assignee, note; task `refused`.
 32. FAIL exceeding the configured cap: the close hook reports `SANITY.ROUND_CAP` with undone deliverable numbers to the lead; see [task-close-hook.md](task-close-hook.md) 16. A rebase-required never counts toward the cap.
 33. Keep LLM, JEV, selection and rerun evidence in completion notes.
-34. After the task closes, put the last ten runs' table (`sanity-run-table.md.j2`) in the user-visible reply before reading ATM again; never rewrite the ledger; ledger or render failure: report `SANITY.STATUS_TABLE_UNAVAILABLE`, never change a verdict. Then read ATM.
+34. After the task closes, read ATM again; never rewrite the sanity ledger.
 
 ### Subagents (sc-sanity-llm, sc-sanity-jev)
 35. Judge only `deliverable.text` from deliverable text, owned paths, changed files, `context` paths and pinned commit; never request more.
