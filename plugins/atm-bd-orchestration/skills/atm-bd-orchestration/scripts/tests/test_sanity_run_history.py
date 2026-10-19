@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from jev_receipts import CLIENT, env as receipt_env, receipted, split
 from rendering import render
@@ -341,6 +341,34 @@ class ShippedFlow(unittest.TestCase):
             ("sanity-jev", "CANNOT_RUN", [{k: error[k] for k in ("code", "message", "recoverable", "deliverable")}])])
         self.assertEqual(rows[1]["kind"], "API_FAILURE")
         self.assertEqual(rows[1]["error"]["message"], error["message"])
+
+    def test_oversized_jev_failure_reaches_ledger_with_reason(self):
+        spec = importlib.util.spec_from_file_location("jev_client_for_history", CLIENT)
+        client = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(client)
+        request = client.written_request("delivery", "x" * 50000, part=("1 of 1", ["x"]))
+        connection = MagicMock()
+        connection.getresponse.return_value.status = 413
+        connection.getresponse.return_value.read.return_value = b"{}"
+        with patch.dict(client.os.environ, {"TYPESAFE_API_KEY": "test-only-key"}), \
+             patch.object(client.http.client, "HTTPSConnection", return_value=connection), \
+             self.assertRaises(client.JevError) as raised:
+            client.evaluate_parts([request], "test-only-key")
+        self.assertEqual(connection.request.call_count, 4)
+        failure = client.failure(raised.exception)
+        failure["error"]["deliverable"] = 2
+
+        def take_llm(selection):
+            selection[1].update(jev="cannot_run", reason="JEV request oversized")
+
+        final, rows, _ = self.run_flow(take_llm, jev_failure=failure)
+        self.assertEqual(final, "PASS")
+        row = rows[1]
+        self.assertEqual((row["reviewer"], row["verdict"], row["kind"]),
+                         ("sanity-jev", "CANNOT_RUN", "API_FAILURE"))
+        self.assertEqual(row["error"]["code"], "SANITY.JEV_REQUEST_TOO_LARGE")
+        self.assertIn("oversized", row["error"]["message"])
+        self.assertEqual(row["errors"][0]["message"], failure["error"]["message"])
 
     def test_all_ok_rows_log_no_errors(self):
         _, rows, _ = self.run_flow(lambda selection: None)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -69,8 +70,21 @@ def test_sanity_rows_show_local_time_icon_name_and_api_failure() -> None:
     assert "\U000f01a6 sanity-jev" in errors.plain and "Jev is unavailable" in errors.plain
 
 
+@pytest.mark.parametrize("detail", [
+    {"code": "SANITY.JEV_UNAVAILABLE", "message": "Jev unavailable", "recoverable": True,
+     "suggested_action": "retry", "context": {"part": 2}},
+    "raw error: λ",
+])
+def test_sanity_api_failure_displays_the_entire_error(detail) -> None:
+    row = {"run_id": "r", "reviewer": "sanity-jev", "kind": "API_FAILURE", "error": detail}
+    _, errors = sanity_text(runs.sanity_runs([row]), ())
+    expected = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+    assert errors.plain.splitlines()[-1].endswith(expected)
+
+
 def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> None:
-    qa = {"id": "qa-1", "status": "closed", "closed_at": "2026-10-02T13:14:00Z", "close_reason": "FAIL found",
+    qa = {"id": "qa-1", "status": "closed", "started_at": "2026-10-02T13:00:00Z",
+          "closed_at": "2026-10-02T13:14:00Z", "close_reason": "FAIL found",
           "metadata": {"sprint": "bj-4", "round": 1}, "checked_bead_data": {"metadata": {"pr_number": 42}}}
     finding = {"id": "f1", "description": "missing test", "design": "add a test",
                "metadata": {"severity": "important", "reviewer": "req-qa"},
@@ -91,6 +105,7 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
             assert options.option_count == 1
             label = str(options.get_option_at_index(0).prompt)
             assert _run_time(qa["closed_at"]) in label and "bj-4" in label and "1/0" in label and "FAIL" in label
+            assert label.endswith("—")  # No QA elapsed producer; never derive it from bead timestamps.
             widget = app.query_one("#quality-findings")
             pending = capture_updates(monkeypatch, widget)
             app._show_findings("qa-1")

@@ -1,6 +1,7 @@
 """The interactive console: one Textual app over an injected step function."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -147,7 +148,8 @@ def sanity_text(items: list[runs.SanityRun], agents: tuple[AgentView, ...]) -> t
                 error.append("  ")
                 error.append_text(_verdict(row))
                 detail = row.get("error")
-                error.append(f"  {detail.get('message', '') if isinstance(detail, dict) else detail or ''}")
+                rendered = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+                error.append(f"  {rendered}")
                 errors.append(error)
         line.append(f"  {run.final_verdict or '—'}  {run.iteration or '—'}")
         lines.append(line)
