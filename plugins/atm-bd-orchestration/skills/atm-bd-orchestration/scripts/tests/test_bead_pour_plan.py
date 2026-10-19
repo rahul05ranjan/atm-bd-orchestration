@@ -230,6 +230,65 @@ class PourPlanTests(unittest.TestCase):
         self.assertIn(error["message"], str(caught.exception))
         self.runner.bd.run.assert_not_called()
 
+    def test_real_schema_rejects_stripped_rendered_sanity_before_any_attach(self):
+        import bead_schema
+        target = self.runner.sprint_target(self.sprint)
+        ids = {step: f"{self.sprint}.group-{step}" for step in ("dev", "sanity", "qa")}
+        template = SCRIPTS.parents[1] / "atm-beads/templates/dev-sanity-bead.json.j2"
+        values = {**target["compose"], "id": ids["sanity"], "dev_bead": ids["dev"]}
+        rendered = json.loads(sc_render.render(template, values))
+        self.assertEqual(bead_schema.validate_phase([rendered]), [])
+        del rendered["metadata"]["branch"]
+        self.assertTrue(any(problem.startswith(f"{ids['sanity']}: branch:")
+                            for problem in bead_schema.validate_phase([rendered])))
+        plan = self.fixture.root / "stripped-sanity-plan.json"
+        plan.write_text(json.dumps({"nodes": [rendered]}))
+        graph = {"ids": ids, "plan_path": str(plan), "edges": [],
+                 "nodes": [{"id": ids["sanity"], "action": "create"}]}
+        formula = self.fixture.root / "template.toml.j2"
+        formula.write_text("fixed transport input")
+        for mode in ([], ["--validate"]):
+            with self.subTest(mode=mode):
+                requests = []
+
+                def respond(argv, **kwargs):
+                    request = json.loads(Path(argv[argv.index("--request") + 1]).read_text())
+                    requests.append(request)
+                    return self.fixture.receipt(graph)
+
+                with (patch.object(groups, "Run", return_value=self.runner),
+                      patch.object(groups.repo_config, "repo_root", return_value=self.fixture.root),
+                      patch.object(groups.bead_formulas, "template", return_value=formula),
+                      patch.object(groups.subprocess, "run", side_effect=respond),
+                      patch.object(bead_schema, "load_phase", return_value=[]),
+                      redirect_stdout(io.StringIO()) as output):
+                    code = groups.main(["--json", "--sprint", self.sprint, *mode])
+                report = json.loads(output.getvalue())
+                self.assertEqual(code, groups.PROBLEMS)
+                self.assertTrue(report["schema_problems"])
+                self.assertTrue(any(problem.startswith(f"{ids['sanity']}: branch:")
+                                    for problem in report["targets"][0]["problems"]))
+                self.assertEqual([request["operation"] for request in requests], ["preview_attach"])
+                self.assertTrue(all("pour_authorization" not in request for request in requests))
+                self.runner.bd.run.assert_not_called()
+
+    def test_schema_read_failure_returns_cannot_run_without_attach(self):
+        import bead_schema
+        target = self.runner.sprint_target(self.sprint)
+        graph = {"ids": {}, "nodes": [], "edges": []}
+        with (patch.object(groups, "Run", return_value=self.runner),
+              patch.object(groups.repo_config, "repo_root", return_value=self.fixture.root),
+              patch.object(self.runner, "pour", return_value={"ids": {}, "nodes": [], "edges": [], "graph": graph}) as pour,
+              patch.object(bead_schema, "load_phase", side_effect=ValueError("invalid schema response")),
+              redirect_stdout(io.StringIO()) as output):
+            code = groups.main(["--json", "--sprint", self.sprint])
+        self.assertEqual(code, groups.FAILED)
+        self.assertEqual(json.loads(output.getvalue())["error"], {
+            "code": "BEAD_GROUPS_CANNOT_RUN", "message": "invalid schema response"})
+        pour.assert_called_once_with(target)
+        self.assertTrue(self.runner.validate)
+        self.runner.bd.run.assert_not_called()
+
     def test_preview_has_no_write_authorization_and_persists_exact_request(self):
         self.runner.validate = True
         _, request, command = self.fixture.invoke(self.runner.sprint_target(self.sprint), self.fixture.receipt())
