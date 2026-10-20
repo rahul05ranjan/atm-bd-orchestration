@@ -494,10 +494,11 @@ def _problems(
             continue
         problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
     problems.extend(conflicts.values())
+    open_merge_pairs = {(pr.head, pr.base) for pr in prs if pr.state == PrState.OPEN}
     problems.extend(
         Problem(f"merge_error:{merge.branch}:{merge.target}", None, inputs.lead,
                 f"merge check failed for {merge.branch} against {merge.target}", now)
-        for merge in merges if merge.state == MergeState.ERROR
+        for merge in merges if merge.state == MergeState.ERROR and (merge.branch, merge.target) in open_merge_pairs
     )
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)

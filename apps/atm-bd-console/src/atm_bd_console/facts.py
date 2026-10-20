@@ -183,8 +183,15 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
             if pr_state == PrState.UNKNOWN:
                 problems.append(f"unknown PR state {selected.pr.raw_state!r} for #{selected.pr.number}")
             merge = selected.merge
-            if merge is not None and merge.state == MergeState.ERROR and merge.branch == selected.pr.head and merge.target == selected.pr.base:
-                problems.append(f"merge check failed for {merge.branch} against {merge.target}")
+            if merge is not None and merge.branch == selected.pr.head and merge.target == selected.pr.base:
+                if pr_state != PrState.OPEN:
+                    pass
+                elif merge.state == MergeState.HEAD_NOT_PUSHED:
+                    problems.append(f"head not pushed for {merge.branch}")
+                elif merge.state == MergeState.BASE_DELETED:
+                    problems.append(f"base deleted for {merge.target}")
+                elif merge.state == MergeState.ERROR:
+                    problems.append(f"merge check failed for {merge.branch} against {merge.target}")
         pr_facts = None if pr_state == PrState.NONE else PrFacts(pr_state, selected)
         result.append(SprintFacts(sprint.id, short_id(sprint.id, snapshot.bead_prefix), state, agents,
                                   _gavel(steps), pr_facts, CiFacts(ci), tuple(problems)))

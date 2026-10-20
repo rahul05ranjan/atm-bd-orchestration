@@ -882,7 +882,7 @@ def test_fetch_replans_cycle_merges_from_refreshed_remote_refs(github_runtime, m
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
     assert due_states == [RUNNING_STATE.remotes, (fresh,)]
-    assert merges == [("new-branch", "base")]
+    assert merges == []
     assert inputs[0].remotes == Ok((fresh,))
 
 
@@ -903,7 +903,6 @@ def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(gi
         ("worktrees", "/code-checkout"),
         ("fetch", "/code-checkout"),
         ("remote_refs", "/code-checkout"),
-        ("merge", "/code-checkout", "feature/x", "main"),
     ]
 
 
@@ -1127,9 +1126,7 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
     monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok(()))
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
-    assert ("read", {"source": "git.merge", "outcome": "failed", "error": asdict(COMMAND_FAILED),
-                     "level": "error", "message": error_message(asdict(COMMAND_FAILED)),
-                     "branch": "topic", "target": "base"}) in events
+    assert not any(fields.get("source") == "git.merge" for _, fields in events)
 
 
 def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch):

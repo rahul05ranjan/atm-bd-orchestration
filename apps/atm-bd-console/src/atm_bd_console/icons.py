@@ -115,6 +115,8 @@ def merge_icon(state: MergeState) -> Icon:
             return MERGE_CLEAN
         case MergeState.CONFLICT:
             return icon(PrState.CONFLICT)
+        case MergeState.HEAD_NOT_PUSHED | MergeState.BASE_DELETED:
+            return icon(PrState.UNKNOWN)
         case MergeState.ERROR:
             return MERGE_ERROR
         case MergeState.UNKNOWN:
