@@ -94,9 +94,33 @@ def test_sanity_rows_show_local_time_icon_name_and_api_failure() -> None:
     ("API_FAILURE", "\U000f0026", "#D29922"),
 ])
 def test_sanity_verdict_uses_layout_c_glyph_and_color(verdict: str, glyph: str, color: str) -> None:
-    rendered = _verdict({"kind": "API_FAILURE"} if verdict == "API_FAILURE" else {"verdict": verdict})
-    assert rendered.plain == glyph
+    rendered = _verdict({"kind": "API_FAILURE"} if verdict == "API_FAILURE" else {"verdict": verdict}, "sanity-llm")
+    assert rendered.plain == (glyph if verdict == "API_FAILURE" else f"{glyph} {verdict.lower()}")
     assert str(rendered.style) == color
+
+
+@pytest.mark.parametrize(("verdict", "color"), [("PASS", "#2EA043"), ("FAIL", "#F85149")])
+def test_jev_verdict_uses_sanity_glyph(verdict: str, color: str) -> None:
+    rendered = _verdict({"verdict": verdict}, "sanity-jev")
+    assert rendered.plain == f"\U000f01a6 {verdict.lower()}"
+    assert str(rendered.style) == color
+
+
+def test_sanity_tables_align_variable_cells() -> None:
+    rows = [
+        {"run_id": "a", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-4", "pr_number": 2,
+         "iteration": 1, "final_verdict": "PASS", "dev": "a", "reviewer": "sanity-jev", "verdict": "PASS"},
+        {"run_id": "b", "completed_at": "2026-10-02T13:14:00Z", "sprint": "bj-very-long", "pr_number": 200,
+         "iteration": 12, "final_verdict": "FAIL", "dev": "a-longer-name", "reviewer": "sanity-jev", "verdict": "FAIL"},
+    ]
+    main, errors = sanity_text(runs.sanity_runs(rows), ())
+    main_lines = main.plain.splitlines()
+    assert [line.index("JEV") if index == 0 else line.index("\U000f01a6") for index, line in enumerate(main_lines)] == [
+        main_lines[0].index("JEV")
+    ] * len(main_lines)
+    _, errors = sanity_text(runs.sanity_runs([{**rows[1], "kind": "API_FAILURE", "error": "x"}]), ())
+    error_lines = errors.plain.splitlines()
+    assert error_lines[0].index("Reviewer") == error_lines[1].index("· sanity-jev")
 
 
 @pytest.mark.parametrize(("harness", "model", "dev_icon"), [

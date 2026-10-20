@@ -17,7 +17,9 @@ AGENT_ICONS: dict[AgentIcon, Icon] = {
     AgentIcon.LUNA: ("\U000f0f65", "#FFE066"),
     AgentIcon.SOL: ("\U000f05a8", "#FFA60D"),
     AgentIcon.OTHER: ("·", None),
-    AgentIcon.SEVERITY: ("\U000f01a6", "#E551BA"),
+    AgentIcon.SANITY: ("\U000f01a6", "#E551BA"),
+    AgentIcon.SANITY_PASS: ("\U000f01a6", "#2EA043"),
+    AgentIcon.SANITY_FAIL: ("\U000f01a6", "#F85149"),
     AgentIcon.QA_RUNNING: ("\U000f029b", "#4A5AF8"),
     AgentIcon.QA_PASS: ("\U000f029b", "#2EA043"),
     AgentIcon.QA_FAIL: ("\U000f029b", "#F85149"),
@@ -69,9 +71,12 @@ MARKER_FIX_QA = "🛠️"
 # Layout C individual/index.md: QA pass/fail use U+F029B (#2EA043/#F85149).
 # Lead ruling 2026-10-19 applies those entries to sanity verdicts as well.
 # Layout C has no API_FAILURE entry; the lead ruled to retain U+F0026 #D29922.
-SANITY_VERDICT_ICONS: dict[str, Icon] = {
-    "PASS": AGENT_ICONS[AgentIcon.QA_PASS],
-    "FAIL": AGENT_ICONS[AgentIcon.QA_FAIL],
+LLM_VERDICT_ICONS: dict[str, Icon] = {
+    "PASS": AGENT_ICONS[AgentIcon.QA_PASS], "FAIL": AGENT_ICONS[AgentIcon.QA_FAIL],
+    "API_FAILURE": ("\U000f0026", "#D29922"),
+}
+JEV_VERDICT_ICONS: dict[str, Icon] = {
+    "PASS": AGENT_ICONS[AgentIcon.SANITY_PASS], "FAIL": AGENT_ICONS[AgentIcon.SANITY_FAIL],
     "API_FAILURE": ("\U000f0026", "#D29922"),
 }
 

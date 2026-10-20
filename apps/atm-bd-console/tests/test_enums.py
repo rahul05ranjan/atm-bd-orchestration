@@ -16,8 +16,8 @@ def test_unknown_enum_value_is_rejected(enum):
 
 def test_enum_members_cover_the_contract():
     assert {member.value for member in AgentIcon} == {
-        "fable", "haiku", "sonnet", "opus", "astra", "sol", "terra", "luna", "other", "severity",
-        "qa_running", "qa_pass", "qa_fail",
+        "fable", "haiku", "sonnet", "opus", "astra", "sol", "terra", "luna", "other", "sanity",
+        "sanity_pass", "sanity_fail", "qa_running", "qa_pass", "qa_fail",
     }
     assert {member.value for member in SprintState} == {
         "open", "in_progress", "blocked", "deferred", "closed", "pinned", "hooked", "accepted", "planned",
@@ -82,5 +82,5 @@ def test_agent_icon_matches_model_names_by_contains_then_falls_back_by_harness(
 def test_agent_icon_uses_step_role_and_harness_fallback():
     member = Member("name", "active", None, "dev", "unknown", "codex-cli")
     assert agent_icon_of(member, "dev") is AgentIcon.TERRA
-    assert agent_icon_of(member, "sanity") is AgentIcon.SEVERITY
+    assert agent_icon_of(member, "sanity") is AgentIcon.SANITY
     assert agent_icon_of(member, "qa") is AgentIcon.QA_RUNNING

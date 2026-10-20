@@ -30,7 +30,7 @@ from textual.widgets.option_list import Option
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .build import display_identity
 from .enums import SprintState
-from .icons import SANITY_VERDICT_ICONS, SPRINT_ICONS, icon_for
+from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
@@ -113,12 +113,14 @@ def _run_time(value: str, *, local_zone: tzinfo | None = None) -> str:
         return "—"
 
 
-def _verdict(row: dict | None) -> Text:
+def _verdict(row: dict | None, reviewer: str) -> Text:
     if not row:
         return Text("—")
     kind = "API_FAILURE" if row.get("kind") == "API_FAILURE" else row.get("verdict")
-    glyph, color = SANITY_VERDICT_ICONS.get(str(kind), ("?", None))
-    return Text(glyph, style=color or "")
+    icons = JEV_VERDICT_ICONS if reviewer == "sanity-jev" else LLM_VERDICT_ICONS
+    glyph, color = icons.get(str(kind), ("?", None))
+    label = {"PASS": "pass", "FAIL": "fail"}.get(str(kind), "")
+    return Text(f"{glyph}{f' {label}' if label else ''}", style=color or "")
 
 
 def _duration(value: object) -> str:
@@ -135,31 +137,38 @@ def _agent_name(name: str | None, agents: tuple[AgentView, ...]) -> Text:
     return result
 
 
+def _aligned(rows: list[list[Text]]) -> Text:
+    widths = [max(cell_len(row[index].plain) for row in rows) for index in range(len(rows[0]))]
+    rendered = []
+    for row in rows:
+        line = Text()
+        for index, cell in enumerate(row):
+            line.append_text(cell)
+            if index < len(row) - 1:
+                line.append(" " * (widths[index] - cell_len(cell.plain) + 2))
+        rendered.append(line)
+    return Text("\n").join(rendered)
+
+
 def sanity_text(
     items: list[runs.SanityRun], agents: tuple[AgentView, ...], *, local_zone: tzinfo | None = None,
 ) -> tuple[Text, Text]:
-    lines = [Text("Completed  Sprint  PR  Dev  JEV  Elapsed  LLM  Elapsed  Final  Iter")]
-    errors = [Text("Sprint  Iter  Reviewer  Error")]
+    lines = [[Text(value) for value in ("Completed", "Sprint", "PR", "Dev", "JEV", "Elapsed", "LLM", "Elapsed", "Final", "Iter")]]
+    errors = [[Text(value) for value in ("Sprint", "Iter", "Reviewer", "Error")]]
     for run in items:
-        line = Text(f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  #{run.pr_number or '—'}  ")
-        line.append_text(_agent_name(run.dev, agents))
-        for row, field in ((run.jev, "jev_elapsed_s"), (run.llm, "llm_elapsed_s")):
-            line.append("  ")
-            line.append_text(_verdict(row))
-            line.append(f"  {_duration(row.get(field) if row else None)}")
+        line = [Text(_run_time(run.completed_at, local_zone=local_zone)), Text(run.sprint), Text(f"#{run.pr_number or '—'}"), _agent_name(run.dev, agents)]
+        for row, reviewer, field in ((run.jev, "sanity-jev", "jev_elapsed_s"), (run.llm, "sanity-llm", "llm_elapsed_s")):
+            line.extend((_verdict(row, reviewer), Text(_duration(row.get(field) if row else None))))
             if row and row.get("kind") == "API_FAILURE":
                 name = str(row.get("reviewer") or "")
-                error = Text(f"{run.sprint}  {run.iteration or '—'}  ")
-                error.append_text(_agent_name(name, agents))
-                error.append("  ")
-                error.append_text(_verdict(row))
+                error = [Text(run.sprint), Text(str(run.iteration or "—")), _agent_name(name, agents), _verdict(row, name)]
                 detail = row.get("error")
                 rendered = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
-                error.append(f"  {rendered}")
+                error.append(Text(rendered))
                 errors.append(error)
-        line.append(f"  {run.final_verdict or '—'}  {run.iteration or '—'}")
+        line.extend((Text(run.final_verdict or "—"), Text(str(run.iteration or "—"))))
         lines.append(line)
-    return Text("\n").join(lines), Text("\n").join(errors)
+    return _aligned(lines), _aligned(errors)
 
 
 def _quality_run_label(

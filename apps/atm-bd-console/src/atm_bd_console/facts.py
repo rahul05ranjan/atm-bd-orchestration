@@ -26,7 +26,7 @@ def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIco
     when present and running otherwise; icons.icon_for only looks it up.
     """
     if step_kind == "sanity":
-        return AgentIcon.SEVERITY
+        return AgentIcon.SANITY
     if step_kind in ("qa", "sprint_qa"):
         qa_state = member.qa_state if isinstance(member, AgentView) else None
         return _QA_ICONS[qa_state] if qa_state is not None else AgentIcon.QA_RUNNING
