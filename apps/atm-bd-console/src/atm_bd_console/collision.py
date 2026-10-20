@@ -1,10 +1,10 @@
-"""Detect two or more active tasks sharing a sprint or worktree, and name them in one collision row per sprint."""
+"""Detect active tasks sharing a known task-owned worktree."""
 from __future__ import annotations
 
 import json
 
-from .facts import task_sprint, task_step
-from .types import Snapshot, Sprint
+from .facts import task_sprint
+from .types import Snapshot
 
 
 def collisions(snapshot: Snapshot) -> tuple[tuple[str, str, str], ...]:
@@ -12,30 +12,33 @@ def collisions(snapshot: Snapshot) -> tuple[tuple[str, str, str], ...]:
     if phase is None:
         return ()
     steps = {step.bead_id: step for step in phase.steps}
+    beads = {bead.id: bead for bead in snapshot.task_bead_data}
     worktrees = {worktree.branch: worktree.path for worktree in snapshot.worktree_data if worktree.branch}
-    mapped = []
+    groups: dict[str, list[tuple[str, str]]] = {}
     for task in snapshot.task_data:
         if task.state != "active":
             continue
         sprint = task_sprint(task, snapshot, steps)
         if sprint is None:
             continue
-        step = task_step(task, snapshot, steps)
-        path = (step.worktree if step else None) or worktrees.get(sprint.branch) or "unknown"
-        mapped.append((task, sprint, path))
-    groups: dict[str, tuple[Sprint, set[str], set[str]]] = {}
-    for task, sprint, path in mapped:
-        peers = [(other, other_sprint, other_path) for other, other_sprint, other_path in mapped
-                 if other_sprint == sprint or (path != "unknown" and other_path == path)]
+        step = steps.get(task.id)
+        bead = beads.get(task.id)
+        metadata = bead.metadata if bead else {}
+        path = (step.worktree if step else None) or metadata.get("worktree")
+        branch = (step.branch if step else None) or metadata.get("branch")
+        if not path and isinstance(branch, str):
+            path = worktrees.get(branch)
+        if not isinstance(path, str) or not path.strip() or path == "unknown":
+            continue
+        groups.setdefault(path, []).append((sprint.id, task.agent))
+    result = []
+    for path, peers in sorted(groups.items()):
         if len(peers) < 2:
             continue
-        _, names, paths = groups.setdefault(sprint.id, (sprint, set(), set()))
-        names.update(other.agent for other, _, _ in peers)
-        paths.update(other_path for _, _, other_path in peers)
-    result = []
-    for sprint_id, (_, names, paths) in sorted(groups.items()):
-        agents = sorted(names)
-        key = json.dumps([sprint_id, agents], separators=(",", ":"))
-        message = f"collision: {sprint_id}; worktree {', '.join(sorted(paths))}; agents {', '.join(agents)}"
+        sprint_ids = sorted({sprint_id for sprint_id, _ in peers})
+        sprint_id = sprint_ids[0]
+        agents = sorted({agent for _, agent in peers})
+        key = json.dumps([sprint_id, agents, path], separators=(",", ":"))
+        message = f"collision: {', '.join(sprint_ids)}; worktree {path}; agents {', '.join(agents)}"
         result.append((key, sprint_id, message))
     return tuple(result)
