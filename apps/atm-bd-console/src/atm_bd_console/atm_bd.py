@@ -384,11 +384,10 @@ def phase(
     stack_bead = next((bead for bead in beads if "stage:stack" in bead.labels), None)
     pending_value = stack_bead.metadata.get("pending_handoffs", []) if stack_bead else []
     pending_handoffs = tuple(item for item in pending_value if isinstance(item, dict)) if isinstance(pending_value, list) else ({"checked_bead": "*", "branch": "?", "commit": "?"},)
+    errors: list[tuple[str, Error]] = []
     if stack_bead and (not isinstance(pending_value, list) or len(pending_handoffs) != len(pending_value)):
-        errors = [(stack_bead.id, ConfigInvalid("config_invalid", f"{stack_bead.id}.metadata.pending_handoffs",
-                                                repr(pending_value), "repair pending_handoffs as an array of objects"))]
-    else:
-        errors = []
+        errors.append((stack_bead.id, ConfigInvalid("config_invalid", f"{stack_bead.id}.metadata.pending_handoffs",
+                                                    repr(pending_value), "repair pending_handoffs as an array of objects")))
     ready_ids = {bead.id for bead in ready}
     sprints: list[Sprint] = []
     for sprint_id in file.sprints:

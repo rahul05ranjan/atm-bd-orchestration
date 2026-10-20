@@ -195,6 +195,8 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
     pending_checked = {item["checked_bead"] for item in pending_handoffs
                        if isinstance(item.get("checked_bead"), str) and item["checked_bead"]}
     for item in pending_handoffs:
+        if stack_bead is None:
+            raise QueueFailure("pending stack handoff exists without a stack bead")
         checked = item.get("checked_bead") or item.get("sanity_bead") or _valid_id(stack_bead, "stack bead")
         branch, commit = item.get("branch", "?"), item.get("commit", "?")
         since = stack_bead.get("updated_at")
