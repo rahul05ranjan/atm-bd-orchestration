@@ -243,7 +243,7 @@ class TemplateContractTests(unittest.TestCase):
         for template_path in templates:
             fixture_name = template_path.name.removesuffix(".j2").rsplit(".", 1)[0] + "-vars.json"
             if template_path.name in ("task-close-vars.j2", "sanity-fail.xml.j2", "rebase-required.xml.j2"):
-                fixture_name = "task-close-vars-dev.json"
+                fixture_name = "task-close-vars-sanity.json"
             variables = examples / fixture_name
             with self.subTest(template=template_path.name):
                 self.assertTrue(variables.is_file(), f"missing strict-render fixture: {fixture_name}")

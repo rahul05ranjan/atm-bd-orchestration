@@ -14,6 +14,15 @@ SPEC = importlib.util.spec_from_file_location("task_close", SCRIPTS / "atm-task-
 hook = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(hook)
 EXAMPLES = SCRIPTS.parent / "examples"
+# Completion values the hook derives from git and the PR, so the lead file never carries them.
+DERIVED = ("commit", "generated_at", "pr_number", "pr_url", "rebased_onto")
+
+
+def example_values(role):
+    values = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    if role in ("dev", "fix"):
+        values.update(json.loads((EXAMPLES / f"task-close-result-{role}.json").read_text()))
+    return values
 
 
 class World:
@@ -21,9 +30,13 @@ class World:
         self.root = root
         self.values = {}
         for role in ("qa", "sanity", "fix", "dev"):
-            self.values.update(json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text()))
+            self.values.update(example_values(role))
         self.values.update(primary_checkout=str(root), worktree_path=str(root))
+        self.values["rebased_onto"] = "b" * 40
         self.values["carry_forward"] = ""
+        # HEAD is stable even when a test removes commit from the dispatch values.
+        self.head = self.values["commit"]
+        self.pr_number = self.values["pr_number"]
         (root / ".atm-bd").mkdir()
         (root / ".atm-bd/phase-bj.toml").write_text('lead = "phase-lead"\n')
         (root / ".atm.toml").write_text('[atm]\ndefault_team = "test-team"\n')
@@ -31,11 +44,14 @@ class World:
         config.parent.mkdir(parents=True)
         config.write_text('bead_prefix: atm\ndev_sanity_member: sanity\nqa_member: quality\nteam_lead_member: team-lead\n')
         self.path = root / "dispatch.json"
+        self.result_path = root / "result.json"
         self.beads = {}
         for name in ("checked_bead", "sanity_bead", "qa_bead"):
             bead = self.values[name]
             self.beads[bead] = dict(id=bead, status="in_progress", assignee="developer", metadata={})
         self.beads[self.values["checked_bead"]]["metadata"]["sanity_bead"] = self.values["sanity_bead"]
+        self.beads[self.values["checked_bead"]]["metadata"].update(
+            pr_number=self.pr_number, pr_url=self.values["pr_url"])
         self.beads[self.values["sanity_bead"]]["metadata"]["dev_bead"] = self.values["checked_bead"]
         self.beads["atm-phase-bj.stack"] = json.loads((SCRIPTS / "tests/fixtures/stack-bead.json").read_text())
         self.tasks = {self.values[name]: [] for name in ("dev_task_id", "sanity_task_id", "qa_task_id")}
@@ -59,10 +75,18 @@ class World:
         task = self.values.get({"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role])
         if task in self.tasks and not self.tasks[task]:
             self.tasks[task].append(self.assignment(1))
-        self.path.write_text(json.dumps(self.values))
+        extra = []
+        if role in ("dev", "fix"):
+            fields = hook.header(hook.TEMPLATES / "task-close-vars.j2")["result_variables_by_role"][role]
+            self.result_path.write_text(json.dumps({name: self.values[name] for name in fields if name in self.values}))
+            self.path.write_text(json.dumps({name: value for name, value in self.values.items()
+                                             if name not in fields and name not in DERIVED}))
+            extra = ["--result", str(self.result_path)]
+        else:
+            self.path.write_text(json.dumps(self.values))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            args = ["--role", role, "--vars", str(self.path)] + (["--skip-checks"] if skip_checks else [])
+            args = ["--role", role, "--vars", str(self.path)] + extra + (["--skip-checks"] if skip_checks else [])
             result = hook.main(args, runner=self, clock=lambda: 42)
         assert stdout.getvalue() == stderr.getvalue()
         output = json.loads(stdout.getvalue())
@@ -138,11 +162,11 @@ class World:
                                       recipient=recipient, body=body, at="2026-10-19T23:00:00Z"))
         elif argv[0] == "git":
             if argv[1] == "rev-parse":
-                output = self.values["commit"] if argv[2] == "HEAD" else "b" * 40
+                output = self.values.get("commit", self.head) if argv[2] == "HEAD" else "b" * 40
                 if "branch" in self.values and argv[2] == f"refs/remotes/origin/{self.values['branch']}":
-                    output = self.values.get("commit", "")
+                    output = self.values.get("commit", self.head)
             elif argv[1] == "ls-remote":
-                output = self.values["commit"] + "\trefs/heads/branch"
+                output = self.values.get("commit", self.head) + "\trefs/heads/branch"
             elif argv[1:4] == ["remote", "get-url", "origin"]:
                 output = "git@github.com:example/repo.git"
             else:
@@ -152,7 +176,7 @@ class World:
                 raise OSError("GitHub unavailable")
             if self.github_failure:
                 return subprocess.CompletedProcess(argv, 1, "", "HTTP 429")
-            output = [{"number": self.values["pr_number"], "head": {"sha": self.values["commit"]}, "base": {"ref": "deliberately-different"}}]
+            output = [{"number": self.values.get("pr_number", self.pr_number), "head": {"sha": self.values.get("commit", self.head)}, "base": {"ref": "deliberately-different"}}]
         else:
             raise AssertionError(argv)
         if write:

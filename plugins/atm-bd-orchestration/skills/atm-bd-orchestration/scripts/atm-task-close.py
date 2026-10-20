@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import tomllib
+from datetime import datetime, timezone
 
 import yaml
 
@@ -66,11 +67,33 @@ def read_vars(path):
     return values
 
 
+def merge_result(values, result, role):
+    """Join the fixer's result file to the lead's dispatch vars; each field lives in exactly one of them."""
+    fields = set(header(TEMPLATES / "task-close-vars.j2")["result_variables_by_role"][role])
+    unknown = result.keys() - fields
+    if unknown:
+        raise CloseError("VARS.UNKNOWN", ", ".join(sorted(unknown)), f"Remove fields that are not {role} result fields from --result.")
+    overlap = values.keys() & result.keys()
+    if overlap:
+        raise CloseError("VARS.INVALID", ", ".join(sorted(overlap)),
+                         "Pass each completion field once: remove it from the lead's dispatch file or from --result.")
+    return {**values, **result}
+
+
 def validate_shared_vars(values, role):
     """Strictly render the shared dispatch contract before inspecting live state."""
     validate(values, role)
+    contract = header(TEMPLATES / "task-close-vars.j2")
+    fields = contract["render_variables_by_role"][role]
+    if role == "fix" and values["outcome"] == "not_reproducible":
+        fields = [name for name in fields if name != "branch"]
+    render_values = {name: values[name] for name in fields if name in values}
+    contract.update(required_variables=fields, defaults={})
     try:
-        sc_render.render(TEMPLATES / "task-close-vars.j2", values)
+        with tempfile.TemporaryDirectory(prefix="atm-task-close-contract-") as directory:
+            template = Path(directory) / "task-close-vars.j2"
+            template.write_text("---\n" + yaml.safe_dump(contract) + "---\n{{ '' }}\n", encoding="utf-8")
+            sc_render.render(template, render_values)
     except sc_render.RenderError as error:
         raise CloseError("VARS.INVALID", str(error),
                          "Supply every field required by the shared task-close vars contract.") from error
@@ -196,7 +219,7 @@ def validate(values, role):
     role_required = contract.get("required_variables_by_role")
     if not isinstance(role_required, dict) or role not in role_required:
         raise CloseError("VARS.INVALID", "task-close-vars must declare requirements by role", "Repair the role-specific required_variables mapping.")
-    required = set(role_required[role])
+    required = set(role_required[role]) | set(contract.get("result_variables_by_role", {}).get(role, []))
     declared = set(contract["required_variables"])
     missing = required - values.keys()
     if role == "fix" and values.get("outcome") == "not_reproducible":
@@ -210,7 +233,7 @@ def validate(values, role):
     if role in ("dev", "fix", "sanity"):
         names.append("stack_bead")
     if values["outcome"] != "not_reproducible":
-        names += ["branch", "commit", "pr_number"]
+        names += ["branch"] if role in ("dev", "fix") else ["branch", "commit", "pr_number"]
     elif not re.search(r"\S+:\d+", str(values["evidence"])):
         raise CloseError("VARS.INVALID", "not_reproducible requires evidence file:line", "Supply the authoritative absence location.")
     for name in names:
@@ -226,11 +249,12 @@ def validate(values, role):
         raise CloseError("VARS.INVALID", "round must be a positive integer", "Supply the current sanity assignment round.")
     if role == "qa" and values["verdict"] == "CANNOT_RUN":
         raise CloseError("VARS.INVALID", "QA CANNOT_RUN is not a completed review", "Use the QA refusal workflow.")
-    if not isinstance(values["undone"], list) or any(
+    undone = values.get("undone", []) if role in ("dev", "fix") else values["undone"]
+    if not isinstance(undone, list) or any(
         not isinstance(item, dict) or isinstance(item.get("number"), bool)
         or not isinstance(item.get("number"), int) or item["number"] < 1
         or not isinstance(item.get("reason"), str) or not item["reason"].strip()
-        for item in values["undone"]
+        for item in undone
     ):
         raise CloseError("VARS.INVALID", "undone must contain numbered deliverables and verbatim reasons", "Supply the selected undone deliverables.")
     if role == "sanity" and values["verdict"] == "FAIL" and not values["undone"]:
@@ -248,7 +272,7 @@ class Hook:
         self.identity = os.environ.get("ATM_IDENTITY", "")
         if not self.identity:
             raise CloseError("VARS.INVALID", "ATM_IDENTITY is not set", "Run as the assigned ATM member.")
-        config = read_config(self.root, role, values["verdict"])
+        config = read_config(self.root, role, values.get("verdict", ""))
         self.config = config
         self.lead = read_toml_setting(self.root / ".atm-bd" / f"phase-{values['phase']}.toml", ("lead",))
         team = read_toml_setting(self.root / ".atm.toml", ("atm", "default_team"))
@@ -258,7 +282,7 @@ class Hook:
         self.github_error = ""
         self.closed, self.assigned = [], []
         self.task = values[{"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role]]
-        self.key = [self.task, values["verdict"], values.get("commit", "")]
+        self.key = [self.task, values.get("verdict", ""), values.get("commit", "")]
         self.records, self.task_history = {}, {}
 
     def run(self, argv, *, lead=False, git=False, check=True):
@@ -383,9 +407,7 @@ class Hook:
 
     def checks(self):
         values = self.values
-        head = self.run(["git", "rev-parse", "HEAD"], git=True).stdout.strip()
-        if head != values["commit"]:
-            raise CloseError("HEAD.NOT_PUSHED", "HEAD differs from commit", "Push the checked commit and supply its full sha.")
+        head = values["commit"]
         dirty = self.run(["git", "status", "--porcelain"], git=True).stdout.strip()
         if dirty:
             raise CloseError("HEAD.DIRTY", dirty, "Commit or remove worktree changes before retrying.")
@@ -419,7 +441,8 @@ class Hook:
             if tracking != head:
                 raise CloseError("HEAD.NOT_PUSHED", "cached origin head differs from HEAD",
                                  "Push this branch and refresh origin before retrying.")
-        top, _head = self.stack_top()
+        top, top_head = self.stack_top()
+        values["rebased_onto"] = top_head
         ancestor = self.run(["git", "merge-base", "--is-ancestor", f"origin/{top}", head], git=True, check=False)
         if ancestor.returncode == 1:
             raise CloseError("BASE.NOT_ANCESTOR", top, f"Rebase onto origin/{top}, push, then rerun the hook.")
@@ -431,6 +454,7 @@ class Hook:
             raise CloseError("COMMAND.INVALID", "origin does not name owner/repository", "Configure the repository origin.")
         owner, repo = match.groups()
         if self.github == "unavailable":
+            self.keep_recorded_pr()
             return
         for _attempt in range(3):
             try:
@@ -440,10 +464,23 @@ class Hook:
                     raise
                 self.record_github_failure(self.last_json_argv, error)
                 continue
-            if not any(str(pr["number"]) == str(values["pr_number"]) and pr["head"]["sha"] == head for pr in prs):
-                raise CloseError("PR.NOT_FOUND", "no open PR for this branch at HEAD", "Open the PR at the pushed head and supply its number.")
+            matches = [pr for pr in prs if pr["head"]["sha"] == head]
+            if not matches:
+                raise CloseError("PR.NOT_FOUND", "no open PR for this branch at HEAD", "Open the PR at the pushed head, then rerun the hook.")
+            if len(matches) != 1:
+                raise CloseError("PR.AMBIGUOUS", "several open PRs match this branch at HEAD",
+                                 "Close the duplicate PRs so exactly one open PR names this branch and pushed head, then rerun the hook.")
+            values["pr_number"] = str(matches[0]["number"] or "")
+            values["pr_url"] = f"https://github.com/{owner}/{repo}/pull/{values['pr_number']}" if values["pr_number"] else ""
             return
         self.github = "unavailable"
+        self.keep_recorded_pr()
+
+    def keep_recorded_pr(self):
+        # Without GitHub the PR identity is the one the bead already records.
+        metadata = self.bead(self.task).get("metadata") or {}
+        self.values["pr_number"] = str(metadata.get("pr_number") or "")
+        self.values["pr_url"] = str(metadata.get("pr_url") or "")
 
     def render(self, template, values=None):
         try:
@@ -481,12 +518,28 @@ class Hook:
         self.closed.append(bead)
         return wrote
 
+    def derive_local(self):
+        # The completion fields the fixer used to type come from the worktree and the open PR instead.
+        head = self.run(["git", "rev-parse", "HEAD"], git=True).stdout.strip()
+        self.values.update(commit=head, generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                           pr_number="", pr_url="", rebased_onto="")
+        self.require_completion_identity(("commit",))
+        self.key = [self.task, self.values.get("verdict", ""), head]
+
+    def require_completion_identity(self, fields=("commit", "pr_number", "pr_url")):
+        if self.values["outcome"] == "not_reproducible":
+            return
+        for name in fields:
+            if not str(self.values.get(name) or "").strip():
+                raise CloseError("VARS.EMPTY", f"derived {name} is empty",
+                                 "Push a non-empty HEAD and open exactly one PR; when GitHub is unavailable or checks are skipped, record its pr_number and pr_url on the checked bead before retrying.")
+
     def dev(self, skip):
         values = self.values
+        self.derive_local()
         if self.snapshot(include_stack=not skip or values["outcome"] == "not_reproducible"):
             return
         template = "fix-complete.md.j2" if self.role == "fix" else "dev-complete.md.j2"
-        self.render(template)
         record = self.bead(values["checked_bead"])
         sanity = (record.get("metadata") or {}).get("sanity_bead")
         if not sanity:
@@ -495,22 +548,34 @@ class Hook:
             sanity = matches[0] if len(matches) == 1 else None
         if sanity != values["sanity_bead"]:
             raise CloseError("BEAD.NO_SANITY", "no matching group sanity bead", f"Ask {self.lead} to create or correct the group sanity bead.")
-        if values["outcome"] == "not_reproducible":
-            branch, commit = self.stack_top()
-            assignment = {**values, "branch": branch, "commit": commit}
-            self.render("dev-sanity-template.xml.j2", assignment)
-            with tempfile.TemporaryDirectory(prefix="atm-task-close-") as directory:
-                path = Path(directory) / "sanity-vars.json"
-                path.write_text(json.dumps(assignment), encoding="utf-8")
-                self.finish_dev(sanity, template, path=path)
-            return
-        self.render("dev-sanity-template.xml.j2")
-        if not skip:
-            self.checks()
-        self.finish_dev(sanity, template)
+        with tempfile.TemporaryDirectory(prefix="atm-task-close-") as directory:
+            completion = Path(directory) / "completion-vars.json"
+            if values["outcome"] == "not_reproducible":
+                branch, commit = self.stack_top()
+                assignment = {**values, "branch": branch, "commit": commit}
+                self.render("dev-sanity-template.xml.j2", assignment)
+                assignment_path = Path(directory) / "sanity-vars.json"
+                assignment_path.write_text(json.dumps(assignment), encoding="utf-8")
+                self.render(template)
+                completion.write_text(json.dumps(values), encoding="utf-8")
+                self.path = completion
+                self.finish_dev(sanity, template, path=assignment_path)
+                return
+            if not skip:
+                self.checks()
+            else:
+                self.keep_recorded_pr()
+                values["rebased_onto"] = self.run(["git", "rev-parse", f"origin/{values['pr_target']}"], git=True).stdout.strip()
+            self.require_completion_identity()
+            self.render("dev-sanity-template.xml.j2")
+            self.render(template)
+            completion.write_text(json.dumps(values), encoding="utf-8")
+            self.path = completion
+            self.finish_dev(sanity, template)
 
     def finish_dev(self, sanity, template, *, path=None):
         values = self.values
+        self.require_completion_identity()
         assignment_values = json.loads(Path(path).read_text()) if path else values
         sanity_events = self.task_history[sanity]
         terminal = is_terminal(sanity_events)
@@ -602,11 +667,17 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
     parser = Parser(description=__doc__)
     parser.add_argument("--role", required=True, choices=ROLES)
     parser.add_argument("--vars", required=True, type=Path)
+    parser.add_argument("--result", type=Path, help="the fixer's result file; required for dev and fix")
     parser.add_argument("--skip-checks", action="store_true", help="skips the PR and stack checks. Do NOT use without permission from the phase lead.")
     hook = None
     try:
         args = parser.parse_args(argv)
         values = read_vars(args.vars)
+        if args.role in ("dev", "fix"):
+            if args.result is None:
+                raise CloseError("ARGS.INVALID", "--result is required for dev and fix",
+                                 "Pass the fixer's result file with --result <result-file>.")
+            values = merge_result(values, read_vars(args.result), args.role)
         validate_shared_vars(values, args.role)
         hook = Hook(args.role, values, args.vars, runner, clock)
         started = clock()
