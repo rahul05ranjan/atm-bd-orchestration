@@ -64,10 +64,6 @@ def has_prior_pass(output: str) -> bool:
                and str(row["Issue"].get("close_reason") or "").startswith("PASS at ") for row in history)
 
 
-def is_clean(status: str) -> bool:
-    return not any(line and not any(path in line for path in IGNORED_STATUS_PATHS) for line in status.splitlines())
-
-
 def git_dir(args: argparse.Namespace) -> list[str]:
     worktree = getattr(args, "worktree", "")
     return ["-C", worktree] if worktree else []

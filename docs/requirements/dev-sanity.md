@@ -55,12 +55,14 @@ Sources: `agents/{dev-sanity,sanity-stack,sc-sanity-llm,sc-sanity-jev}.md`, `tem
 42. Never edit, commit, push, build, test, lint or run `bd`/`atm`; empty findings is success.
 
 ### Scripts
-43. `assignment-gates.py sanity`: READY, COMMIT_REQUIRED, COMMIT_MISMATCH, SANITY_FROZEN or GATE_CANNOT_RUN.
+43. `assignment-gates.py sanity`: READY, NOT_READY, COMMIT_REQUIRED, COMMIT_MISMATCH, SANITY_FROZEN or GATE_CANNOT_RUN.
 44. `sanity-split`: exit 2 `PLAN_INVALID` (no top-level numbered `## Deliverables`), 3 `TARGET_UNREADABLE`, 4 `COMMIT_MISMATCH` (HEAD, branch or origin not at sha, any `git status --porcelain` line other than the ignored paths, or the last layer PR's head not the sha), 5 `RENDER_FAILED`; one assignment per deliverable; lint once, detached, 1800 s timeout.
 45. `sanity-merge`: one valid result per deliverable at the pinned sha, at most one `skipped` each; PASS only with no findings and lint exit 0; lint diagnostics fold in as findings; lint timeout/cancelled/error is `SANITY.LINT_UNAVAILABLE`. `--reviewer sanity-jev` turns a reply without a valid receipt, whose choice contradicts its findings, that reuses another deliverable's receipt, or a `SANITY.JEV_*` failure not in the client's own text, into `SANITY.RESULT_INVALID` for that deliverable; the selected merge rejects such a reply, a failure envelope selected over a valid reply, and a failed rerun while either original reply is valid.
 46. `sanity-run-history`: rows only for `sanity-llm` or `sanity-jev`; a `sanity-jev` PASS/FAIL row carries every receipt; CANNOT_RUN has null findings and an error; locked append to the phase sanity ledger; an identical retry is a no-op, a differing duplicate fails.
 47. `sanity-create-findings`: retired by the close hook (29): a FAIL is reported to the dev as `sanity-fail`, not as finding children; the script is deleted with the hook change.
 48. `jev_client.py --startup` exits 2 on failure; `--announce` (with `--startup` or `--error "<code>: <message>"`, and `--lead`) sends the failure to each ATM escalation recipient, else to `--lead` saying no escalation recipient is set; missing `TYPESAFE_API_KEY` is `SANITY.JEV_UNAVAILABLE`.
+49. `sanity-close-vars`: `--manifest`, `--selected`, optional `--stack-input` and `--stack-result`; prints the complete close-hook vars for the selected verdict and, for a fixed PASS, writes the stack input; exit 2 on invalid or mismatched input. Never hand-edited.
+50. `sanity-stack-link --input <stack-input.json> [--notify-lead <lead>]`: under the stack bead lock links the PASS layer and prints `stacked`, `stack_failed`, `lock_timeout` or `rebase_required`; a non-`stacked` result is sent to the lead; it never reopens the sanity task or counts a sanity round.
 
 ## Unresolved
 

@@ -357,7 +357,7 @@ def test_not_reproducible_assigns_runtime_top_without_rewriting_input(world):
     assert assignment["values"]["beads_dir"] == str(world.root / ".beads")
     assert any(argv == ["bd", "where", "--json"] for argv, _kwargs in world.calls)
     assert set(assignment["values"]) == set(world.values) | {"branch", "commit", *contract["derived_variables"],
-                                                          "close_context", "beads_dir", "phase_lead"}
+                                                          "close_context", "beads_dir"}
     assert not any(argv[0] == "gh" for argv, _kwargs in world.calls)
 
 
@@ -370,7 +370,7 @@ def test_not_reproducible_fix_without_stack_bead_uses_pr_target(world):
     assert any(argv == ["git", "rev-parse", "origin/integrate/phase-bj"] for argv, _kwargs in world.calls)
     assert not any(argv[:2] == ["bd", "show"] and argv[2] == "atm-phase-bj.stack" for argv, _kwargs in world.calls)
     assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
-    assert assignment["values"]["stack_bead"] == ""
+    assert "stack_bead" not in assignment["values"]
 
 
 def test_not_reproducible_hook_verifies_the_cited_file_and_line(world):
@@ -749,9 +749,9 @@ def test_shared_contract_covers_all_role_templates_and_ids(world):
     names = ("dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2", "sanity-fail.xml.j2",
              "dev-sanity-complete.md.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     for name in names:
-        dispatch_only = {"beads_dir", "phase_lead", "close_context"} if name == "dev-sanity-template.xml.j2" else set()
+        dispatch_only = {"beads_dir", "close_context"} if name == "dev-sanity-template.xml.j2" else set()
         assert set(hook.header(hook.TEMPLATES / name)["required_variables"]) <= declared | dispatch_only, name
-        values = {**world.values, "beads_dir": str(world.root / ".beads"), "phase_lead": "phase-lead",
+        values = {**world.values, "beads_dir": str(world.root / ".beads"),
                   "close_context": {**world.values, "phase_lead": "phase-lead"}}
         body = hook.sc_render.render(hook.TEMPLATES / name, values)
         role_id = "sanity_task_id" if name.startswith("dev-sanity") else "qa_task_id" if name.startswith("qa-") else "dev_task_id"
@@ -772,7 +772,7 @@ def test_each_role_example_renders_every_shared_template(world, role):
     hook.validate(values, role)
     if role in ("dev", "fix"):
         values = {**world.values, **values}
-    values.update(beads_dir=str(world.root / ".beads"), phase_lead="phase-lead",
+    values.update(beads_dir=str(world.root / ".beads"),
                   close_context={**values, "phase_lead": "phase-lead"})
     common = ("dev-sanity-complete.md.j2", "sanity-fail.xml.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     names = {
@@ -985,7 +985,7 @@ def test_close_from_documented_dispatch_and_result_files_derives_handoff(world, 
     derived = {"commit": world.head, "pr_number": str(world.pr_number),
                "pr_url": f"https://github.com/example/repo/pull/{world.pr_number}",
                "rebased_onto": "b" * 40}
-    assert set(assignment["values"]) == set(dispatch) | set(result) | set(DERIVED) | {"close_context", "beads_dir", "phase_lead"}
+    assert set(assignment["values"]) == set(dispatch) | set(result) | set(DERIVED) | {"close_context", "beads_dir"}
     assert {name: assignment["values"][name] for name in derived} == derived
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", assignment["values"]["generated_at"])
     update = next(argv for argv, _ in world.writes if argv[:3] == ["bd", "update", dispatch["checked_bead"]])

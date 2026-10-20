@@ -68,7 +68,6 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/assignment-gates.py
     - skills/atm-bd-orchestration/scripts/atm-hook-doctor.py
     - skills/atm-bd-orchestration/scripts/atm-task-close.py
-    - skills/atm-bd-orchestration/scripts/bd_commands.py
     - skills/atm-bd-orchestration/scripts/bead-groups
     - skills/atm-bd-orchestration/scripts/bead-queues
     - skills/atm-bd-orchestration/scripts/bead_formulas.py

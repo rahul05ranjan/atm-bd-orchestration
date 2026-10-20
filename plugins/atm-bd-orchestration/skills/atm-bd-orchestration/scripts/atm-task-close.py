@@ -529,7 +529,7 @@ class Hook:
                     dispatch = Path(directory) / "completion-vars.json"
                     close_context = {**context, "phase_lead": self.lead,
                                      "budget": context.get("budget", "full")}
-                    dispatch.write_text(json.dumps({**context, "close_context": close_context, "phase_lead": self.lead,
+                    dispatch.write_text(json.dumps({**context, "close_context": close_context,
                                                     "beads_dir": self.beads_directory()}))
                     self.render(template, read_vars(dispatch))
                     self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
@@ -610,8 +610,7 @@ class Hook:
                 branch, commit = self.stack_top()
                 assignment = {**values, "branch": branch, "commit": commit,
                               "close_context": {**values, "phase_lead": self.lead},
-                              "phase_lead": self.lead, "beads_dir": self.beads_directory()}
-                assignment.setdefault("stack_bead", "")
+                              "beads_dir": self.beads_directory()}
                 self.render("dev-sanity-template.xml.j2", assignment)
                 assignment_path = Path(directory) / "sanity-vars.json"
                 assignment_path.write_text(json.dumps(assignment), encoding="utf-8")
