@@ -13,9 +13,13 @@ except ImportError:
     BUILT_IDENTITY: str | None = None
 
 
-def identity(root: Path | None = None) -> str:
-    """Full identity: <major>.<minor>.<commit count>+g<sha>[-dirty] (what --version prints)."""
-    return _checkout_identity(root) or BUILT_IDENTITY or f"{__version__}+unknown"
+def identity() -> str:
+    """The package version exposed by ``atm-bd --version``.
+
+    Build provenance remains available through ``display_identity`` and the
+    generated build identity module; it is not part of the release version.
+    """
+    return __version__
 
 
 def display_identity(root: Path | None = None) -> str:

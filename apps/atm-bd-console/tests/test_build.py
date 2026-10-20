@@ -4,6 +4,7 @@ import os
 import site
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from shutil import copytree, ignore_patterns, which
 
@@ -12,7 +13,7 @@ from process_helpers import PROCESS_TIMEOUT, build_command
 from process_helpers import run_process as run
 
 from atm_bd_console import __version__, build
-from atm_bd_console.build import display_identity, identity
+from atm_bd_console.build import display_identity
 
 CONSOLE = Path(__file__).resolve().parents[1]
 UV = which("uv")
@@ -52,7 +53,7 @@ def git(repo: Path, *args: str) -> None:
     run(f"git {' '.join(args)}", ["git", "-C", str(repo), *args])
 
 
-def test_identity_changes_per_commit_and_marks_dirty_checkouts(tmp_path: Path) -> None:
+def test_display_identity_changes_per_commit_and_marks_dirty_checkouts(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init")
@@ -64,27 +65,28 @@ def test_identity_changes_per_commit_and_marks_dirty_checkouts(tmp_path: Path) -
     (package / "pyproject.toml").write_text("[project]\nname = 'console'\n")
     git(repo, "add", "build.txt", "apps")
     git(repo, "commit", "-m", "one")
-    first = identity(repo)
+    first = display_identity(repo)
     (repo / "build.txt").write_text("two")
     git(repo, "commit", "-am", "two")
-    second = identity(repo)
+    second = display_identity(repo)
     (repo / "build.txt").write_text("dirty")
 
     assert first != second
     assert second.startswith(".".join(__version__.split(".")[:2]) + ".") and "+g" in second
-    assert identity(repo).endswith("-dirty")
+    assert display_identity(repo).endswith("-dirty")
     git(repo, "add", "build.txt")
-    assert identity(repo).endswith("-dirty")
+    assert display_identity(repo).endswith("-dirty")
     git(repo, "reset", "--", "build.txt")
     (repo / "untracked.txt").write_text("dirty")
-    assert identity(repo).endswith("-dirty")
+    assert display_identity(repo).endswith("-dirty")
 
 
-def test_identity_falls_back_for_an_installed_wheel(tmp_path: Path) -> None:
-    assert identity(tmp_path) == f"{__version__}+unknown"
+def test_display_identity_falls_back_for_an_installed_wheel(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(build, "BUILT_IDENTITY", None)
+    assert display_identity(tmp_path) == f"{__version__}+unknown"
 
 
-def test_identity_rejects_package_copied_under_a_foreign_git_root(tmp_path: Path, monkeypatch) -> None:
+def test_display_identity_rejects_package_copied_under_a_foreign_git_root(tmp_path: Path, monkeypatch) -> None:
     foreign = tmp_path / "foreign"
     foreign.mkdir()
     git(foreign, "init")
@@ -96,8 +98,9 @@ def test_identity_rejects_package_copied_under_a_foreign_git_root(tmp_path: Path
     copied = foreign / "apps" / "atm-bd-console" / "src" / "atm_bd_console"
     copytree(Path(build.__file__).resolve().parent, copied)
     monkeypatch.setattr(build, "__file__", str(copied / "build.py"))
+    monkeypatch.setattr(build, "BUILT_IDENTITY", "0.18.2+gembedded")
 
-    assert build.identity() == f"{__version__}+unknown"
+    assert build.display_identity() == "0.18.2"
 
 
 @pytest.mark.skipif(which("uv") is None, reason="uv is required to build and install the test wheel")
@@ -117,10 +120,11 @@ def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path, dir
     git(checkout, "commit", "-am", "two")
     if dirty:
         (copied / "README.md").write_text("dirty\n")
-    expected = identity(checkout)
+    expected_version = tomllib.loads((copied / "pyproject.toml").read_text())["project"]["version"]
     (checkout / ".ok").write_text("")
-    if not dirty:
-        assert not expected.endswith("-dirty")
+    assert expected_version == __version__
+    checkout_identity = display_identity(checkout)
+    expected_display_identity = checkout_identity if dirty else checkout_identity.partition("+")[0]
     dist = tmp_path / "dist"
     run("wheel build", build_command("--wheel", "--out-dir", str(dist)), cwd=copied)
     venv = tmp_path / "outside" / "venv"
@@ -136,13 +140,17 @@ def test_built_wheel_keeps_git_identity_outside_a_repository(tmp_path: Path, dir
     installed = Path(run("locate installed package", [str(python), "-c",
                          "import atm_bd_console; print(atm_bd_console.__file__)"]).stdout.strip())
     assert installed.is_relative_to(purelib)
-    assert run("wheel version", [str(venv / "bin" / "atm-bd"), "--version"]).stdout.strip() == expected
+    assert run("wheel version", [str(venv / "bin" / "atm-bd"), "--version"]).stdout.strip() == expected_version
+    assert run("wheel display identity", [str(python), "-c",
+               "from atm_bd_console.build import display_identity; print(display_identity())"], cwd=tmp_path).stdout.strip() == expected_display_identity
     run("sdist build", build_command("--sdist", "--out-dir", str(dist)), cwd=copied)
     run("sdist install", [*install, "--reinstall", str(next(dist.glob("*.tar.gz")))])
-    assert run("sdist version", [str(venv / "bin" / "atm-bd"), "--version"]).stdout.strip() == expected
+    assert run("sdist version", [str(venv / "bin" / "atm-bd"), "--version"]).stdout.strip() == expected_version
+    assert run("sdist display identity", [str(python), "-c",
+               "from atm_bd_console.build import display_identity; print(display_identity())"], cwd=tmp_path).stdout.strip() == expected_display_identity
 
 
-def test_checkout_identity_takes_precedence_over_embedded_identity(tmp_path: Path) -> None:
+def test_checkout_display_identity_takes_precedence_over_embedded_identity(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     copied = checkout / "apps" / "atm-bd-console"
     copytree(CONSOLE, copied, ignore=ignore_patterns(".venv", "__pycache__", "_build_identity.py"))
@@ -153,10 +161,10 @@ def test_checkout_identity_takes_precedence_over_embedded_identity(tmp_path: Pat
     git(checkout, "add", ".")
     git(checkout, "commit", "-m", "one")
     (copied / "src" / "atm_bd_console" / "_build_identity.py").write_text("IDENTITY = 'bogus'\n")
-    expected = identity(checkout)
+    expected = display_identity(checkout)
     env = {**os.environ, "PYTHONPATH": str(copied / "src")}
     result = run("checkout identity", [sys.executable, "-c",
-                 "from atm_bd_console.build import identity; print(identity())"], env=env, cwd=tmp_path).stdout.strip()
+                 "from atm_bd_console.build import display_identity; print(display_identity())"], env=env, cwd=tmp_path).stdout.strip()
     assert result == expected and result != "bogus" and not result.endswith("-dirty")
 
 
@@ -198,8 +206,7 @@ def test_build_rejects_sources_without_reliable_git_identity(tmp_path: Path, fai
 def test_display_identity_shortens_only_clean_release_installs(tmp_path: Path, monkeypatch, embedded, shown) -> None:
     monkeypatch.setattr(build, "BUILT_IDENTITY", embedded)
     assert display_identity(tmp_path) == shown
-    assert identity(tmp_path) == (embedded or f"{__version__}+unknown")
 
 
 def test_display_identity_keeps_the_full_form_in_a_checkout() -> None:
-    assert display_identity() == identity() and "+g" in display_identity()
+    assert "+g" in display_identity()
