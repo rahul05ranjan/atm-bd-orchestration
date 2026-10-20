@@ -1,6 +1,6 @@
 ---
 name: atm-bd-orchestration
-version: 0.18.1
+version: 0.18.2
 description: Bead-driven phase orchestration for the lead. Use when running a phase whose plan is in beads, dispatching from `bd ready` with ATM tasks, and landing it as one gh stack.
 requires:
   cli:
@@ -413,7 +413,9 @@ On review-complete, file each finding with `finding-bead.json.j2`, using:
 - `qa_bead` = the review bead;
 - `sprint` and `found_on_layer` from the metadata of the dev bead whose code
   it cites (the phase root when it spans sprints) (`phase-end` and
-  the top layer when it is the root);
+  the top layer when it is the root); `found_on_layer` must be the integer
+  stack layer, and `bead-groups` refuses anything else (omit it and put free
+  text in the description);
 - `found_at_commit` = the reviewed commit;
 - `screen` = `keep`, unless you ran `ceremony-finding-screen` over them;
 - `finding_ref` = the reviewer's numbering (`R-1`, `R-2`, …);

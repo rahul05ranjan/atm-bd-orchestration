@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.18.2] - 2026-10-20
+
+### Fixed
+- `bead-groups` refuses a finding whose `found_on_layer` is not an integer (`BEAD_GROUPS_FOUND_ON_LAYER_NOT_INTEGER`) before any pour or preview, because `bd cook` reports the resulting TOML parse failure as a missing formula. Pass the integer stack layer, or omit `found_on_layer` and put free text in the finding description.
+
 ## [0.18.1] - 2026-10-20
 
 ### Changed
