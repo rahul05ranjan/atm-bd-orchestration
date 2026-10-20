@@ -594,8 +594,8 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok((assigned,)))
 
-    def due(current_state, current_phase, prefix, github, now, tasks=()):
-        decision = model_due(current_state, current_phase, prefix, github, now, tasks)
+    def due(current_state, current_phase, prefix, github, now, tasks=(), closed=frozenset()):
+        decision = model_due(current_state, current_phase, prefix, github, now, tasks, closed)
         due_calls.append((current_state, current_phase, prefix, github, now, tasks, decision))
         return decision
 
@@ -613,6 +613,27 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     runner.step(replace(CONFIG, no_fetch=False), state, False, store)
 
     assert due_calls == [(state, phase, REPO_CONFIG.bead_prefix, CONFIG.github, NOW, (assigned,), Due(False, (), False))]
+
+
+def test_closed_task_history_is_read_once_per_candidate_only(github_runtime, fake_bin, monkeypatch) -> None:
+    store, _, _, inputs = github_runtime
+    open_step = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True)
+    refused = replace(open_step, bead_id="atm-bh-6.group-qa", kind="qa", assignee="quality-mgr")
+    fresh = replace(open_step, bead_id="atm-bh-6.group-sanity", kind="sanity", assignee=None)
+    running = replace(open_step, bead_id="atm-bh-7.group-qa", kind="qa", status=SprintState.IN_PROGRESS)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=(),
+                                                                       steps=(refused, fresh, running))))
+    closed_history = (Path(__file__).parent / "fixtures" / "atm" / "task-events-closed.json").read_text()
+    monkeypatch.setenv("ATM_CLOSED_HISTORY", closed_history)
+    fake_bin.make("atm", 'if [ "$3" = atm-bh-6.group-qa ]; then printf "%s" "$ATM_CLOSED_HISTORY"; '
+                  'else printf \'{"events": []}\'; fi\n')
+
+    runner.step(CONFIG, RUNNING_STATE, False, store)
+
+    assert [argv[:4] for argv in fake_bin.argv()] == [
+        ("atm", "task", "events", "atm-bh-6.group-qa"), ("atm", "task", "events", "atm-bh-6.group-sanity"),
+    ]
+    assert inputs[-1].closed_tasks == Ok(("atm-bh-6.group-qa",))
 
 
 def test_ready_is_read_before_tasks_each_active_tick(github_runtime, monkeypatch) -> None:
@@ -676,13 +697,15 @@ def test_controlled_hook_dispatch_interleavings(github_runtime, monkeypatch, int
                            (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
                            (RemoteRef("sprint/bh-6", "abc123"),),
                            (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), now),),
-                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})), roster=frozenset())
+                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})), roster=frozenset(),
+                           closed=frozenset(value.closed_tasks.value))
         return SNAPSHOT, outcome.actions, state
 
     monkeypatch.setattr(runner.atm_bd, "phase", lambda _file, _root, _opened, ready, _shown:
                         Ok(replace(phase, steps=(replace(candidate, ready=any(bead.id == candidate.bead_id for bead in ready)),))))
     monkeypatch.setattr(runner.beads_source, "ready", ready)
     monkeypatch.setattr(runner.atm_source, "tasks", read_tasks)
+    monkeypatch.setattr(runner.atm_source, "task_closed", lambda task_id, *_: Ok(tasks[task_id].state == "closed"))
     monkeypatch.setattr(runner.model, "tick", tick)
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: (assign("dispatch"), Ok(None))[1])
     runner.step(replace(CONFIG, dry_run=False, github="off"), RUNNING_STATE, False, store)
@@ -937,7 +960,8 @@ def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_run
     monkeypatch.setenv("ATM_TEAM", "unrelated")
     fake_bin.make("atm", f'if [ "$1" = send ]; then test "$ATM_IDENTITY" = "{sender}" && test "$ATM_TEAM" = "{sender_team}" || exit 23; '
                   + ('printf "delivery rejected" >&2; exit 3; ' if delivery_fails else 'cat >/dev/null; ')
-                  + 'else test "$ATM_IDENTITY" = fenix && test "$ATM_TEAM" = atm-dev || exit 23; fi\n')
+                  + 'else test "$ATM_IDENTITY" = fenix && test "$ATM_TEAM" = atm-dev || exit 23; '
+                  + 'if [ "$1:$2" = task:events ]; then printf \'{"events": []}\'; fi; fi\n')
     config = replace(CONFIG, dry_run=False, notification_sender=f"{sender}@{sender_team}")
 
     snapshot, _ = runner.step(config, INITIAL_STATE, False, store)

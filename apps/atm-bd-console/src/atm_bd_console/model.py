@@ -50,9 +50,12 @@ def idle_stop_due(state: State, now: datetime) -> bool:
     return state.idle_since is not None and now - state.idle_since >= IDLE_STOP
 
 
-def due(state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime, tasks: tuple[Task, ...] = ()) -> Due:
+def due(
+    state: State, phase: Phase, bead_prefix: str, github_mode: str, now: datetime, tasks: tuple[Task, ...] = (),
+    closed: frozenset[str] = frozenset(),
+) -> Due:
     cycle_due = _cycle_due(state, now)
-    ready = tuple(step for step in candidates(phase, tasks) if step.ready)
+    ready = tuple(step for step in candidates(phase, tasks, closed) if step.ready)
     pushed = {remote.branch for remote in state.remotes}
     fetch = cycle_due or bool(ready)
     pairs: list[tuple[str, str]] = []
@@ -83,6 +86,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     phase = inputs.phase.value if isinstance(inputs.phase, Ok) else None
     members = inputs.members.value if isinstance(inputs.members, Ok) else ()
     tasks = inputs.tasks.value if isinstance(inputs.tasks, Ok) else ()
+    closed = frozenset(inputs.closed_tasks.value) if isinstance(inputs.closed_tasks, Ok) else frozenset()
     worktrees = inputs.worktrees.value if isinstance(inputs.worktrees, Ok) else ()
     remotes = inputs.remotes.value if isinstance(inputs.remotes, Ok) else state.remotes
     if isinstance(inputs.remotes, Err):
@@ -93,7 +97,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         checked_pairs = {(merge.branch, merge.target) for merge in merges}
         unavailable = {
             (step.branch, target)
-            for step in candidates(phase, tasks)
+            for step in candidates(phase, tasks, closed)
             if step.branch and (target := _target(step, phase, inputs.repo.bead_prefix))
             and (step.branch, target) not in checked_pairs
         }
@@ -119,12 +123,12 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
 
     held = ()
     assigned: tuple[Action, ...] = ()
-    if (phase is not None and stopped is None and isinstance(inputs.tasks, Ok)
+    if (phase is not None and stopped is None and isinstance(inputs.tasks, Ok) and isinstance(inputs.closed_tasks, Ok)
             and isinstance(inputs.worktrees, Ok)):
         outcome = dispatch(
             phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec,
             inputs.remotes.error if isinstance(inputs.remotes, Err) else None,
-            roster=frozenset(member.name for member in members),
+            roster=frozenset(member.name for member in members), closed=closed,
         )
         held = outcome.held
         assigned = outcome.actions
@@ -212,7 +216,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
 
 def _read_errors(inputs: Inputs) -> list[Error]:
     results = (inputs.phase, inputs.members, inputs.tasks, inputs.worktrees, inputs.remotes, inputs.prs,
-               inputs.task_beads)
+               inputs.task_beads, inputs.closed_tasks)
     errors = [result.error for result in results if isinstance(result, Err)]
     errors.extend(result.error for result in inputs.merges or () if isinstance(result, Err))
     return errors

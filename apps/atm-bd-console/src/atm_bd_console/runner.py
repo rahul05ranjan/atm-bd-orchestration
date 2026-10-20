@@ -8,10 +8,10 @@ from functools import partial
 from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
-from .dispatch import sprint_of, verification_reason
+from .dispatch import candidates, sprint_of, verification_reason
 from .enums import MergeState, SprintState
 from .log import TickLog, create_console_logger, error_message
-from .result import Err, NotFound, Ok
+from .result import Err, NotFound, Ok, Result
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import (
     Action,
@@ -22,10 +22,12 @@ from .types import (
     Merge,
     MergeFile,
     Metrics,
+    Phase,
     PrsFile,
     Snapshot,
     State,
     StepResult,
+    Task,
 )
 
 
@@ -179,7 +181,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         for line in history.value[-5:]
     ) if isinstance(history, Ok) else ()
     snapshot, _, next_state = model.tick(
-        Inputs(now, config.lead, repo, config.interval_s, phase, Ok(()), Ok(()), Ok(()), None, merges, prs, gh, Ok(())),
+        Inputs(now, config.lead, repo, config.interval_s, phase, Ok(()), Ok(()), Ok(()), None, merges, prs, gh, Ok(()), Ok(())),
         state,
         now,
         partial(atm_bd.dispatch_spec, templates=file.templates),
@@ -202,6 +204,24 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     except (OSError, ValueError, RuntimeError) as error:
         run_data, runs_error = None, str(error)
     return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error)
+
+
+def _closed_tasks(
+    config: Config, phase: Result[Phase], tasks: Result[tuple[Task, ...]], logger: TickLog,
+) -> Result[tuple[str, ...]]:
+    """Ids of would-be dispatch candidates whose ATM task is closed. `atm task list` shows open tasks only, so each
+    candidate's history is read once per tick with `atm task events`; no other bead costs a call."""
+    if not isinstance(phase, Ok) or not isinstance(tasks, Ok):
+        return Ok(())
+    closed: list[str] = []
+    for step in candidates(phase.value, tasks.value, frozenset()):
+        result = logger.result("atm.task_events", atm_source.task_closed(step.bead_id, config.team, config.lead),
+                               task_id=step.bead_id)
+        if isinstance(result, Err):
+            return result
+        if result.value:
+            closed.append(step.bead_id)
+    return Ok(tuple(closed))
 
 
 def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
@@ -257,6 +277,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
+    closed_tasks = _closed_tasks(config, phase, tasks, logger)
+    closed = frozenset(closed_tasks.value) if isinstance(closed_tasks, Ok) else frozenset()
     code_root = config.code_root or config.repo_root
     worktrees = logger.result("git.worktrees", git_source.worktrees(code_root))
     task_ids = tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ()
@@ -270,6 +292,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         config.github,
         now,
         tasks.value if isinstance(tasks, Ok) else (),
+        closed,
     ) if isinstance(phase, Ok) else None
     remotes = None
     if due and due.fetch and not config.no_fetch:
@@ -282,6 +305,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                     replace(state, remotes=remotes.value), phase.value,
                     repo.value.bead_prefix, config.github, now,
                     tasks.value if isinstance(tasks, Ok) else (),
+                    closed,
                 )
     saved_merges = logger.result("cache.merges", store.load_merges())
     saved_prs = logger.result("cache.prs", store.load_prs())
@@ -326,7 +350,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             "github_read", forced=force_github, outcome="paused" if gh.paused else "failed" if isinstance(refreshed_prs, Err) else "ok",
             error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None,
         )
-    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
+    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads, closed_tasks)
     snapshot, actions, next_state = model.tick(inputs, state, now, partial(atm_bd.dispatch_spec, templates=file.value.templates))
     steps = {item.bead_id: item for item in phase.value.steps} if isinstance(phase, Ok) else {}
     for section in snapshot.sections:

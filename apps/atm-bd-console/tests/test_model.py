@@ -78,7 +78,7 @@ def phase(*steps: Step, sprints=None, closed=False, step_errors=()) -> Phase:
 def inputs(value: Phase, **changes) -> Inputs:
     original = Inputs(
         NOW, "fenix", REPO, 60, Ok(value), Ok(()), Ok(()), Ok(()), Ok(()), (), Ok(()),
-        GhStatus("graphql", True, None, None, False), Ok(()),
+        GhStatus("graphql", True, None, None, False), Ok(()), Ok(()),
     )
     return replace(original, **changes)
 
@@ -716,6 +716,20 @@ def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
     recovered, actions, _ = tick(verified, state, NOW, lambda context: Ok(DispatchSpec("qa", {})))
     assert [action.kind for action in actions] == ["assign"]
     assert recovered.sections == () and recovered.problems == ()
+
+
+def test_closed_task_read_gates_dispatch_and_a_closed_candidate_is_never_assigned() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base", assignee="quality-mgr")
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+                      merges=(Ok(Merge("topic", "base", MergeState.CLEAN, (), (), NOW)),))
+    _, actions, _ = tick(supplied, STATE, NOW, lambda context: Ok(DispatchSpec("qa", {})))
+    assert [action.kind for action in actions] == ["assign"]
+    _, actions, _ = tick(replace(supplied, closed_tasks=Ok((candidate.bead_id,))), STATE, NOW, render)
+    assert actions == ()
+    error = Timeout("timeout", ("atm", "task", "events"), 20, "retry")
+    snapshot, actions, _ = tick(replace(supplied, closed_tasks=Err(error)), STATE, NOW, render)
+    assert error in snapshot.errors and actions == ()
 
 
 def test_ready_candidate_refreshes_even_when_origin_ref_is_cached() -> None:

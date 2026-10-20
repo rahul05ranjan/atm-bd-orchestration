@@ -52,13 +52,14 @@ def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:
     return by_id.get(step.sprint or "") or by_tag.get(step.sprint or "")
 
 
-def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
+def candidates(phase: Phase, tasks: tuple[Task, ...], closed: frozenset[str]) -> tuple[Step, ...]:
     """Open sanity and QA steps with no ATM task of the same id in any state, so none is dispatched twice.
 
-    The one exception is a closed task from an earlier sanity round (ANC-057): a sanity FAIL below the round cap
-    closes its task and reopens the sanity bead with its assignee cleared, so that bead is dispatched again."""
+    `tasks` are the live (assigned or active) tasks; `closed` are the ids whose task history ends closed, read only
+    for the steps that would otherwise be candidates. The one exception is a closed task from an earlier sanity
+    round (ANC-057): a sanity FAIL below the round cap closes its task and reopens the sanity bead with its
+    assignee cleared, so that bead is dispatched again."""
     live = {task.id for task in tasks if task.state in ("assigned", "active")}
-    closed = {task.id for task in tasks} - live
     return tuple(
         step for step in phase.steps
         if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN
@@ -114,6 +115,7 @@ def dispatch(
     remote_error: Error | None = None,
     *,
     roster: frozenset[str],
+    closed: frozenset[str],
 ) -> DispatchOutcome:
     prs = tuple(pr for pr in prs if active_pr(pr))
     remote_by_branch = {remote.branch: remote.sha for remote in remotes}
@@ -123,7 +125,7 @@ def dispatch(
     held: list[SectionRow] = []
     errors: list[Error] = []
 
-    for step in candidates(phase, tasks):
+    for step in candidates(phase, tasks, closed):
         sprint = sprint_of(step, phase, repo.bead_prefix)
         target = step.target or (sprint.target if sprint else None)
         reasons = ["not ready"] if not step.ready else _gate_reasons(

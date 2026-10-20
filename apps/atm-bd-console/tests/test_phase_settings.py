@@ -163,6 +163,7 @@ esac
     fake_bin.make("atm", '''case "$1:$2" in
 members:--team) printf '{"members": []}';;
 task:list) printf '[]';;
+task:events) printf '{"events": [], "handoffs": []}';;
 task:assign) exit 0;;
 *) exit 97;;
 esac

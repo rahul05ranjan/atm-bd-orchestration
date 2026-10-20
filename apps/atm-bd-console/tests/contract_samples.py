@@ -119,7 +119,7 @@ DISPATCH_CONTEXT = DispatchContext(
 )
 INPUTS = Inputs(
     NOW, "fenix", REPO_CONFIG, 60, Ok(PHASE), Ok((MEMBER,)), Err(TIMEOUT), Ok((WORKTREE,)), Ok((REMOTE_REF,)),
-    (Ok(MERGE), Err(UNREACHABLE)), Ok((PULL_REQUEST,)), GH_STATUS, Ok((BEAD,)),
+    (Ok(MERGE), Err(UNREACHABLE)), Ok((PULL_REQUEST,)), GH_STATUS, Ok((BEAD,)), Ok(("atm-bh-6.group-qa",)),
 )
 ROW = Row("atm-bh-6", "running", "sprint_qa", "normal", "bh-6", "yellow", 420, "QA bh-6 round 2")
 AGENT_VIEW = AgentView("arch-ctm", "busy", EARLIER, 2, (ROW,))

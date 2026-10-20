@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"team": "atm-dev", "task_id": "atm-bh-6.group-qa", "assignee": "quality-mgr", "seq": 1, "at": "2026-10-20T06:00:00Z", "event": "assigned", "to_state": "assigned", "actor": "team-lead", "message_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+    {"team": "atm-dev", "task_id": "atm-bh-6.group-qa", "assignee": "quality-mgr", "seq": 2, "at": "2026-10-20T06:01:00Z", "event": "started", "from_state": "assigned", "to_state": "active", "actor": "quality-mgr"},
+    {"team": "atm-dev", "task_id": "atm-bh-6.group-qa", "assignee": "quality-mgr", "seq": 3, "at": "2026-10-20T06:02:00Z", "event": "refused", "from_state": "active", "to_state": "complete", "close_outcome": "refused", "actor": "quality-mgr", "detail": "not ready: blocker open"},
+    {"team": "atm-dev", "task_id": "atm-bh-6.group-qa", "assignee": "quality-mgr", "seq": 4, "at": "2026-10-20T06:03:00Z", "event": "reminder", "actor": "daemon", "outcome": "skipped"}
+  ],
+  "handoffs": []
+}
