@@ -19,13 +19,15 @@ IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
 PRIMARY = Path(__file__).resolve().parents[4]
 VALIDATE_PLAN = str(PRIMARY / ".claude/skills/atm-beads/scripts/validate-plan")
 COMMAND_TIMEOUT = 30
+VALIDATE_PLAN_TIMEOUT = 300
 
 
-def invoke(runner: Runner, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+def invoke(runner: Runner, argv: list[str], *, timeout: float | None = None, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    limit = COMMAND_TIMEOUT if timeout is None else timeout
     try:
-        return runner(argv, timeout=COMMAND_TIMEOUT, **kwargs)
+        return runner(argv, timeout=limit, **kwargs)
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"{argv!r} timed out after {COMMAND_TIMEOUT}s") from error
+        raise RuntimeError(f"{argv!r} timed out after {limit}s") from error
 
 
 def run(runner: Runner, *args: str, cwd: str | None = None) -> str:
@@ -114,7 +116,8 @@ def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
     stack = run_json(runner, "bd", "show", stack_bead_id(args.root), "--json", cwd=str(PRIMARY))
     if not isinstance(stack, list) or len(stack) != 1 or not isinstance(stack[0], dict):
         raise ValueError("stack bead lookup must return exactly one bead object")
-    plan = invoke(runner, [VALIDATE_PLAN, "--root", args.root], capture_output=True, text=True, cwd=str(PRIMARY))
+    plan = invoke(runner, [VALIDATE_PLAN, "--root", args.root], timeout=VALIDATE_PLAN_TIMEOUT,
+                  capture_output=True, text=True, cwd=str(PRIMARY))
     if plan.returncode == 5:
         print((plan.stdout + plan.stderr).strip(), file=sys.stderr)
         return "PLAN_INVALID"
@@ -139,7 +142,10 @@ def sanity_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
         return "COMMIT_REQUIRED"
     ready = run_json(runner, "bd", "ready", "-n", "0", "--json")
     if not any(row.get("id") == args.bead for row in ready):
-        return "NOT_READY"
+        # A replay finds its own claimed bead in progress, which `bd ready` no longer lists.
+        bead = run_json(runner, "bd", "show", args.bead, "--json")[0]
+        if not (bead.get("status") == "in_progress" and bead.get("assignee") == identity):
+            return "NOT_READY"
     if has_prior_pass(run(runner, "bd", "history", args.bead, "--json")):
         return "SANITY_FROZEN"
     if run(runner, "git", *git_dir(args), "rev-parse", "HEAD") != args.commit:

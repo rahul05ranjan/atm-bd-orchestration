@@ -389,14 +389,6 @@ class Hook:
         if changes:
             self.update(bead, metadata=changes)
 
-    def write_metadata_document(self, bead, metadata):
-        """Write structured metadata without coercing arrays or objects to strings."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as stream:
-            json.dump(metadata, stream)
-            stream.flush()
-            self.run(["bd", "update", bead, "--metadata", "@" + stream.name, "--actor", self.identity])
-        self.bead(bead)["metadata"] = metadata
-
     def check_replay(self):
         record = self.bead(self.task)
         metadata = record.get("metadata") or {}
@@ -536,8 +528,7 @@ class Hook:
                 with tempfile.TemporaryDirectory(prefix="sanity-dispatch-") as directory:
                     dispatch = Path(directory) / "completion-vars.json"
                     close_context = {**context, "phase_lead": self.lead,
-                                     "budget": context.get("budget", "full"),
-                                     "timeout_s": context.get("timeout_s", 60)}
+                                     "budget": context.get("budget", "full")}
                     dispatch.write_text(json.dumps({**context, "close_context": close_context, "phase_lead": self.lead,
                                                     "beads_dir": self.beads_directory()}))
                     self.render(template, read_vars(dispatch))
@@ -683,7 +674,7 @@ class Hook:
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
             self.close_bead(bead, f"PASS at {values['commit']}")
-            self.close_task(values["dev_task_id"], lead=True)
+            self.close_task(values["dev_task_id"], "dev-sanity-complete.md.j2", lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
             self.assign(self.config["qa_member"], values["qa_bead"], "qa-template.xml.j2")
             return

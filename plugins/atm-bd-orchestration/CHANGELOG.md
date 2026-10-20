@@ -1,11 +1,16 @@
 # Changelog
 
-## [0.18.1] - Unreleased
+## [0.18.1] - 2026-10-20
 
 ### Changed
 - Sanity closes on its selected verdict before handing off stacking. `dev-sanity` 3.3.0 and `dev-sanity-task` 2.20.0 use generated close inputs, inline bead notes (`dev-sanity-assignment` 1.3.0), derived reviewer timing, and linked-only idempotent stack replay (#498).
 - `dev-template.xml.j2` (`dev-task`) 3.16.0 requires the separate `--result` file for dev completion.
 - Close-hook dev/fix completion uses immutable dispatch vars plus a separate result file, deriving commit and PR identity at close (#485). The role-specific contract rejects missing derived identity even with skipped checks or unavailable GitHub, refuses ambiguous PRs, and renders only that role's required/result fields. Matching split examples and end-to-end handoff tests document assignment-time vars consumption.
+- The console dispatches ready QA beads (including those with a pre-set assignee) and never re-dispatches a bead whose ATM task is already closed (#491).
+- The console's merge check skips closed or merged PRs and still checks PR-less steps.
+- The console's Dispatch view groups agents by shared role classification and name.
+- `sanity-stack-link` runs its `git` and `gh` commands in the checked layer's worktree (`worktree_path` in the generated stack input), so a checked PR in another repository no longer returns `stack_failed`; a missing or invalid input key also returns `stack_failed`. The unused `timeout_s` input is removed.
+- A sanity PASS closes the dev ATM task with `dev-sanity-complete.md.j2` (ATM rejects a close without a reason or template). The sanity gate accepts a replay of a bead the caller already claimed. `validate-plan` runs under a 300 s limit in the assignment gates; other gate commands keep 30 s.
 
 ## [0.18.0] - 2026-10-19
 

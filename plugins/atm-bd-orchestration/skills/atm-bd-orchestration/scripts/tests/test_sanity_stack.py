@@ -46,6 +46,7 @@ class World:
         self.pulls = []
         self.stacks = []
         self.calls = []
+        self.cwds = []
         self.unavailable = False
         self.quota_failure = None
         self.fail_link = False
@@ -65,10 +66,11 @@ class World:
         self.git("push", "origin", name)
         self.pulls.append({"number": number, "base": base, "head": name, "sha": sha, "draft": False})
         return {"checked_bead": "dev", "branch": name, "pr_number": number, "commit": sha,
-                "stack_bead": "phase.stack", "budget": "full", "timeout_s": 10}
+                "stack_bead": "phase.stack", "budget": "full"}
 
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
+        self.cwds.append((argv[0], kwargs.get("cwd")))
         if self.hook is not None:
             return self.hook(argv, **kwargs)
         output, error, status = "", "", 0
@@ -123,7 +125,7 @@ class World:
                 stack = next(item for item in self.stacks if item["number"] == int(argv[3]))
                 stack["prs"].append(int(argv[4]))
         elif argv[0] == "git":
-            return subprocess.run(argv, cwd=self.root, **kwargs)
+            return subprocess.run(argv, **{"cwd": self.root, **kwargs})
         else:
             raise AssertionError(argv)
         return subprocess.CompletedProcess(argv, status, output, error)
@@ -549,3 +551,53 @@ def test_rebase_then_real_sanity_hook_preserves_round_and_hands_off(world, tmp_p
                for command, actor in hook.writes)
     qa = next(message for message in hook.messages if message["type"] == "qa-task")
     assert (qa["sender"], qa["recipient"], qa["values"]["base"]) == ("phase-lead", "quality", "first")
+
+
+def test_git_and_gh_run_in_the_checked_layers_worktree_and_bd_does_not(world, tmp_path):
+    values = world.branch("layer", "trunk", 11)
+    values["worktree_path"] = str(tmp_path / "other-repo-worktree")
+    seen = {"git": set(), "gh": set(), "bd": set()}
+
+    def runner(argv, **kwargs):
+        seen[argv[0]].add(kwargs.get("cwd"))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    linker = LINK.Linker(values, runner, world.clock, "sanity")
+    for argv in (["git", "fetch", "origin"], ["gh", "api", "rate_limit"], ["bd", "show", "x"]):
+        linker.command(argv)
+    assert seen == {"git": {values["worktree_path"]}, "gh": {values["worktree_path"]}, "bd": {None}}
+
+
+def test_without_worktree_path_commands_keep_the_callers_cwd(world):
+    values = world.branch("layer", "trunk", 11)
+    linker = LINK.Linker(values, lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "", "") if "cwd" not in kw
+                         else (_ for _ in ()).throw(AssertionError("cwd passed")), world.clock, "sanity")
+    linker.command(["git", "fetch", "origin"])
+    linker.command(["gh", "api", "rate_limit"])
+
+
+def test_full_flow_passes_the_worktree_cwd_to_every_git_and_gh_call(world):
+    values = world.branch("layer", "trunk", 11)
+    values["worktree_path"] = str(world.root)
+    result = world.link(values)
+    assert result["result"] == "stacked"
+    git_gh = [cwd for kind, cwd in world.cwds if kind in ("git", "gh")]
+    assert git_gh and set(git_gh) == {str(world.root)}
+    assert {cwd for kind, cwd in world.cwds if kind == "bd"} == {None}
+
+
+def test_invalid_worktree_path_is_stack_failed(world):
+    values = world.branch("layer", "trunk", 11)
+    values["worktree_path"] = 5
+    assert world.link(values)["result"] == "stack_failed"
+
+
+def test_missing_input_key_is_stack_failed_and_releases(world, monkeypatch):
+    values = world.branch("layer", "trunk", 11)
+
+    def boom(self):
+        return self.values["absent_key"]
+
+    monkeypatch.setattr(LINK.Linker, "execute", boom)
+    result = world.link(values)
+    assert result["result"] == "stack_failed" and "absent_key" in result["evidence"]

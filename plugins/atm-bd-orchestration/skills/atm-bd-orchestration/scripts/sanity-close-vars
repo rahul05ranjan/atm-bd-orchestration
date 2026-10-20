@@ -69,14 +69,11 @@ def write_stack_input(path, values, manifest):
         return False
     context = manifest.get("close_context") or {}
     budget = context.get("budget")
-    timeout_s = context.get("timeout_s")
     if budget not in ("full", "lean"):
         raise ValueError("assignment close_context.budget must be full or lean")
-    if type(timeout_s) not in (int, float) or not 0 <= timeout_s <= 3600:
-        raise ValueError("assignment close_context.timeout_s must be between 0 and 3600")
     payload = {key: values[key] for key in ("checked_bead", "branch", "commit", "stack_bead")}
-    payload.update(pr_number=int(values["pr_number"]), budget=budget, timeout_s=timeout_s,
-                   lead=context.get("phase_lead", ""))
+    payload.update(pr_number=int(values["pr_number"]), budget=budget,
+                   worktree_path=values["worktree_path"], lead=context.get("phase_lead", ""))
     path.write_text(json.dumps(payload))
     return True
 

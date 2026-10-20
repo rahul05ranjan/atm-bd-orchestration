@@ -1,6 +1,6 @@
 [project]
 name = "atm-bd"
-version = "0.18.0"
+version = "0.18.1"
 description = "ATM and Beads orchestration console, cron runner, and bundled skills"
 readme = "README.md"
 license = "MIT"

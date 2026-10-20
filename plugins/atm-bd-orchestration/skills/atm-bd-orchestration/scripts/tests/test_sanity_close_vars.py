@@ -17,7 +17,7 @@ LOADER.exec_module(CLOSE)
 @pytest.fixture
 def inputs():
     context = json.loads((ROOT / "examples/task-close-vars-sanity.json").read_text())
-    context.update(budget="full", timeout_s=60)
+    context.update(budget="full")
     manifest = {"run_id": "run", "sha": context["commit"], "sanity_bead": context["sanity_bead"],
                 "dev_bead": context["checked_bead"], "branch": context["branch"],
                 "worktree_path": context["worktree_path"], "deliverables_total": 2,
@@ -91,15 +91,16 @@ def test_optional_stack_input_does_not_block_close_vars(inputs, tmp_path, outcom
     assert not stack_file.exists()
 
 
-def test_stack_input_carries_assignment_budget_and_timeout_and_only_passes(inputs, tmp_path):
+def test_stack_input_carries_assignment_budget_and_worktree_and_only_passes(inputs, tmp_path):
     manifest, selected = inputs
-    manifest["close_context"].update(budget="lean", timeout_s=17)
+    manifest["close_context"].update(budget="lean")
     values = CLOSE.build(manifest, selected)
     stack_file = tmp_path / "stack-input.json"
 
     assert CLOSE.write_stack_input(stack_file, values, manifest)
     payload = json.loads(stack_file.read_text())
-    assert payload["budget"] == "lean" and payload["timeout_s"] == 17
+    assert payload["budget"] == "lean" and "timeout_s" not in payload
+    assert payload["worktree_path"] == manifest["worktree_path"]
 
     selected["verdict"] = "FAIL"
     values = CLOSE.build(manifest, selected)
@@ -107,14 +108,13 @@ def test_stack_input_carries_assignment_budget_and_timeout_and_only_passes(input
     assert not stack_file.exists()
 
 
-def test_stack_input_requires_assignment_budget_and_timeout(inputs, tmp_path):
+def test_stack_input_requires_assignment_budget(inputs, tmp_path):
     manifest, selected = inputs
-    manifest["close_context"].update(budget="full", timeout_s=0)
+    manifest["close_context"].update(budget="full")
     values = CLOSE.build(manifest, selected)
     stack_file = tmp_path / "stack-input.json"
 
     assert CLOSE.write_stack_input(stack_file, values, manifest)
-    assert json.loads(stack_file.read_text())["timeout_s"] == 0
     manifest["close_context"].pop("budget")
     with pytest.raises(ValueError, match="budget"):
         CLOSE.write_stack_input(stack_file, values, manifest)

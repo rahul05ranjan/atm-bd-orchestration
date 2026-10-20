@@ -385,6 +385,10 @@ def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
     assert world.beads[world.values["sanity_bead"]]["status"] == "closed"
     dev_close = next((argv, sender) for argv, sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
     assert dev_close[1] == "phase-lead"
+    # ATM rejects a close with no reason or template; the dev close carries the sanity report template.
+    assert "--template" in dev_close[0] and dev_close[0][dev_close[0].index("--template") + 1].endswith("dev-sanity-complete.md.j2")
+    assert world.tasks[world.values["dev_task_id"]][-1]["close_outcome"] == "completed"
+    assert world.tasks[world.values["sanity_bead"]][-1]["close_outcome"] == "completed"
     assert world.messages[-1]["recipient"] == "quality"
 
 
