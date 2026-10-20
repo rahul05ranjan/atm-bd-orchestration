@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .agent_roles import agent_group
 from .dispatch import sprint_of
 from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .ids import short_id
@@ -25,9 +26,10 @@ def agent_icon_of(member: Member | AgentView | None, step_kind: str) -> AgentIco
     display-row role. Both use the ANC-017 gavel, with the member's QA state
     when present and running otherwise; icons.icon_for only looks it up.
     """
-    if step_kind == "sanity":
+    group = agent_group(step_kind)
+    if group == "sanity":
         return AgentIcon.SANITY
-    if step_kind in ("qa", "sprint_qa"):
+    if group == "qa":
         qa_state = member.qa_state if isinstance(member, AgentView) else None
         return _QA_ICONS[qa_state] if qa_state is not None else AgentIcon.QA_RUNNING
     if member is None:
