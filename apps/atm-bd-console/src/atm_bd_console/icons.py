@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from .enums import AgentIcon, CiState, MergeState, PrState, SprintState
+from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .types import AgentView, Member
 
 Icon = tuple[str, str | None]
@@ -24,6 +24,10 @@ AGENT_ICONS: dict[AgentIcon, Icon] = {
     AgentIcon.QA_PASS: ("\U000f029b", "#2EA043"),
     AgentIcon.QA_FAIL: ("\U000f029b", "#F85149"),
 }
+QA_FAIL_NON_BLOCKING: Icon = (
+    AGENT_ICONS[AgentIcon.QA_FAIL][0],
+    AGENT_ICONS[AgentIcon.FABLE][1],
+)
 SPRINT_ICONS: dict[SprintState, Icon] = {
     SprintState.OPEN: ("\U000f0766", "#2D81E0"),
     SprintState.BLOCKED: ("\U000f033e", "#FA8537"),
@@ -79,6 +83,15 @@ JEV_VERDICT_ICONS: dict[str, Icon] = {
     "PASS": AGENT_ICONS[AgentIcon.SANITY_PASS], "FAIL": AGENT_ICONS[AgentIcon.SANITY_FAIL],
     "API_FAILURE": ("\U000f0026", "#D29922"),
 }
+
+
+def qa_run_icon(state: QaState | None, blocking: int) -> Icon | None:
+    """Return the one QA-run verdict icon, including the non-blocking FAIL colour."""
+    if state == QaState.PASS:
+        return AGENT_ICONS[AgentIcon.QA_PASS]
+    if state == QaState.FAIL:
+        return AGENT_ICONS[AgentIcon.QA_FAIL] if blocking else QA_FAIL_NON_BLOCKING
+    return None
 
 
 def icon(member: AgentIcon | SprintState | CiState | PrState) -> Icon:

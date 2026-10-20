@@ -18,7 +18,14 @@ from textual import events
 
 from atm_bd_console import app as console
 from atm_bd_console import prs, render
-from atm_bd_console.app import ConsoleApp, run
+from atm_bd_console.app import (
+    _QUALITY_BLOCKING_COLUMN,
+    _QUALITY_IMPORTANT_COLUMN,
+    _QUALITY_MINOR_COLUMN,
+    _QUALITY_QA_COLUMN,
+    ConsoleApp,
+    run,
+)
 from atm_bd_console.build import display_identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.log import create_console_logger
@@ -102,6 +109,87 @@ def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
     active.active = "quality"
     ConsoleApp.action_refresh(dummy)
     assert calls == [("tick", True), "quality"]
+
+
+@pytest.mark.parametrize("size", [(100, 40), (160, 40)])
+def test_quality_runs_render_aligned_verdict_and_severity_columns(monkeypatch, tmp_path: Path, size) -> None:
+    qa_pass = {"id": "qa-pass", "status": "closed", "started_at": "2026-10-02T13:00:00Z",
+               "closed_at": "2026-10-02T13:01:00Z", "close_reason": "PASS",
+               "metadata": {"sprint": "bj-4", "round": 1}, "checked_bead_data": {"metadata": {"pr_number": 42}}}
+    qa_fail = {"id": "qa-fail-with-a-long-id", "status": "closed", "started_at": "2026-10-02T13:02:00Z",
+               "closed_at": "2026-10-02T13:12:00Z", "close_reason": "FAIL findings",
+               "metadata": {"sprint": "bj-12-long", "round": 12}, "checked_bead_data": {"metadata": {"pr_number": 123456}}}
+    qa_blocking = {"id": "qa-fail-blocking", "status": "closed", "started_at": "2026-10-02T13:02:00Z",
+                   "closed_at": "2026-10-02T13:12:00Z", "close_reason": "FAIL findings",
+                   "metadata": {"sprint": "bj-12", "round": 3}}
+    qa_no_verdict = {"id": "qa-unverdict", "status": "closed", "started_at": "2026-10-02T13:13:00Z",
+                     "closed_at": "2026-10-02T13:14:00Z", "close_reason": "rebase required",
+                     "metadata": {"sprint": "bj-4", "round": 2}}
+    findings = [
+        {"id": "f-blocking", "metadata": {"severity": "blocking"}, "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-fail-blocking"}]},
+        {"id": "f-important", "metadata": {"severity": "important"}, "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-fail-with-a-long-id"}]},
+        {"id": "f-minor-1", "metadata": {"severity": "minor"}, "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-fail-with-a-long-id"}]},
+        {"id": "f-minor-2", "metadata": {"severity": "minor"}, "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-fail-with-a-long-id"}]},
+    ]
+    quality_runs = console.runs.qa_runs([qa_pass, qa_fail, qa_blocking, qa_no_verdict])
+    rendered = []
+    monkeypatch.setattr(console.findings_renderer, "render_findings",
+                        lambda _root, rows: rendered.extend(rows) or "# Findings")
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path)),
+                         FakeStep(SNAPSHOT, ([], quality_runs, findings)), STATE)
+        async with app.run_test(size=size) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "quality"
+            await settle(pilot)
+            header = app.query_one("#quality-runs-header").render()
+            options = app.query_one("#quality-runs")
+            assert app.query_one("#quality-runs-header").content_region.x == options.content_region.x
+            labels = {options.get_option_at_index(i).id: options.get_option_at_index(i).prompt
+                      for i in range(options.option_count)}
+            header_fields = header.plain.split(" | ")
+            assert [field.strip() for field in header_fields] == [
+                "Completed", "QA", "Sprint", "QA bead", "PR", "Round", "B", "I", "M", "Elapsed",
+            ]
+            row_fields = {key: label.plain.split(" | ") for key, label in labels.items()}
+            assert all(len(fields) == len(header_fields) for fields in row_fields.values())
+            for index in range(len(header_fields)):
+                widest = max(cell_len(fields[index]) for fields in [header_fields, *row_fields.values()])
+                assert all(cell_len(fields[index]) == widest for fields in [header_fields, *row_fields.values()])
+
+            fail_fields = row_fields["qa-fail-with-a-long-id"]
+            severity_columns = (_QUALITY_BLOCKING_COLUMN, _QUALITY_IMPORTANT_COLUMN, _QUALITY_MINOR_COLUMN)
+            assert [fail_fields[index].strip() for index in severity_columns] == ["", "1", "2"]
+            assert row_fields["qa-pass"][_QUALITY_QA_COLUMN].strip().endswith("pass")
+            assert fail_fields[_QUALITY_QA_COLUMN].strip().endswith("fail")
+            assert row_fields["qa-fail-blocking"][_QUALITY_QA_COLUMN].strip().endswith("fail")
+            assert row_fields["qa-unverdict"][_QUALITY_QA_COLUMN].strip() == ""
+            for key, glyph, color in (("qa-pass", "\U000f029b", "#2EA043"),
+                                      ("qa-fail-with-a-long-id", "\U000f029b", "#FF9F80"),
+                                      ("qa-fail-blocking", "\U000f029b", "#F85149")):
+                label = labels[key]
+                assert label.plain.split(" | ")[_QUALITY_QA_COLUMN].strip().split()[0] == glyph
+                start = label.plain.index(glyph)
+                assert any(span.start <= start < span.end and str(span.style) == color for span in label.spans)
+            no_verdict = labels["qa-unverdict"]
+            field = no_verdict.plain.split(" | ")[_QUALITY_QA_COLUMN]
+            start = no_verdict.plain.index(field)
+            assert field.isspace()
+            assert not any(span.start < start + len(field) and span.end > start for span in no_verdict.spans)
+            for label in labels.values():
+                for field_index in severity_columns:
+                    field_start = sum(cell_len(field) + 3 for field in label.plain.split(" | ")[:field_index])
+                    field_end = field_start + cell_len(label.plain.split(" | ")[field_index])
+                    assert not any(span.start < field_end and span.end > field_start for span in label.spans)
+
+            options.focus()
+            await pilot.press("down")
+            await settle(pilot)
+            assert options.highlighted == 1
+            assert rendered and {row["id"] for row in rendered} == {"f-important", "f-minor-1", "f-minor-2"}
+
+    run_scenario(scenario())
 
 
 class RaisingStep:
