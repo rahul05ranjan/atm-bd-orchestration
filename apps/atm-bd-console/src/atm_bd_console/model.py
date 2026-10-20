@@ -124,6 +124,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         outcome = dispatch(
             phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec,
             inputs.remotes.error if isinstance(inputs.remotes, Err) else None,
+            roster=frozenset(member.name for member in members),
         )
         held = outcome.held
         assigned = outcome.actions

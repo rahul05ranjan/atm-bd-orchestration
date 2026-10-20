@@ -676,7 +676,7 @@ def test_controlled_hook_dispatch_interleavings(github_runtime, monkeypatch, int
                            (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
                            (RemoteRef("sprint/bh-6", "abc123"),),
                            (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), now),),
-                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})))
+                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})), roster=frozenset())
         return SNAPSHOT, outcome.actions, state
 
     monkeypatch.setattr(runner.atm_bd, "phase", lambda _file, _root, _opened, ready, _shown:

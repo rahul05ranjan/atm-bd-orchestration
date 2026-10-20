@@ -53,11 +53,17 @@ def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:
 
 
 def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
-    tasked = {task.id for task in tasks if task.state in ("assigned", "active")}
+    """Open sanity and QA steps with no ATM task of the same id in any state, so none is dispatched twice.
+
+    The one exception is a closed task from an earlier sanity round (ANC-057): a sanity FAIL below the round cap
+    closes its task and reopens the sanity bead with its assignee cleared, so that bead is dispatched again."""
+    live = {task.id for task in tasks if task.state in ("assigned", "active")}
+    closed = {task.id for task in tasks} - live
     return tuple(
         step for step in phase.steps
         if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN
-        and not step.anchor and not step.quick_fix and step.bead_id not in tasked
+        and not step.anchor and not step.quick_fix and step.bead_id not in live
+        and (step.bead_id not in closed or (step.kind == "sanity" and not step.assignee))
     )
 
 
@@ -106,6 +112,8 @@ def dispatch(
     now: datetime,
     spec: SpecFn,
     remote_error: Error | None = None,
+    *,
+    roster: frozenset[str],
 ) -> DispatchOutcome:
     prs = tuple(pr for pr in prs if active_pr(pr))
     remote_by_branch = {remote.branch: remote.sha for remote in remotes}
@@ -163,7 +171,8 @@ def dispatch(
         if isinstance(rendered, Err):
             errors.append(rendered.error)
             continue
-        recipient = step.assignee or (repo.sanity_member if step.kind == "sanity" else repo.qa_member)
+        role_member = repo.sanity_member if step.kind == "sanity" else repo.qa_member
+        recipient = step.assignee if step.assignee in roster else role_member
         actions.append(Action(now, "assign", recipient, (step.bead_id,), f"dispatch {step.bead_id}", rendered.value))
 
     return DispatchOutcome(tuple(actions), tuple(held), tuple(errors))
