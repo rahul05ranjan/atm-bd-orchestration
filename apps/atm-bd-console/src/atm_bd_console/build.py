@@ -13,13 +13,12 @@ except ImportError:
     BUILT_IDENTITY: str | None = None
 
 
-def identity(root: Path | None = None) -> str:
+def identity() -> str:
     """The package version exposed by ``atm-bd --version``.
 
     Build provenance remains available through ``display_identity`` and the
     generated build identity module; it is not part of the release version.
     """
-    del root
     return __version__
 
 
