@@ -97,16 +97,15 @@ Do not manually close completed tasks or beads.
 Only after successful PASS close, hand stack-input.json unchanged to
 sanity-stack. One handoff at a time avoids concurrent stack writes but never
 blocks another sanity close. With one handoff it may run inline:
-sanity-stack-link --input <stack-input.json> --notify-lead <phase-lead>.
-For not_reproducible fixes, skip the stack handoff. For `rebase_required`,
-notify the lead with the pinned commit and stack evidence using
-`atm send <phase-lead> --template <primary-checkout>/.claude/skills/atm-bd-orchestration/templates/rebase-required.xml.j2 --vars <close-vars.json>`;
-the sanity task remains closed.
+sanity-stack-link --input <stack-input.json>.
+For not_reproducible fixes, skip the stack handoff. The script sends the lead
+notice for `stack_failed`, `lock_timeout` and `rebase_required`; the sanity
+task remains closed for each stack outcome. Do not send a duplicate notice.
 
 On `stacked`, the pinned layer is linked or an idempotent replay, including
-a matching layer already below the top. A reclaimed lock is reported to the
-lead with its evidence. On stack_failed, lock_timeout or rebase_required,
-notify the lead as stack owner and leave the sanity task closed. No wait for
+a matching layer already below the top. On stack_failed, lock_timeout or
+rebase_required, sanity-stack-link notifies the lead as stack owner and leaves
+the sanity task closed. No wait for
 a holder, repair spawn or person is part of the sanity task; no stack outcome
 increments sanity_round. The lead owns subsequent stack repairs or dev
 redispatch. Preserve the returned evidence and read ATM for the next task.

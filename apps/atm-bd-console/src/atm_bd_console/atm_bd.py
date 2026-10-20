@@ -381,13 +381,7 @@ def phase(
                                  f"label the phase root {file.label}"))
     by_id = {bead.id: bead for bead in shown + open_beads + ready}
     beads = tuple(by_id.values())
-    stack_bead = next((bead for bead in beads if "stage:stack" in bead.labels), None)
-    pending_value = stack_bead.metadata.get("pending_handoffs", []) if stack_bead else []
-    pending_handoffs = tuple(item for item in pending_value if isinstance(item, dict)) if isinstance(pending_value, list) else ({"checked_bead": "*", "branch": "?", "commit": "?"},)
     errors: list[tuple[str, Error]] = []
-    if stack_bead and (not isinstance(pending_value, list) or len(pending_handoffs) != len(pending_value)):
-        errors.append((stack_bead.id, ConfigInvalid("config_invalid", f"{stack_bead.id}.metadata.pending_handoffs",
-                                                    repr(pending_value), "repair pending_handoffs as an array of objects")))
     ready_ids = {bead.id for bead in ready}
     sprints: list[Sprint] = []
     for sprint_id in file.sprints:
@@ -411,7 +405,7 @@ def phase(
         else:
             steps.append(replace(mapped_step.value, ready=bead.id in ready_ids))
     closed = root.status == SprintState.CLOSED
-    return Ok(Phase(root.id, file.label, root.title, closed, tuple(sprints), tuple(steps), tuple(errors), pending_handoffs))
+    return Ok(Phase(root.id, file.label, root.title, closed, tuple(sprints), tuple(steps), tuple(errors)))
 
 
 def dispatch_spec(ctx: DispatchContext, templates: Mapping[str, str]) -> Result[DispatchSpec]:

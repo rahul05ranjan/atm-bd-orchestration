@@ -26,7 +26,6 @@ QUEUES = [
     ("needs_sanity", "Dev complete -> needs sanity dispatch", "lead -> dev-sanity"),
     ("needs_dev_fix", "Sanity FAIL -> needs dev-fix dispatch", "lead -> dev"),
     ("needs_qa", "Sanity PASS -> needs QA dispatch", "lead -> quality-mgr"),
-    ("stack_handoff_pending", "PASS closed, stack handoff pending", "lead (resume sanity-stack)"),
     ("needs_fix", "QA FAIL -> fix ready, needs dispatch", "lead -> dev"),
     ("needs_finding_fix", "Finding -> needs fix dispatch", "lead -> dev"),
     ("minor_backlog", "Minor finding (backlog)", "lead (schedule)"),
@@ -188,25 +187,6 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
 
     queues: dict[str, list[dict[str, Any]]] = {key: [] for key, _, _ in QUEUES}
 
-    stack_bead = next((bead for bead in beads if _stage(bead) == "stage:stack"), None)
-    pending_handoffs = _meta(stack_bead).get("pending_handoffs", []) if stack_bead else []
-    if not isinstance(pending_handoffs, list) or any(not isinstance(item, dict) for item in pending_handoffs):
-        raise QueueFailure("stack bead metadata.pending_handoffs must be an array of objects")
-    pending_checked = {item["checked_bead"] for item in pending_handoffs
-                       if isinstance(item.get("checked_bead"), str) and item["checked_bead"]}
-    for item in pending_handoffs:
-        if stack_bead is None:
-            raise QueueFailure("pending stack handoff exists without a stack bead")
-        checked = item.get("checked_bead") or item.get("sanity_bead") or _valid_id(stack_bead, "stack bead")
-        branch, commit = item.get("branch", "?"), item.get("commit", "?")
-        since = stack_bead.get("updated_at")
-        queues["stack_handoff_pending"].append({
-            "queue": "stack_handoff_pending", "id": checked, "stage": "stack-handoff", "status": "open",
-            "assignee": "-", "priority": None, "since": since, "age": age(since, now),
-            "title": f"stack handoff for {checked}",
-            "detail": f"sanity {item.get('sanity_bead', '?')}; {branch} at {commit}",
-        })
-
     def add(key: str, bead: dict[str, Any], when: str | None, detail: str = "") -> None:
         bead_id = _valid_id(bead, "queue row")
         row = {"queue": key, "id": bead_id, "stage": _stage(bead).removeprefix("stage:"),
@@ -256,15 +236,9 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
         elif stage == PLAN_REVIEW:
             add("needs_plan_review", bead, since)
         elif stage == "stage:dev":
-            if pending_handoffs:
-                add("not_ready", bead, since, "stack handoff pending; stack top is not current")
-            else:
-                add("needs_dev", bead, since, f"difficulty {metadata.get('difficulty', '-')}")
+            add("needs_dev", bead, since, f"difficulty {metadata.get('difficulty', '-')}")
         elif stage == "stage:fix":
-            if pending_handoffs:
-                add("not_ready", bead, since, "stack handoff pending; stack top is not current")
-            else:
-                add("needs_fix", bead, since, f"{metadata.get('finding_ref', '-')} round {metadata.get('round', '-')} filed by {metadata.get('filed_by', '-')}")
+            add("needs_fix", bead, since, f"{metadata.get('finding_ref', '-')} round {metadata.get('round', '-')} filed by {metadata.get('filed_by', '-')}")
         elif stage == SANITY:
             checked = metadata.get("dev_bead") or metadata.get("checked_bead")
             if not checked:
@@ -274,9 +248,6 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
             else:
                 add("needs_sanity", bead, since, f"checks {checked}")
         elif stage == QA:
-            checked = metadata.get("checked_bead")
-            if checked in pending_checked:
-                continue
             add("needs_qa", bead, since, "quick fix (no sanity)" if metadata.get("quick_fix") else "sanity passed")
         elif stage == FINDING:
             key = "minor_backlog" if str(metadata.get("severity", "")).lower() == "minor" else "needs_finding_fix"

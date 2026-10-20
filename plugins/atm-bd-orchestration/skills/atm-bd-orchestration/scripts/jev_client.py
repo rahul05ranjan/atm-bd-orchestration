@@ -52,11 +52,13 @@ FIXES = (  # message prefix -> what the calling agent does next
      "`commit`, `base_sha`, `changed_files` and `context`. If the received assignment lacks one, " + REPORT[0].lower() + REPORT[1:]),
     ("Committed evidence unreadable", "Run `git -C <worktree_path> fetch origin` so `commit` and `base_sha` exist, then run "
      "the same command again. If it still fails, a `changed_files` or `context` path is missing at `commit`: " + REPORT[0].lower() + REPORT[1:]),
-    ("Assignment external_evidence", "Each `external_evidence` entry is one of {\"kind\": \"bead_notes\", \"bead\": <id>}, "
+    ("Assignment external_evidence", "Each `external_evidence` entry is one of {\"kind\": \"bead_notes\", \"bead\": <id>, \"text\": <notes>}, "
      "{\"kind\": \"pr_body\", \"repo\": \"owner/name\", \"pr\": <n>} or {\"kind\": \"pr_comment\", \"repo\": "
      "\"owner/name\", \"comment_id\": <n>}. If the received assignment holds another shape, " + REPORT[0].lower() + REPORT[1:]),
-    ("External evidence unreadable", "Run `bd show <bead> --json` from `worktree_path`, or `gh api` for the PR or comment, "
-     "fix what it reports (a missing bead, `gh auth status`), then run the same command again. If it still fails, "
+    ("External evidence reference is invalid", "Use inline `bead_notes` with `kind`, `bead` and string `text`, or a valid `pr_body`/`pr_comment` reference. "
+     + REPORT),
+    ("External evidence unreadable", "Run `gh api` for the PR or comment, fix what it reports (`gh auth status`), "
+     "then run the same command again. If it still fails, "
      + REPORT[0].lower() + REPORT[1:]),
     ("Context entry", "Fix that `context` entry: `path:start-end` names lines 1 <= start <= end <= the file's line "
      "count at `commit`; a plain `path` sends the whole file. Then run the same command again."),
@@ -426,7 +428,7 @@ def evaluate_parts(requests, key, changed_files=None, *, sleep=None):
         for index, (request, response) in enumerate(done, 1)]}
 
 
-EVIDENCE_REFS = {"bead_notes": ("bead",), "pr_body": ("repo", "pr"), "pr_comment": ("repo", "comment_id")}
+EVIDENCE_REFS = {"pr_body": ("repo", "pr"), "pr_comment": ("repo", "comment_id")}
 
 
 def evidence_ref(ref):
@@ -442,11 +444,14 @@ def evidence_ref(ref):
 
 
 def external_evidence(ref, worktree):
-    """One bead's notes, PR body or PR comment, fetched here so no agent writes it, labelled with where it came from."""
+    """Inline bead notes or a PR body/comment fetched here, labelled with where it came from."""
     kind = ref["kind"]
-    label = ref["bead"] if kind == "bead_notes" else f"{ref['repo']}#{ref.get('pr', ref.get('comment_id'))}"
-    if kind == "bead_notes" and "text" in ref:
+    if kind == "bead_notes" and evidence_ref(ref):
+        label = ref["bead"]
         return {"kind": kind, "ref": label, "url": None, "updated_at": None, "author": None, "text": ref["text"]}
+    if kind not in EVIDENCE_REFS or not evidence_ref(ref):
+        raise JevError("VALIDATION.INPUT", "External evidence reference is invalid")
+    label = f"{ref['repo']}#{ref.get('pr', ref.get('comment_id'))}"
     argv = (["gh", "api", f"repos/{ref['repo']}/pulls/{ref['pr']}"] if kind == "pr_body" else
             ["gh", "api", f"repos/{ref['repo']}/issues/comments/{ref['comment_id']}"])
     try:
@@ -454,9 +459,7 @@ def external_evidence(ref, worktree):
         value = json.loads(proc.stdout) if proc.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, ValueError):
         value = None
-    if isinstance(value, list):
-        value = next((v for v in value if isinstance(v, dict) and v.get("id") == ref.get("bead")), None)
-    text = value.get("notes" if kind == "bead_notes" else "body") if isinstance(value, dict) else None
+    text = value.get("body") if isinstance(value, dict) else None
     if not isinstance(text, str):
         raise JevError("VALIDATION.INPUT", f"External evidence unreadable: {kind} {label}")
     return {"kind": kind, "ref": label, "url": value.get("html_url"), "updated_at": value.get("updated_at"),

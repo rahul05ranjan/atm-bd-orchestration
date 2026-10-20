@@ -86,9 +86,7 @@ SPRINT = Sprint(
     True, 3, SprintState.CLOSED, "closed",
 )
 PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (STEP,),
-              (("atm-bh-7.qa", NOT_FOUND),),
-              ({"sanity_bead": "atm-bh-6.sanity", "checked_bead": "atm-bh-6.group-dev",
-                "branch": "sprint/bh-6-tick-rules", "commit": "77543fe"},))
+              (("atm-bh-7.qa", NOT_FOUND),))
 PHASE_TEMPLATES = {
     purpose: f".claude/skills/atm-bd-orchestration/templates/{filename}.xml.j2"
     for purpose, filename in (

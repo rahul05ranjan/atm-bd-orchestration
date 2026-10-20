@@ -107,17 +107,6 @@ def test_each_hold_is_flat_and_does_not_assign() -> None:
         assert reason in outcome.held[0].reason
 
 
-def test_qa_dispatch_is_held_until_the_pass_stack_handoff_finishes() -> None:
-    value = replace(phase(step()), pending_handoffs=({"checked_bead": "atm-bh-6.group-dev", "branch": "sprint/bh-6", "commit": "abc123"},))
-    outcome = dispatch(value, (), (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
-                       (RemoteRef("sprint/bh-6", "abc123"),),
-                       (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),), (), REPO,
-                       "fenix", NOW, dispatch_spec)
-    assert outcome.actions == ()
-    assert len(outcome.held) == 1
-    assert outcome.held[0].reason == "sanity PASS stack handoff pending"
-
-
 def test_a_step_already_tasked_or_in_progress_is_never_a_hold() -> None:
     worktrees = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),)
     remotes = (RemoteRef("sprint/bh-6", "abc123"),)

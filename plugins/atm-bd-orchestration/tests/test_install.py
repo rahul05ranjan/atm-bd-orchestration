@@ -577,7 +577,8 @@ def test_fresh_install(tmp_path, capsys):
     assert role.startswith("---\nname: dev-sanity\n")
     assert "| Setting | Where | my-repo |" in role and "`my-sanity`" in role
     send_commands = re.findall(r"\batm\s+send\b[^`]*", role)
-    assert any("rebase-required.xml.j2" in command for command in send_commands)
+    assert not any("rebase-required.xml.j2" in command for command in send_commands)
+    assert "sanity-stack-link notifies the lead" in role
     assert all(not re.search(r"(?<!\S)--task-id(?:=|\s|$)", command) for command in send_commands)
     example = (dest / "skills/atm-bd-orchestration/examples/dev-sanity-template-vars.json").read_text()
     assert "https://github.com/owner/my-repo/pull/" in example and str(repo.resolve().parent / "my-repo-worktrees") in example

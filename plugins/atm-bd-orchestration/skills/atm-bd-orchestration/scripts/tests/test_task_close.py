@@ -391,14 +391,11 @@ def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
 def test_sanity_pass_closes_without_waiting_for_stack(world):
     assert "ok" in world.run("sanity", stacked=None)
     assert world.beads[world.values["sanity_bead"]]["status"] == "closed"
-    pending = world.beads[world.values["stack_bead"]]["metadata"]["pending_handoffs"]
-    assert pending == [{"sanity_bead": world.values["sanity_bead"], "checked_bead": world.values["checked_bead"],
-                       "branch": world.values["branch"], "commit": world.values["commit"],
-                       "pr_number": world.values["pr_number"]}]
     calls = [argv for argv, _kwargs in world.calls]
-    marker = next(index for index, argv in enumerate(calls) if argv[:3] == ["bd", "update", world.values["stack_bead"]])
     close = next(index for index, argv in enumerate(calls) if argv[:3] == ["bd", "close", world.values["sanity_bead"]])
-    assert marker < close
+    assert not any(argv[:3] == ["bd", "update", world.values["stack_bead"]] for argv in calls)
+    assert close < next(index for index, argv in enumerate(calls)
+                        if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
 
 
 @pytest.mark.parametrize("configured_cap", [None, 2])
@@ -715,8 +712,6 @@ def test_dev_replay_does_not_bypass_round_cap(world):
 def test_dev_changed_sha_after_completed_sanity_is_conflict(world):
     assert "ok" in world.run("dev")
     assert "ok" in world.run("sanity")
-    # Model the successful post-close stack handoff before the next layer runs.
-    world.beads["atm-phase-bj.stack"]["metadata"]["pending_handoffs"] = []
     writes = list(world.writes)
     assert world.run("dev", commit="c" * 40)["err"]["code"] == "REPLAY.CONFLICT"
     assert world.writes == writes
@@ -796,7 +791,7 @@ def test_each_role_example_executes_its_close_path(world, role):
 @pytest.mark.parametrize("role, expected_writes", [
     ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
     ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
-    ("sanity", [["bd", "update"], ["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
+    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
     ("qa", [["bd", "close"], ["atm", "send"], ["atm", "task", "close"]]),
 ])
 def test_each_role_command_order_and_identity(world, role, expected_writes):

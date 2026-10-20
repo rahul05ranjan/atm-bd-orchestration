@@ -40,5 +40,5 @@ runs it.
 ### Lead and console
 
 19. Sanity and QA assignment are mechanical and belong to the hook. The fallback for a sanity or QA bead that `bd ready` lists with no ATM task (a hook that died between its commands) is the console or the lead assigning it as the lead; the console checks `atm task list` before assigning, and a second assign of the same id is an in-place update, never a second task.
-20. The lead does not link layers: the sanity side does, under the stack bead lock, on PASS ([sanity-stack.md](sanity-stack.md)). The lead creates the stack bead with the integration branch, claims it before its own unstack, restack and land, and owns stack hygiene and every `stack_failed`. A sanity FAIL or rebase-required is fixed on the same unlinked branch.
+20. The lead does not link layers: after the PASS close hook succeeds, the sanity side links under the stack bead lock ([sanity-stack.md](sanity-stack.md)). The lead creates the stack bead with the integration branch, claims it before its own unstack, restack and land, and owns stack hygiene and every `stack_failed`. A sanity FAIL or rebase-required is fixed on the same unlinked branch.
 21. Dev and fix assignment stay with the lead: the dev starts its next queued task when the hook closes its task on sanity PASS; fix beads from QA go to the dev the lead picks at the finding's difficulty.

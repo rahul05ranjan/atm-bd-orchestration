@@ -118,11 +118,7 @@ def dispatch(
     for step in candidates(phase, tasks):
         sprint = sprint_of(step, phase, repo.bead_prefix)
         target = step.target or (sprint.target if sprint else None)
-        handoff_pending = step.kind == "qa" and any(
-            item.get("checked_bead") in (step.checked_bead, "*") for item in phase.pending_handoffs
-        )
-        reasons = (["sanity PASS stack handoff pending"] if handoff_pending else
-                   ["not ready"] if not step.ready else _gate_reasons(
+        reasons = (["not ready"] if not step.ready else _gate_reasons(
                        step, target, worktrees, remote_by_branch, merge_by_pair, remote_error,
                    ))
 

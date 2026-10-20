@@ -1,6 +1,6 @@
 # dev-sanity
 
-Sources: `agents/{dev-sanity,sc-sanity-llm,sc-sanity-jev}.md`, `templates/{dev-sanity-template.xml.j2,dev-sanity-assignment.json.j2}`, `scripts/{sanity-split,sanity-merge,sanity-run-history,assignment-gates.py}`, `skills/atm-bd-orchestration/scripts/{jev_client.py,atm-task-close.py}`, `atm-bd-orchestration/SKILL.md`, `formulas/README.md`, `atm-beads/resources/{dev-sanity,orchestrating}.md`, `README.md`, `install.py`.
+Sources: `agents/{dev-sanity,sanity-stack,sc-sanity-llm,sc-sanity-jev}.md`, `templates/{dev-sanity-template.xml.j2,dev-sanity-assignment.json.j2}`, `scripts/{sanity-split,sanity-merge,sanity-run-history,sanity-close-vars,sanity-stack-link,assignment-gates.py}`, `skills/atm-bd-orchestration/scripts/{jev_client.py,atm-task-close.py}`, `atm-bd-orchestration/SKILL.md`, `formulas/README.md`, `atm-beads/resources/{dev-sanity,orchestrating}.md`, `README.md`, `install.py`.
 
 ## Requirements
 
@@ -10,7 +10,7 @@ Sources: `agents/{dev-sanity,sc-sanity-llm,sc-sanity-jev}.md`, `templates/{dev-s
 3. Own the verdict: the selected result alone sets PASS/FAIL; a FAIL is handed back by the close hook, not as finding children.
 4. Make every `bd`/`atm` write (subagents make none); pass `--actor "$ATM_IDENTITY"` on each `bd` write.
 5. Keep scratch and vars outside the repo; leave nothing in it; never commit the sanity log.
-6. Never edit code, commit or push; link the layer on PASS under the stack bead lock (28).
+6. Never edit code, commit or push; after the PASS close hook succeeds, hand the generated stack input to sanity-stack, which links under the stack bead lock (28).
 
 ### Startup and Jev outages
 7. At session start and on credential change, run the Jev startup probe (`jev_client.py --startup`).
@@ -21,8 +21,8 @@ Sources: `agents/{dev-sanity,sc-sanity-llm,sc-sanity-jev}.md`, `templates/{dev-s
 ### Per assignment (task id = sanity bead id)
 11. Start every open sanity task at once (claim all, `atm task start` the active one); close each when its verdict arrives through the close hook (28, 29). The dev's close hook assigns the task as the lead as soon as the checked bead closes; after FAIL, the same task id is reopened in place.
 12. Not ready (`bd ready -n 0` omits it): do not claim or start; find the root cause; close the task `refused` (`bead_state` open), `reason_md` = bead, why, who must move and the dependency to add (`bd dep add <bead> --blocked-by <blocker>`); a blocker met mid-task: return the bead open, unassigned, blocker in notes, close the task `refused` the same way; never wait.
-13. No separate bd ready, PR-base or stack gate precedes sanity. assignment-gates.py sanity checks COMMIT_REQUIRED, SANITY_FROZEN and COMMIT_MISMATCH. The assignment carries BEADS_DIR and close context; sanity-split carries checked content and inline notes, so subagents perform no bead lookup.
-14. An unlinked PR is the normal state before sanity links it.
+13. No separate `bd ready`, PR-base or stack gate precedes sanity. `assignment-gates.py sanity` checks NOT_READY, COMMIT_REQUIRED, SANITY_FROZEN and COMMIT_MISMATCH. The assignment carries BEADS_DIR and close context; sanity-split carries checked content and inline notes, so subagents perform no bead lookup.
+14. An unlinked PR is the normal state when sanity starts; after PASS closes, sanity-stack links it under the stack bead lock.
 15. Any refusal: close the task `refused` with the reason, command and failure evidence in `reason_md`; do not create or cite an outage class bead. A refusal before a reviewer report has no history row (27).
 16. Claim and `atm task start`; iteration = completed events of the task + 1.
 17. Run `sanity-split` exactly once (after a dev-fix, over the sprint's own layer PRs, the checked PR last); its run id, sha and reviewers apply to the whole run.
@@ -33,6 +33,7 @@ Sources: `agents/{dev-sanity,sc-sanity-llm,sc-sanity-jev}.md`, `templates/{dev-s
 22. Rerun fails, dispatch fails or the Jev probe has not passed: a coordinator failure envelope in that slot (in probe-failed mode the probe's own code and message verbatim); say that reviewer could not run; never substitute one reviewer for the other in that slot; one failed reviewer is not a blocker or CANNOT_RUN.
 23. Merge each family as it finishes; append no history yet.
 24. Triage per deliverable: select `llm`, `jev` or `rerun`, with a reason for every disagreement or rerun; one reviewer failed: select the other's valid reply with the failure as reason; neither valid: CANNOT_RUN. A rerun goes to one child with the missing context added.
+25. `sanity-close-vars` writes stack input only for a fixed PASS, copying `budget` and `timeout_s` from the assignment's close context; `sanity-stack-link` makes one claim attempt, releases its claim after the write, and notifies the phase lead when the result is not `stacked`.
 26. Selected merge: exit 4 (lint running) retry with the same times, never rerun lint; exit 0: PASS/FAIL; exit 1/3 with a report: CANNOT_RUN, keep error and raw results; no report: coordinator error, never PASS.
 27. After the selected merge, append exactly two history rows, `sanity-llm` then `sanity-jev`, with the selected verdict as final; selection or selected merge cannot run: `CANNOT_RUN`, still append both; a reviewer merge with no report has no row: report it to the task assigner.
 28. PASS: sanity-close-vars derives the complete hook input from the pinned split manifest and selected result; never hand-edit close vars. Run the close hook immediately on the selected verdict. It closes the sanity bead, dev and sanity tasks, then assigns QA. Only afterwards hand the generated input to sanity-stack; no stack link or human response gates the close.

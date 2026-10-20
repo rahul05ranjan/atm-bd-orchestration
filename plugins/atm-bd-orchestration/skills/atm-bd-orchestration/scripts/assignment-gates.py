@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stack_top import pending_handoffs, select_stack_top, stack_bead_id
+from stack_top import select_stack_top, stack_bead_id
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
@@ -114,8 +114,6 @@ def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
     stack = run_json(runner, "bd", "show", stack_bead_id(args.root), "--json", cwd=str(PRIMARY))
     if not isinstance(stack, list) or len(stack) != 1 or not isinstance(stack[0], dict):
         raise ValueError("stack bead lookup must return exactly one bead object")
-    if pending_handoffs(stack[0]):
-        return "STACK_HANDOFF_PENDING"
     plan = invoke(runner, [VALIDATE_PLAN, "--root", args.root], capture_output=True, text=True, cwd=str(PRIMARY))
     if plan.returncode == 5:
         print((plan.stdout + plan.stderr).strip(), file=sys.stderr)
@@ -139,6 +137,9 @@ def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
 def sanity_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
     if not args.commit:
         return "COMMIT_REQUIRED"
+    ready = run_json(runner, "bd", "ready", "-n", "0", "--json")
+    if not any(row.get("id") == args.bead for row in ready):
+        return "NOT_READY"
     if has_prior_pass(run(runner, "bd", "history", args.bead, "--json")):
         return "SANITY_FROZEN"
     if run(runner, "git", *git_dir(args), "rev-parse", "HEAD") != args.commit:

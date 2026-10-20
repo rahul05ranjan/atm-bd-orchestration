@@ -44,7 +44,7 @@ def dumped(value): return json.dumps(value)
 
 def dev_runner(overrides=None):
     data = {
-        ("bd", "show", gates.stack_bead_id("{{ bead_prefix }}-phase-d"), "--json"): (0, dumped([{"metadata": {"pending_handoffs": []}}])),
+        ("bd", "show", gates.stack_bead_id("{{ bead_prefix }}-phase-d"), "--json"): (0, dumped([{"metadata": {}}])),
         (gates.VALIDATE_PLAN, "--root", "{{ bead_prefix }}-phase-d"): (0, ""),
         ("bd", "ready", "-n", "0", "--json"): (0, dumped([{"id": "bead"}])),
         ("bd", "show", "bead", "--json"): (0, dumped([{"status": "open", "assignee": "", "metadata": {"difficulty": "normal", "pr_target": "target"}}])),
@@ -64,6 +64,7 @@ HISTORY_PASSED = [{"CommitHash": "c4", "Issue": {"id": "bead", "status": "open"}
 
 def sanity_runner(overrides=None):
     data = {
+        ("bd", "ready", "-n", "0", "--json"): (0, dumped([{"id": "bead"}])),
         ("git", "rev-parse", "HEAD"): (0, "head"),
         ("bd", "history", "bead", "--json"): (0, dumped(HISTORY_NEVER_PASSED)),
     }; data.update(overrides or {}); return FakeRunner(data)
@@ -142,13 +143,6 @@ class AssignmentGateTests(unittest.TestCase):
         for fixture, runner in cases:
             with self.subTest(fixture=fixture): self.assert_fixture(fixture, ns("dev"), runner)
 
-    def test_dev_gate_stops_while_a_pass_handoff_is_pending(self):
-        pending = {"checked_bead": "atm-phase-d.fix-1", "branch": "fix/d-1", "commit": "abc"}
-        runner = dev_runner({("bd", "show", gates.stack_bead_id("{{ bead_prefix }}-phase-d"), "--json"):
-                             (0, dumped([{"metadata": {"pending_handoffs": [pending]}}]))})
-        self.assertEqual(gates.evaluate(ns("dev"), runner), "STACK_HANDOFF_PENDING")
-        self.assertFalse(any(argv == (gates.VALIDATE_PLAN, "--root", "{{ bead_prefix }}-phase-d") for _, argv in runner.calls))
-
     def test_a_poured_dev_bead_takes_its_sprint_containers_pr_target(self):
         poured = {("bd", "show", "bead", "--json"): (0, dumped([{"status": "open", "assignee": "", "labels": ["stage:dev"],
                   "metadata": {"difficulty": "normal", "sprint_bead": "container"}}]))}
@@ -198,6 +192,7 @@ class AssignmentGateTests(unittest.TestCase):
         runner = sanity_runner({("git", "-C", "/wt", "rev-parse", "HEAD"): (0, "head")})
         self.assertEqual(gates.evaluate(ns("sanity", worktree="/wt", base="elsewhere", pr_number=""), runner), "READY")
         self.assertEqual(runner.calls, [
+            (None, ("bd", "ready", "-n", "0", "--json")),
             (None, ("bd", "history", "bead", "--json")),
             (None, ("git", "-C", "/wt", "rev-parse", "HEAD")),
         ])
@@ -217,7 +212,8 @@ class AssignmentGateTests(unittest.TestCase):
             ("git", "rev-parse", "HEAD"): (0, "moved"),
         })
         self.assertEqual(gates.evaluate(ns("sanity"), runner), "SANITY_FROZEN")
-        self.assertEqual(runner.calls, [(None, ("bd", "history", "bead", "--json"))])
+        self.assertEqual(runner.calls, [(None, ("bd", "ready", "-n", "0", "--json")),
+                                        (None, ("bd", "history", "bead", "--json"))])
 
     def test_sanity_history_that_is_not_snapshots_cannot_run(self):
         for output in (dumped({"verdict": "PASS"}), dumped([{"description": "lint passes"}]), dumped([{"Issue": "closed"}]),
@@ -229,6 +225,11 @@ class AssignmentGateTests(unittest.TestCase):
                 self.assertEqual(code, "GATE_CANNOT_RUN")
                 self.assertIn(output, err.getvalue())
         self.assertEqual(gates.evaluate(ns("sanity"), sanity_runner({("bd", "history", "bead", "--json"): (0, "[]")})), "READY")
+
+    def test_sanity_not_ready_is_a_gate_result(self):
+        runner = sanity_runner({("bd", "ready", "-n", "0", "--json"): (0, "[]")})
+        self.assertEqual(gates.evaluate(ns("sanity"), runner), "NOT_READY")
+        self.assertEqual(runner.calls, [(None, ("bd", "ready", "-n", "0", "--json"))])
 
     def test_sanity_history_command_failure_cannot_run(self):
         runner = sanity_runner({("bd", "history", "bead", "--json"): (1, "", "database unavailable")})
@@ -247,6 +248,7 @@ class AssignmentGateTests(unittest.TestCase):
         })
         self.assertEqual(gates.evaluate(ns("sanity", pr_target="unlinked-target"), runner), "READY")
         self.assertEqual([argv for _, argv in runner.calls], [
+            ("bd", "ready", "-n", "0", "--json"),
             ("bd", "history", "bead", "--json"), ("git", "rev-parse", "HEAD"),
         ])
 
@@ -282,7 +284,6 @@ class AssignmentGateTests(unittest.TestCase):
             ("bd fails", {bead: (1, "", "database down")}, ("GATE_CANNOT_RUN", 2)),
             ("invalid metadata", {bead: (0, dumped([{"metadata": "bad"}]))}, ("GATE_CANNOT_RUN", 2)),
             ("invalid layers", {bead: (0, dumped([{"metadata": {"layers": "bad"}}]))}, ("GATE_CANNOT_RUN", 2)),
-            ("pending sanity handoff", {bead: (0, dumped([{"metadata": {"pending_handoffs": [{"checked_bead": "fix"}], "layers": []}}]))}, ("GATE_CANNOT_RUN", 2)),
             ("missing head", {bead: (0, dumped([{"metadata": {"layers": [{"branch": "top"}]}}]))}, ("GATE_CANNOT_RUN", 2)),
             ("missing fallback", {bead: (0, "[{}]"), head: (1, "", "unknown ref")}, ("GATE_CANNOT_RUN", 2)),
         ]

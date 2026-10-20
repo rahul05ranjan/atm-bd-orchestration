@@ -372,18 +372,6 @@ def test_phase_bh_yields_ten_sprints_from_their_bead_metadata_and_the_plan(fake_
     assert (result.root_id, result.label, result.closed) == ("atm-phase-bh", "phase-bh", False)
 
 
-def test_phase_carries_pending_stack_handoffs_for_dispatch_gates(fake_bin) -> None:
-    open_beads, ready, shown = _read(fake_bin)
-    root = _root(open_beads)
-    pending = {"sanity_bead": "atm-bh-6.group-sanity", "checked_bead": "atm-bh-6.group-dev",
-               "branch": "sprint/bh-6", "commit": "abc123", "pr_number": 12}
-    stack = replace(root, id="atm-phase-bh.stack", labels=("stage:stack",), metadata={"pending_handoffs": [pending]})
-
-    result = _ok(phase(_ok(PLAN_FILE), root, (*open_beads, stack), ready, shown))
-
-    assert result.pending_handoffs == (pending,)
-
-
 def test_findings_count_the_sprints_finding_beads(fake_bin) -> None:
     result = _phase(*_read(fake_bin))
     findings = {sprint.id: sprint.findings for sprint in result.sprints}

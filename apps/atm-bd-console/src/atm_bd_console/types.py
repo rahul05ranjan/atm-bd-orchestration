@@ -107,7 +107,6 @@ class Phase:
     sprints: tuple[Sprint, ...]
     steps: tuple[Step, ...]
     step_errors: tuple[tuple[str, Error], ...]
-    pending_handoffs: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)

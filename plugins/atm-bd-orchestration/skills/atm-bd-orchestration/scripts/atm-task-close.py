@@ -535,7 +535,10 @@ class Hook:
                 context = read_vars(Path(path or self.path))
                 with tempfile.TemporaryDirectory(prefix="sanity-dispatch-") as directory:
                     dispatch = Path(directory) / "completion-vars.json"
-                    dispatch.write_text(json.dumps({**context, "close_context": {**context, "phase_lead": self.lead}, "phase_lead": self.lead,
+                    close_context = {**context, "phase_lead": self.lead,
+                                     "budget": context.get("budget", "full"),
+                                     "timeout_s": context.get("timeout_s", 60)}
+                    dispatch.write_text(json.dumps({**context, "close_context": close_context, "phase_lead": self.lead,
                                                     "beads_dir": self.beads_directory()}))
                     self.render(template, read_vars(dispatch))
                     self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
@@ -657,20 +660,6 @@ class Hook:
             self.send(self.lead, template)
         self.assign(self.config["dev_sanity_member"], sanity, "dev-sanity-template.xml.j2", path=path, due=assign)
 
-    def mark_stack_handoff_pending(self):
-        values = self.values
-        bead = self.bead(values["stack_bead"])
-        metadata = bead.get("metadata") or {}
-        pending = metadata.get("pending_handoffs", [])
-        if not isinstance(pending, list) or any(not isinstance(item, dict) for item in pending):
-            raise CloseError("BEAD.INVALID", "stack bead pending_handoffs must be an array of objects",
-                             f"Repair metadata.pending_handoffs on {values['stack_bead']} before closing sanity PASS.")
-        entry = {"sanity_bead": values["sanity_bead"], "checked_bead": values["checked_bead"],
-                 "branch": values["branch"], "commit": values["commit"], "pr_number": values["pr_number"]}
-        if entry not in pending:
-            metadata = {**metadata, "pending_handoffs": [*pending, entry]}
-            self.write_metadata_document(values["stack_bead"], metadata)
-
     def sanity(self):
         values = self.values
         bead = values["sanity_bead"]
@@ -693,8 +682,6 @@ class Hook:
                 raise CloseError("VARS.INVALID", "fix QA requires carry_forward", "Supply the checked fix bead as carry_forward.")
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
-            if values.get("outcome") != "not_reproducible":
-                self.mark_stack_handoff_pending()
             self.close_bead(bead, f"PASS at {values['commit']}")
             self.close_task(values["dev_task_id"], lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
