@@ -53,6 +53,13 @@ python3 plugins/atm-bd-orchestration/install.py --dest /path/to/repo/.codex   # 
 python3 plugins/atm-bd-orchestration/install.py --dest /path/to/repo/.claude --set test_command="make test"
 ```
 
+Through `atm-bd skill`: the `atm-bd` console package's entry point wraps
+`install.py` and adds manifest verification and an install record. Its `--dest`
+is the repository (default: the current directory), while `install.py --dest`
+takes the `.claude` or `.codex` directory itself. A direct `install.py` install
+writes no install record, so `atm-hook-doctor.py` reports it as
+`install_record_missing`.
+
 Through `sc-install` (synaptic-canvas): `sc-install install atm-bd-orchestration
 --local` runs `install.py` as the package's `prepare()`/`complete()`/`cleanup()`
 hook, with `--set` values in `options["args"]`. `prepare()` makes every check
@@ -115,9 +122,9 @@ while that phase is paused or complete.
 
 ## Configuration
 
-The variables are declared once, as the `required_variables` of
-`config/atm-bd-orchestration.yaml.j2`. There are no defaults: install renders the
-template strictly with the sc-compose Python wheel into
+The variables are declared once, in `config/atm-bd-orchestration.yaml.j2`. The
+`required_variables` have no defaults; only `max_sanity_rounds` is optional
+(default 5). Install renders the template strictly with the sc-compose Python wheel into
 `<repo>/.claude/project/atm-bd-orchestration.yaml` and fails, naming every
 missing variable and the registry key that sets it. Skills read that file at run
 time (`skills/atm-beads/scripts/repo_config.py`).
@@ -127,6 +134,7 @@ time (`skills/atm-beads/scripts/repo_config.py`).
 | `bead_prefix` | `bead_prefix` | `myp` |
 | `dev_sanity_member` | `roles.dev-sanity` | `dev-sanity` |
 | `qa_member` | `roles.quality-mgr` | `quality-mgr` |
+| `team_lead_member` | `roles.lead` | `team-lead` |
 | `worktree_base` | `worktree_base` | `../my-repo-worktrees` |
 | `test_command` | `test_command` | `just test` |
 | `lint_command` | `lint_command` | `just lint` |
@@ -136,6 +144,7 @@ time (`skills/atm-beads/scripts/repo_config.py`).
 | `adr_globs` | `adr_globs` (list) | `["docs/adr/*.md"]` |
 | `policy_path` | `policy_path` | `.claude/project/quality-policy.md` |
 | `reviewers_round1` | `reviewers_round1` (list) | `[req-qa, arch-qa]` |
+| `max_sanity_rounds` (optional, default 5) | `max_sanity_rounds` | `5` |
 
 `--set NAME=VALUE` wins over registry.yaml; a list takes a JSON array or
 `a,b,c`. An unknown name is an error. The resolved `dev_sanity_member`
@@ -162,13 +171,15 @@ registry roles, environment identity, or default templates.
 
 Before validating or pouring a new phase, run
 `.claude/skills/atm-beads/scripts/phase-config init --phase <x> --lead <appointed-lead>`.
-It writes the seven standard template paths and repository-derived plan/root/branch
-values, refusing to overwrite an existing phase. See
+It needs the rendered `.claude/project/atm-bd-orchestration.yaml` first. It
+writes the lead, the six standard template paths and repository-derived
+plan/root/branch values, refusing to overwrite an existing phase. It does not
+create the plan JSONL or `.atm.toml`. See
 [`planning.md`](skills/atm-beads/resources/planning.md#phase-definition-plan-file-and-phase-file)
 for the complete file and purpose mapping. Update `lead` there for a handoff.
 
 On upgrade, rerun the installer to remove the old repository YAML `lead`, and
-add `lead` plus all seven template entries to each active phase file before
+add `lead` plus all six template entries to each active phase file before
 running phase commands. The installer reads `roles.lead` only for
 `team_lead_member`, the ANC-057 round-cap recipient, and preserves it rather
 than writing it as a phase lead. `--set lead=...` and console/viewer `--as`
@@ -188,7 +199,10 @@ transport and the config file). On every run:
   (`skills/atm-beads`, `skills/atm-bd-orchestration`, `skills/prompt-rewrite-judge`,
   `skills/qa-report`, `skills/sprint-report`, `skills/sprint-review`) that exists without any file it
   owns;
-- a failed install writes nothing;
+- the checks above run before anything is written, so an install that fails
+  them writes nothing. Applying the plan provisions the `atm-bd@tool` ATM
+  member first and then writes files one at a time, so a failure during that
+  step can leave earlier writes in place;
 - `--overwrite` (sc-install: `overwrite` or `force`) turns each failing file
   above into a warning: the file is moved to `<repo>/.backup/<UTC time>/<path>`
   (git-ignored) and the package's file takes its place. A foreign skill

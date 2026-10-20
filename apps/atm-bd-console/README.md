@@ -23,6 +23,8 @@ uv run --frozen pyright src
 ## Installation and prerequisites
 
 Install the package with `uv tool install atm-bd` (Python 3.11 or newer).
+To install from source instead, use `uv tool install
+"git+https://github.com/randlee/atm-bd-orchestration.git#subdirectory=apps/atm-bd-console"`.
 The console and cron commands operate on a configured repository and require
 the `atm`, `bd`, and `git` executables on `PATH`. The Status graph also uses
 `mmdflux` when available.
@@ -38,6 +40,15 @@ dependencies can be installed with `python3 -m pip install pydantic pyyaml
 From the repository root, run `atm-bd skill` to install the bundled skills
 without fetching a release. It reports the bundled source ref, commit SHA,
 and app version. Use `atm-bd skill --help` for release and destination options.
+
+`--dest` names the repository (default: the current directory); the skills go
+into `<dest>/.claude`, or `<dest>/.codex` with `--codex`. A destination that
+already ends in `.claude` or `.codex` is used as is. The command wraps the
+plugin's `install.py`, with the same checks and install plan, and adds manifest
+verification and the install record. Like `install.py`, it renders
+`.claude/project/atm-bd-orchestration.yaml` and provisions the `atm-bd@tool`
+team member. The consuming-repository prerequisites are listed in the
+[plugin README](../../plugins/atm-bd-orchestration/README.md#install).
 
 ## Skill install integrity contract
 
@@ -64,7 +75,27 @@ command. Bare installs verify the packaged skill tree against the manifest
 shipped in the same wheel; this checks the packaged bytes, not release
 provenance or signatures.
 
-## Console operational logs
+## Before launching
+
+- Run every command from the repository root. The root is the current
+  directory; there is no walk up to the git root.
+- `--phase` is required and must match `[a-z0-9]+`.
+- `.atm.toml` must set `[atm] default_team`.
+- `.claude/project/atm-bd-orchestration.yaml`, written by `atm-bd skill`, is
+  required by `console`, `cron`, and `snapshot`.
+- Unless `--github off` is given, `gh` must be installed and authenticated.
+  Nothing checks this up front; failures appear when `gh` runs.
+- At startup the console (not cron) checks that the notification sender is a
+  member of its team.
+
+These commands send no assignments or notifications and can be used to check a
+phase before going live:
+
+- `atm-bd queues --phase <x> --all` lists ready and not-ready beads.
+- `atm-bd snapshot --phase <x> --github off --no-fetch` always runs as a dry
+  run, but takes the phase lock and writes the snapshot and journal files.
+- `atm-bd show --phase <x>` prints the dashboard from a recent snapshot; it
+  needs a prior `snapshot`, `cron`, or console tick.
 
 ## Launch settings
 
@@ -86,6 +117,16 @@ the threshold. Cron emits the same quota text in a JSONL `status` record;
 
 Run `atm-bd console --phase bh` from the repository root. For one cron tick,
 use `atm-bd cron --phase bh`; add `--dry-run` to preview actions.
+
+`--github` defaults to `graphql` (`rest` and `off` are the alternatives).
+`--interval` defaults to 60 seconds for the console (minimum 10) and to 900 for
+cron. `[console]` in `.atm-bd/console.toml` may set `github`, `interval`,
+`github_poll_interval`, and `github_quota_threshold`; command-line flags win,
+and cron uses 900 unless `--interval` is given. `--no-fetch` skips the origin
+fetch and the remote-ref read that follows it. `--dry-run` sends nothing and
+does not advance the saved state, but still appends `dry_run` rows to
+`actions.jsonl` and writes the snapshot.
+
 The phase file `.atm-bd/phase-bh.toml` supplies the assignment identity and
 template paths:
 
@@ -97,7 +138,6 @@ lead = "solar"
 
 [templates]
 dev = ".claude/skills/atm-bd-orchestration/templates/dev-template.xml.j2"
-dev_fix = ".claude/skills/atm-bd-orchestration/templates/dev-fix.xml.j2"
 fix = ".claude/skills/atm-bd-orchestration/templates/fix-assignment.xml.j2"
 sanity = ".claude/skills/atm-bd-orchestration/templates/dev-sanity-template.xml.j2"
 qa = ".claude/skills/atm-bd-orchestration/templates/qa-template.xml.j2"
@@ -105,10 +145,26 @@ plan_review = ".claude/skills/atm-bd-orchestration/templates/plan-review-templat
 review = ".claude/skills/atm-bd-orchestration/templates/review-template.xml.j2"
 ```
 
-All seven purposes are required. Each value must name an existing file under
-the installed template directory, relative to the repository root. Missing,
-empty, unknown, or invalid settings produce `config_invalid` naming the key
-before the console starts. Console `--as` is removed; `lead` is read only from
+All six purposes are required. Each value must name an existing file under
+`.claude/skills/atm-bd-orchestration/templates`, relative to the repository
+root. A leftover `dev_fix` key is ignored; any other unknown key is rejected.
+
+`root` must end in `-phase-<phase>`. `plan` must name an existing file of
+nonempty JSONL rows, `{"sprint": "<name>", "depends_on": ["<name>", ...]}`;
+`depends_on` is optional. An optional `code_checkout` gives a relative path to
+the code repository. That checkout, or the repository root when it is absent,
+must be a git toplevel whose `origin` is a GitHub URL; this is checked even
+with `--github off`.
+
+`.claude/skills/atm-beads/scripts/phase-config init --phase <x> --lead <lead>`
+creates the phase file with the six standard template paths. It needs the
+rendered YAML from `atm-bd skill` and refuses to overwrite an existing file. It
+does not create the plan JSONL or `.atm.toml`.
+
+Missing, empty, unknown, or invalid settings produce `config_invalid` naming
+the key before the console starts. A missing phase file, plan file, or
+`plan`, `root`, or `integration_branch` key produces `not_found`; malformed
+TOML or plan rows produce `parse_failed`. Console `--as` is removed; `lead` is read only from
 the phase file, with no environment or repository YAML fallback. Each tick
 reloads these phase settings. Team and sanity/QA recipients still come from
 `.atm.toml` and `.claude/project/atm-bd-orchestration.yaml`, respectively.
