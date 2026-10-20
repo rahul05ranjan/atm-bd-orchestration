@@ -16,7 +16,9 @@ from atm_bd_console import findings_renderer, ledger_source, render, runs
 from atm_bd_console.app import (
     ConsoleApp,
     _agent_name,
-    _quality_run_label,
+    _quality_row,
+    _quality_run_cells,
+    _quality_widths,
     _verdict,
     sanity_text,
     sprint_steps,
@@ -175,7 +177,8 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
     finding = {"id": "f1", "description": "missing test", "design": "add a test",
                "metadata": {"severity": "important", "reviewer": "req-qa"},
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
-    assert "13:14" in _quality_run_label(runs.qa_runs([qa])[0], [], local_zone=UTC).plain
+    cells, state, blocking = _quality_run_cells(runs.qa_runs([qa])[0], [], local_zone=UTC)
+    assert "13:14" in _quality_row(cells, state, blocking, _quality_widths([(cells, state, blocking)])).plain
     rendered = []
     monkeypatch.setattr(findings_renderer, "render_findings", lambda _root, findings: rendered.extend(findings) or "# Findings\n\nmissing test")
 

@@ -29,8 +29,8 @@ from textual.widgets.option_list import Option
 
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .build import display_identity
-from .enums import AgentIcon, QaState, SprintState
-from .icons import AGENT_ICONS, JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, QA_FAIL_NON_BLOCKING, SPRINT_ICONS, icon_for
+from .enums import QaState, SprintState
+from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
@@ -172,6 +172,11 @@ def sanity_text(
 
 
 _QUALITY_HEADERS = ("Completed", "QA", "Sprint", "QA bead", "PR", "Round", "B", "I", "M", "Elapsed")
+_QUALITY_QA_COLUMN = 1
+_QUALITY_BLOCKING_COLUMN = 6
+_QUALITY_IMPORTANT_COLUMN = 7
+_QUALITY_MINOR_COLUMN = 8
+_QUALITY_SEVERITY_COLUMNS = (_QUALITY_BLOCKING_COLUMN, _QUALITY_IMPORTANT_COLUMN, _QUALITY_MINOR_COLUMN)
 
 
 def _quality_run_cells(
@@ -196,42 +201,33 @@ def _quality_run_cells(
 
 
 def _quality_widths(rows: list[tuple[tuple[str, ...], QaState | None, int]]) -> tuple[int, ...]:
-    def width(row: tuple[str, ...], state: QaState | None, index: int) -> int:
+    def width(row: tuple[str, ...], state: QaState | None, blocking: int, index: int) -> int:
         rendered = cell_len(row[index])
-        if index == 1 and state in (QaState.PASS, QaState.FAIL):
-            icon = AGENT_ICONS[AgentIcon.QA_PASS if state == QaState.PASS else AgentIcon.QA_FAIL]
+        icon = qa_run_icon(state, blocking)
+        if index == _QUALITY_QA_COLUMN and icon is not None:
             rendered += cell_len(icon[0]) + 1
         return rendered
 
-    return tuple(max([cell_len(header), *(width(row, state, index) for row, state, _blocking in rows)])
+    return tuple(max([cell_len(header), *(width(row, state, blocking, index) for row, state, blocking in rows)])
                  for index, header in enumerate(_QUALITY_HEADERS))
 
 
 def _quality_row(cells: tuple[str, ...], state: QaState | None, blocking: int, widths: tuple[int, ...]) -> Text:
     label = Text(no_wrap=True)
     for index, (value, width) in enumerate(zip(cells, widths, strict=True)):
-        if index == 1 and state in (QaState.PASS, QaState.FAIL):
-            icon = (AGENT_ICONS[AgentIcon.QA_PASS] if state == QaState.PASS else
-                    AGENT_ICONS[AgentIcon.QA_FAIL] if blocking else QA_FAIL_NON_BLOCKING)
+        icon = qa_run_icon(state, blocking)
+        if index == _QUALITY_QA_COLUMN and icon is not None:
             glyph, color = icon
             label.append(glyph, style=color or "")
             label.append(f" {value}".ljust(max(0, width - cell_len(glyph))))
-        elif index in (6, 7, 8) and value == "0":
+        elif index in _QUALITY_SEVERITY_COLUMNS and value == "0":
             label.append(" " * width)
         else:
-            rendered = value.rjust(width) if index in (6, 7, 8) else value.ljust(width)
+            rendered = value.rjust(width) if index in _QUALITY_SEVERITY_COLUMNS else value.ljust(width)
             label.append(rendered)
         if index < len(cells) - 1:
             label.append(" | ")
     return label
-
-
-def _quality_run_label(
-    run: runs.QaRun, findings: list[dict], *, widths: tuple[int, ...] | None = None,
-    local_zone: tzinfo | None = None,
-) -> Text:
-    cells, state, blocking = _quality_run_cells(run, findings, local_zone=local_zone)
-    return _quality_row(cells, state, blocking, widths or _quality_widths([(cells, state, blocking)]))
 
 
 def _quality_header(widths: tuple[int, ...]) -> Text:
@@ -310,7 +306,7 @@ class ConsoleApp(App[int]):
     #sanity-list { height: 3fr; overflow: auto; }
     #sanity-errors { height: 2fr; overflow: auto; }
     #quality-runs { height: 3fr; }
-    #quality-runs-header { height: 1; }
+    #quality-runs-header { height: 1; margin-left: 2; }
     #quality-findings { height: 2fr; overflow: auto; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.

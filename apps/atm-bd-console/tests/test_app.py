@@ -18,7 +18,14 @@ from textual import events
 
 from atm_bd_console import app as console
 from atm_bd_console import prs, render
-from atm_bd_console.app import ConsoleApp, run
+from atm_bd_console.app import (
+    _QUALITY_BLOCKING_COLUMN,
+    _QUALITY_IMPORTANT_COLUMN,
+    _QUALITY_MINOR_COLUMN,
+    _QUALITY_QA_COLUMN,
+    ConsoleApp,
+    run,
+)
 from atm_bd_console.build import display_identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.log import create_console_logger
@@ -134,8 +141,11 @@ def test_quality_runs_render_aligned_verdict_and_severity_columns(monkeypatch, t
                          FakeStep(SNAPSHOT, ([], quality_runs, findings)), STATE)
         async with app.run_test(size=size) as pilot:
             await settle(pilot)
+            app.query_one("TabbedContent").active = "quality"
+            await settle(pilot)
             header = app.query_one("#quality-runs-header").render()
             options = app.query_one("#quality-runs")
+            assert app.query_one("#quality-runs-header").content_region.x == options.content_region.x
             labels = {options.get_option_at_index(i).id: options.get_option_at_index(i).prompt
                       for i in range(options.option_count)}
             header_fields = header.plain.split(" | ")
@@ -149,19 +159,26 @@ def test_quality_runs_render_aligned_verdict_and_severity_columns(monkeypatch, t
                 assert all(cell_len(fields[index]) == widest for fields in [header_fields, *row_fields.values()])
 
             fail_fields = row_fields["qa-fail-with-a-long-id"]
-            assert [fail_fields[index].strip() for index in (6, 7, 8)] == ["", "1", "2"]
-            assert row_fields["qa-pass"][1].strip().endswith("pass")
-            assert fail_fields[1].strip().endswith("fail")
-            assert row_fields["qa-fail-blocking"][1].strip().endswith("fail")
-            assert row_fields["qa-unverdict"][1].strip() == ""
-            for key, color in (("qa-pass", "#2EA043"), ("qa-fail-with-a-long-id", "#FF9F80"),
-                               ("qa-fail-blocking", "#F85149")):
+            severity_columns = (_QUALITY_BLOCKING_COLUMN, _QUALITY_IMPORTANT_COLUMN, _QUALITY_MINOR_COLUMN)
+            assert [fail_fields[index].strip() for index in severity_columns] == ["", "1", "2"]
+            assert row_fields["qa-pass"][_QUALITY_QA_COLUMN].strip().endswith("pass")
+            assert fail_fields[_QUALITY_QA_COLUMN].strip().endswith("fail")
+            assert row_fields["qa-fail-blocking"][_QUALITY_QA_COLUMN].strip().endswith("fail")
+            assert row_fields["qa-unverdict"][_QUALITY_QA_COLUMN].strip() == ""
+            for key, glyph, color in (("qa-pass", "\U000f029b", "#2EA043"),
+                                      ("qa-fail-with-a-long-id", "\U000f029b", "#FF9F80"),
+                                      ("qa-fail-blocking", "\U000f029b", "#F85149")):
                 label = labels[key]
-                glyph = label.plain.split(" | ")[1].strip().split()[0]
+                assert label.plain.split(" | ")[_QUALITY_QA_COLUMN].strip().split()[0] == glyph
                 start = label.plain.index(glyph)
                 assert any(span.start <= start < span.end and str(span.style) == color for span in label.spans)
+            no_verdict = labels["qa-unverdict"]
+            field = no_verdict.plain.split(" | ")[_QUALITY_QA_COLUMN]
+            start = no_verdict.plain.index(field)
+            assert field.isspace()
+            assert not any(span.start < start + len(field) and span.end > start for span in no_verdict.spans)
             for label in labels.values():
-                for field_index in (6, 7, 8):
+                for field_index in severity_columns:
                     field_start = sum(cell_len(field) + 3 for field in label.plain.split(" | ")[:field_index])
                     field_end = field_start + cell_len(label.plain.split(" | ")[field_index])
                     assert not any(span.start < field_end and span.end > field_start for span in label.spans)
