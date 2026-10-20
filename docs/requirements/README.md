@@ -39,7 +39,7 @@ flowchart TD
     S -->|"one per deliverable"| SC["sc-sanity-llm / sc-sanity-jev"]
     SC -->|"JSON verdicts"| S
     S -->|"hook FAIL: reopen dev bead,<br/>sanity-fail to the dev (configured cap)"| D
-    S -->|"PASS: close hook closes sanity bead and dev task,<br/>assigns QA as the lead"| Q["quality-mgr: QA round 1"]
+    S -->|"PASS: close hook closes sanity bead,<br/>assigns QA as the lead"| Q["quality-mgr: QA round 1"]
     S -->|"after close: sanity-stack links under the stack lock;<br/>lost the top: rebase-required"| D
     Q -->|"fan-out, background"| R["reviewers_round1<br/>req-qa, arch-qa, rust-qa-agent, ..."]
     R -->|"findings with evidence"| CS["ceremony-finding-screen"]

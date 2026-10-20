@@ -72,7 +72,7 @@ class TemplateContractTests(unittest.TestCase):
                 text = (ROOT / "templates" / name).read_text()
                 description = yaml.safe_load(text.split("---", 2)[1])["description"]
                 self.assertIn("Body of the hook's atm send --template report", description)
-                self.assertIn("task stays open until sanity PASS", description)
+                self.assertIn("the hook closes the dev task at dev complete", description)
                 self.assertNotIn("atm task close", description)
 
     def test_dev_template_requires_pr_target_not_obsolete_top(self):
@@ -631,8 +631,8 @@ class DevAssignmentTests(unittest.TestCase):
                 self.assertIn(f"atm-task-close.py --role {role} --vars <lead-supplied-vars-file>", result.stdout)
                 self.assertIn("immutable shared dispatch vars file unchanged", result.stdout)
                 self.assertIn("On `err`, fix the named cause", result.stdout)
-                self.assertIn("task stays open until sanity PASS", result.stdout)
-                self.assertIn("`task_reminder` means keep waiting", result.stdout)
+                self.assertIn("closed your ATM task as completed", result.stdout)
+                self.assertIn("free to start your next queued task", result.stdout)
                 self.assertIn("`sanity-fail` or `rebase-required`", result.stdout)
                 self.assertNotIn("completed --template", result.stdout)
 

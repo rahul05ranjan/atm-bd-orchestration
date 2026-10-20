@@ -83,7 +83,7 @@ def test_template_rebase_and_hook_ancestry_use_the_same_stack_top(world, templat
                for argv, _kwargs in world.calls)
 
 
-def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
+def test_dev_handoff_is_immediate_and_closes_the_dev_task_as_the_dev(world, monkeypatch):
     before = dict(hook.os.environ)
     assert "ok" in world.run()
     assert dict(hook.os.environ) == before
@@ -92,7 +92,12 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
     assert calls[close_index + 1][:2] == ["atm", "send"]
     assert calls[close_index + 2] == ["bd", "where", "--json"]
     assert calls[close_index + 3][:3] == ["atm", "task", "assign"]
-    assert world.tasks[world.values["dev_task_id"]][-1]["to_state"] == "assigned"
+    # The dev is free for its next queued task once the hook returns; sanity runs on its own task.
+    dev_task = world.tasks[world.values["dev_task_id"]]
+    assert dev_task[-1]["to_state"] == "complete" and dev_task[-1]["close_outcome"] == "completed"
+    assert world.tasks[world.values["sanity_task_id"]][-1]["to_state"] == "assigned"
+    assert calls[close_index + 4] == ["atm", "task", "close", world.values["dev_task_id"], "completed",
+                                      f"dev complete at {world.values['commit']}"]
     for argv, sender in world.writes:
         assert sender == ("phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller")
         if argv[0] == "bd":
@@ -105,6 +110,20 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
             assert kwargs["env"]["ATM_TEAM"] == "test-team"
         else:
             assert kwargs["env"].get("ATM_TEAM") == before.get("ATM_TEAM")
+
+
+def test_dev_rerun_after_the_task_is_closed_does_not_close_it_again(world):
+    assert "ok" in world.run()
+    assert "ok" in world.run()
+    closes = [argv for argv, _sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]]]
+    assert len(closes) == 1
+
+
+def test_not_reproducible_fix_closes_its_task_with_the_evidence_reason(world):
+    world.beads[world.values["checked_bead"]]["metadata"]["role"] = "fix"
+    assert "ok" in world.run("fix", outcome="not_reproducible")
+    close = next(argv for argv, _sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
+    assert close[4:] == ["completed", f"not reproducible: {world.values['evidence']}"]
 
 
 def test_preview_and_native_send_use_identical_completion_vars(world, monkeypatch):
@@ -380,14 +399,11 @@ def test_not_reproducible_hook_verifies_the_cited_file_and_line(world):
     assert world.writes == []
 
 
-def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
+def test_sanity_pass_leaves_the_already_closed_dev_task_alone_then_assigns_qa(world):
+    world.tasks[world.values["dev_task_id"]].append(dict(event="completed", to_state="complete", close_outcome="completed"))
     assert "ok" in world.run("sanity")
     assert world.beads[world.values["sanity_bead"]]["status"] == "closed"
-    dev_close = next((argv, sender) for argv, sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
-    assert dev_close[1] == "phase-lead"
-    # ATM rejects a close with no reason or template; the dev close carries the sanity report template.
-    assert "--template" in dev_close[0] and dev_close[0][dev_close[0].index("--template") + 1].endswith("dev-sanity-complete.md.j2")
-    assert world.tasks[world.values["dev_task_id"]][-1]["close_outcome"] == "completed"
+    assert not any(argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] for argv, _sender in world.writes)
     assert world.tasks[world.values["sanity_bead"]][-1]["close_outcome"] == "completed"
     assert world.messages[-1]["recipient"] == "quality"
 
@@ -399,7 +415,7 @@ def test_sanity_pass_closes_without_waiting_for_stack(world):
     close = next(index for index, argv in enumerate(calls) if argv[:3] == ["bd", "close", world.values["sanity_bead"]])
     assert not any(argv[:3] == ["bd", "update", world.values["stack_bead"]] for argv in calls)
     assert close < next(index for index, argv in enumerate(calls)
-                        if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
+                        if argv[:4] == ["atm", "task", "close", world.values["sanity_task_id"]])
 
 
 @pytest.mark.parametrize("configured_cap", [None, 2])
@@ -793,9 +809,9 @@ def test_each_role_example_executes_its_close_path(world, role):
 
 
 @pytest.mark.parametrize("role, expected_writes", [
-    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
-    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
-    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
+    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"], ["atm", "task", "close"]]),
+    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"], ["atm", "task", "close"]]),
+    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
     ("qa", [["bd", "close"], ["atm", "send"], ["atm", "task", "close"]]),
 ])
 def test_each_role_command_order_and_identity(world, role, expected_writes):
@@ -804,10 +820,10 @@ def test_each_role_command_order_and_identity(world, role, expected_writes):
     assert "ok" in world.run(role)
     assert [[argv[0], *argv[1:2]] for argv, _sender in world.writes] == [item[:2] for item in expected_writes]
     for argv, sender in world.writes:
-        expected_sender = "phase-lead" if argv[:3] == ["atm", "task", "assign"] or argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] else "caller"
+        expected_sender = "phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller"
         assert sender == expected_sender, argv
     for argv, kwargs in world.calls:
-        expected_identity = "phase-lead" if argv[:3] == ["atm", "task", "assign"] or argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] else "caller"
+        expected_identity = "phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller"
         assert kwargs["env"]["ATM_IDENTITY"] == expected_identity, argv
 
 

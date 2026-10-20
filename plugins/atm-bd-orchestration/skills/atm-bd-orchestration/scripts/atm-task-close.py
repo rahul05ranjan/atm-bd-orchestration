@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Close orchestration beads and hand off work without closing a dev task early."""
+"""Close orchestration beads, hand off work, and close the dev task at dev complete."""
 from __future__ import annotations
 
 import argparse
@@ -358,7 +358,7 @@ class Hook:
                 beads.add(values["qa_bead"])
                 if values.get("outcome") != "not_reproducible":
                     beads.add(values["stack_bead"])
-                tasks.update((values["dev_task_id"], values["qa_task_id"]))
+                tasks.add(values["qa_task_id"])
         self.records = {bead: self.read_bead(bead) for bead in sorted(beads)}
         self.task_history = {task: self.events(task) for task in sorted(tasks)}
         events = self.task_history[self.task]
@@ -539,12 +539,14 @@ class Hook:
                           "--vars", str(path or self.path)], lead=True)
         self.assigned.append(bead)
 
-    def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False):
+    def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False, reason=None):
         events = self.task_history[task]
         if not is_terminal(events):
             argv = ["atm", "task", "close", task, outcome]
             if template:
                 argv += ["--template", str(TEMPLATES / template), "--vars", str(self.path)]
+            if reason:
+                argv.append(reason)
             self.run(argv, lead=lead)
 
     def close_bead(self, bead, reason):
@@ -649,6 +651,9 @@ class Hook:
         if assign and not open_assignment:
             self.send(self.lead, template)
         self.assign(self.config["dev_sanity_member"], sanity, "dev-sanity-template.xml.j2", path=path, due=assign)
+        # The dev's work is finished: free the dev for its next queued task and stop reminders.
+        # Sanity state lives on the sanity task; a FAIL re-assigns this task through the lead.
+        self.close_task(self.task, reason=reason)
 
     def sanity(self):
         values = self.values
@@ -673,7 +678,6 @@ class Hook:
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
             self.close_bead(bead, f"PASS at {values['commit']}")
-            self.close_task(values["dev_task_id"], "dev-sanity-complete.md.j2", lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
             self.assign(self.config["qa_member"], values["qa_bead"], "qa-template.xml.j2")
             return
