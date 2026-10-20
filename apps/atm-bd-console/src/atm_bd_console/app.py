@@ -28,6 +28,7 @@ from textual.widgets._tabbed_content import ContentTab
 from textual.widgets.option_list import Option
 
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
+from .agent_roles import agent_group
 from .build import display_identity
 from .enums import QaState, SprintState
 from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
@@ -602,7 +603,8 @@ class ConsoleApp(App[int]):
             display_findings = []
             for finding in findings:
                 name = str(finding.get("reviewer") or "")
-                roster = tuple(replace(agent, qa_state=qa_state) if agent.name == name and agent.agent_type == "qa" else agent
+                roster = tuple(replace(agent, qa_state=qa_state)
+                               if agent.name == name and agent_group(agent.agent_type) == "qa" else agent
                                for agent in agents)
                 label = _agent_name(name, roster)
                 display_findings.append({**finding, "reviewer_display": label.plain})

@@ -13,6 +13,7 @@ from contract_samples import (
     COMMAND_FAILED,
     CONFIG,
     EARLIER,
+    INPUTS,
     IO_FAILED,
     MERGE_FILE,
     NOW,
@@ -29,7 +30,7 @@ from contract_samples import (
 from atm_bd_console import log, runner
 from atm_bd_console.beads_source import open_rows
 from atm_bd_console.command import Output
-from atm_bd_console.enums import QaState, SprintState
+from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
@@ -42,8 +43,10 @@ from atm_bd_console.types import (
     Due,
     GhStatus,
     Member,
+    Merge,
     PhaseFile,
     Problem,
+    PullRequest,
     RemoteRef,
     Section,
     SectionRow,
@@ -594,8 +597,8 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(phase))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok((assigned,)))
 
-    def due(current_state, current_phase, prefix, github, now, tasks=()):
-        decision = model_due(current_state, current_phase, prefix, github, now, tasks)
+    def due(current_state, current_phase, prefix, github, now, tasks=(), closed=frozenset()):
+        decision = model_due(current_state, current_phase, prefix, github, now, tasks, closed)
         due_calls.append((current_state, current_phase, prefix, github, now, tasks, decision))
         return decision
 
@@ -613,6 +616,27 @@ def test_due_uses_successfully_read_tasks_to_skip_extra_reads(github_runtime, mo
     runner.step(replace(CONFIG, no_fetch=False), state, False, store)
 
     assert due_calls == [(state, phase, REPO_CONFIG.bead_prefix, CONFIG.github, NOW, (assigned,), Due(False, (), False))]
+
+
+def test_closed_task_history_is_read_once_per_candidate_only(github_runtime, fake_bin, monkeypatch) -> None:
+    store, _, _, inputs = github_runtime
+    open_step = replace(PHASE.steps[0], status=SprintState.OPEN, anchor=False, quick_fix=False, ready=True)
+    refused = replace(open_step, bead_id="atm-bh-6.group-qa", kind="qa", assignee="quality-mgr")
+    fresh = replace(open_step, bead_id="atm-bh-6.group-sanity", kind="sanity", assignee=None)
+    running = replace(open_step, bead_id="atm-bh-7.group-qa", kind="qa", status=SprintState.IN_PROGRESS)
+    monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(replace(PHASE, closed=False, step_errors=(),
+                                                                       steps=(refused, fresh, running))))
+    closed_history = (Path(__file__).parent / "fixtures" / "atm" / "task-events-closed.json").read_text()
+    monkeypatch.setenv("ATM_CLOSED_HISTORY", closed_history)
+    fake_bin.make("atm", 'if [ "$3" = atm-bh-6.group-qa ]; then printf "%s" "$ATM_CLOSED_HISTORY"; '
+                  'else printf \'{"events": []}\'; fi\n')
+
+    runner.step(CONFIG, RUNNING_STATE, False, store)
+
+    assert [argv[:4] for argv in fake_bin.argv()] == [
+        ("atm", "task", "events", "atm-bh-6.group-qa"), ("atm", "task", "events", "atm-bh-6.group-sanity"),
+    ]
+    assert inputs[-1].closed_tasks == Ok(("atm-bh-6.group-qa",))
 
 
 def test_ready_is_read_before_tasks_each_active_tick(github_runtime, monkeypatch) -> None:
@@ -676,13 +700,15 @@ def test_controlled_hook_dispatch_interleavings(github_runtime, monkeypatch, int
                            (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
                            (RemoteRef("sprint/bh-6", "abc123"),),
                            (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), now),),
-                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})))
+                           (), REPO, "fenix", now, lambda _: Ok(DispatchSpec("sanity", {})), roster=frozenset(),
+                           closed=frozenset(value.closed_tasks.value))
         return SNAPSHOT, outcome.actions, state
 
     monkeypatch.setattr(runner.atm_bd, "phase", lambda _file, _root, _opened, ready, _shown:
                         Ok(replace(phase, steps=(replace(candidate, ready=any(bead.id == candidate.bead_id for bead in ready)),))))
     monkeypatch.setattr(runner.beads_source, "ready", ready)
     monkeypatch.setattr(runner.atm_source, "tasks", read_tasks)
+    monkeypatch.setattr(runner.atm_source, "task_closed", lambda task_id, *_: Ok(tasks[task_id].state == "closed"))
     monkeypatch.setattr(runner.model, "tick", tick)
     monkeypatch.setattr(runner.atm_source, "assign", lambda *_: (assign("dispatch"), Ok(None))[1])
     runner.step(replace(CONFIG, dry_run=False, github="off"), RUNNING_STATE, False, store)
@@ -863,6 +889,40 @@ def test_fetch_replans_cycle_merges_from_refreshed_remote_refs(github_runtime, m
     assert inputs[0].remotes == Ok((fresh,))
 
 
+@pytest.mark.parametrize(("pr_state", "remote_branches", "expected"), [
+    (PrState.CLOSED, ("topic", "base"), None),
+    (PrState.MERGED, ("topic", "base"), None),
+    (PrState.OPEN, ("base",), MergeState.HEAD_NOT_PUSHED),
+    (PrState.OPEN, ("topic",), MergeState.BASE_DELETED),
+    (PrState.DRAFT, ("topic", "base"), MergeState.CLEAN),
+])
+def test_merge_check_runs_only_for_open_pr_and_names_missing_remote_branches(
+    github_runtime, monkeypatch, pr_state, remote_branches, expected,
+) -> None:
+    store, _, events, inputs = github_runtime
+    pr = PullRequest(7, "https://example.test/pull/7", "topic", "base", "abc", CiState.PASS, (), state=pr_state)
+    status = GhStatus("rest", True, None, NOW, False)
+    checked = []
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"),), True))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (Ok((pr,)), status))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs",
+                        lambda *_: Ok(tuple(RemoteRef(branch, REMOTE_REF.sha) for branch in remote_branches)))
+    monkeypatch.setattr(runner.git_source, "merge", lambda _root, branch, target: checked.append((branch, target))
+                        or Ok(Merge(branch, target, MergeState.CLEAN, (), (), NOW)))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, True, store)
+
+    merges = [result.value for result in inputs[0].merges]
+    assert checked == ([("topic", "base")] if expected == MergeState.CLEAN else [])
+    assert [merge.state for merge in merges] == ([] if expected is None else [expected])
+    assert not any(fields.get("source") == "git.merge" and fields.get("outcome") == "failed" for _, fields in events)
+    if expected is not None:
+        result, _, _ = model_tick(replace(INPUTS, prs=Ok((pr,)), merges=(Ok(merges[0]),), remotes=None),
+                                  INITIAL_STATE, NOW, lambda _: None)
+        assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
+
+
 def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
     config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code", no_fetch=False)
@@ -937,7 +997,8 @@ def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_run
     monkeypatch.setenv("ATM_TEAM", "unrelated")
     fake_bin.make("atm", f'if [ "$1" = send ]; then test "$ATM_IDENTITY" = "{sender}" && test "$ATM_TEAM" = "{sender_team}" || exit 23; '
                   + ('printf "delivery rejected" >&2; exit 3; ' if delivery_fails else 'cat >/dev/null; ')
-                  + 'else test "$ATM_IDENTITY" = fenix && test "$ATM_TEAM" = atm-dev || exit 23; fi\n')
+                  + 'else test "$ATM_IDENTITY" = fenix && test "$ATM_TEAM" = atm-dev || exit 23; '
+                  + 'if [ "$1:$2" = task:events ]; then printf \'{"events": []}\'; fi; fi\n')
     config = replace(CONFIG, dry_run=False, notification_sender=f"{sender}@{sender_team}")
 
     snapshot, _ = runner.step(config, INITIAL_STATE, False, store)

@@ -145,6 +145,34 @@ def test_dashboard_renders_every_member_from_roster_fixture(fake_bin, monkeypatc
                        for span in rendered.spans)
 
 
+@pytest.fixture
+def scrambled_dispatch_roster() -> tuple[Member, ...]:
+    return tuple(Member(name, "idle", NOW, role) for name, role in (
+        ("agent-publisher", "publisher"),
+        ("agent-qa", "QA"),
+        ("agent-dev-z", "dev"),
+        ("agent-unknown", "unmatched"),
+        ("agent-sanity", "SANITY"),
+        ("agent-lead", "lead"),
+        ("agent-dev-a", "dev"),
+        ("agent-missing", None),
+    ))
+
+
+def test_dispatch_groups_roster_by_role_then_name(scrambled_dispatch_roster) -> None:
+    expected = [
+        "agent-lead", "agent-dev-a", "agent-dev-z", "agent-sanity", "agent-qa",
+        "agent-missing", "agent-publisher", "agent-unknown",
+    ]
+    for roster in (scrambled_dispatch_roster, tuple(reversed(scrambled_dispatch_roster))):
+        agents = _agent_views(roster, (), None, Ok(()), NOW, "atm")
+        rendered = dashboard(replace(snapshot(), agents=agents, errors=(), sections=(), sent=()), 140, 60)
+        rows = [name for line in rendered.plain.splitlines() for name in expected if name in line]
+        assert rows == expected
+        assert "\U000f01a6agent-sanity" in rendered.plain
+        assert "\U000f029bagent-qa" in rendered.plain
+
+
 def test_sections_error_first_sent_last_height_and_links() -> None:
     error = Timeout("timeout", ("atm",), 5, "retry")
     pr = PullRequest(553, "https://example/pr/553", "head", "base", "sha", CiState.RUNNING, ())

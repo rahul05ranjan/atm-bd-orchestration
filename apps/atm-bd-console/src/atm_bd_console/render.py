@@ -5,6 +5,7 @@ from datetime import datetime, tzinfo
 from rich.cells import cell_len
 from rich.text import Text
 
+from .agent_roles import AGENT_GROUPS, agent_group
 from .enums import SprintState
 from .icons import (
     MARKER_FAST,
@@ -208,7 +209,9 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
         kind, fix = _beads_error(snapshot)
         lines.append(Text(f"beads unavailable: {kind}; {fix}", style="red"))
     lines.append(Text())
-    for agent in snapshot.agents:
+    for agent in sorted(snapshot.agents, key=lambda member: (
+        AGENT_GROUPS.index(agent_group(member.agent_type)), member.name,
+    )):
         lines.extend(_agent_lines(agent, snapshot.bead_prefix))
     if snapshot.errors:
         lines.extend((Text(), Text(f"== Errors ({len(snapshot.errors)})")))

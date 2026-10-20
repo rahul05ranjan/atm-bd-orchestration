@@ -25,6 +25,7 @@ from atm_bd_console.types import (
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 REPO = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", (), "/plans")
+ROSTER = frozenset({"dev-sanity", "quality-mgr", "solar"})
 SPRINT = Sprint("atm-bh-6", "tick rules", 6, "sprint/bh-6", "sprint/bh-1", "phase-bh", (), False, 0)
 
 
@@ -49,7 +50,7 @@ def run(value: Step, *, remotes=None, worktrees=None, merges=None, prs=(), spec=
     renderer = spec or (lambda context: Ok(DispatchSpec("qa", {"checked_bead": context.step.checked_bead})))
     if merges is None:
         merges = (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),)
-    return dispatch(phase(value), (), worktree_values, remote_values, merges, prs, REPO, "fenix", NOW, renderer)
+    return dispatch(phase(value), (), worktree_values, remote_values, merges, prs, REPO, "fenix", NOW, renderer, roster=ROSTER, closed=frozenset())
 
 
 def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
@@ -65,7 +66,7 @@ def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
 def test_missing_target_holds_with_actionable_reason() -> None:
     value = replace(phase(step(target=None)), sprints=(replace(SPRINT, target=None),))
     outcome = dispatch(value, (), (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
-                       (RemoteRef("sprint/bh-6", "abc123"),), (), (), REPO, "fenix", NOW, dispatch_spec)
+                       (RemoteRef("sprint/bh-6", "abc123"),), (), (), REPO, "fenix", NOW, dispatch_spec, roster=ROSTER, closed=frozenset())
     assert outcome.actions == ()
     assert "set the step or sprint PR target" in outcome.held[0].reason
 
@@ -79,18 +80,55 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
         step(bead_id="tasked"),
     )
     task = Task("tasked", "quality-mgr", "assigned", 1, NOW, NOW, "queued")
-    assert tuple(item.bead_id for item in candidates(phase(*values), (task,))) == ("atm-bh-6.group-qa",)
+    assert tuple(item.bead_id for item in candidates(phase(*values), (task,), frozenset())) == ("atm-bh-6.group-qa",)
 
 
-def test_candidate_filter_requires_unassigned_open_sanity_or_qa_and_ignores_closed_task() -> None:
+def test_candidate_filter_requires_open_sanity_or_qa_without_any_task_except_an_earlier_sanity_round() -> None:
     values = tuple(step(bead_id=kind, kind=kind) for kind in ("sanity", "qa", "dev", "fix", "finding")) + (
         step(bead_id="assigned", kind="sanity", assignee="dev-sanity"),
         step(bead_id="in-progress", kind="sanity", status=SprintState.IN_PROGRESS),
         step(bead_id="active-task", kind="qa"),
+        step(bead_id="closed-qa", kind="qa"),
+        step(bead_id="closed-assigned-sanity", kind="sanity", assignee="dev-sanity"),
     )
-    tasks = (Task("sanity", "dev-sanity", "closed", 1, NOW, NOW, "prior round"),
-             Task("active-task", "quality-mgr", "active", 2, NOW, NOW, "current round"))
-    assert tuple(item.bead_id for item in candidates(phase(*values), tasks)) == ("sanity", "qa")
+    tasks = (Task("active-task", "quality-mgr", "active", 2, NOW, NOW, "current round"),)
+    closed = frozenset({"sanity", "closed-qa", "closed-assigned-sanity"})
+    assert tuple(item.bead_id for item in candidates(phase(*values), tasks, closed)) == ("sanity", "qa", "assigned")
+
+
+def test_open_bead_with_preset_assignee_and_closed_task_is_never_a_candidate() -> None:
+    value = step(assignee="quality-mgr")
+    closed = frozenset({"atm-bh-6.group-qa"})
+    assert candidates(phase(value), (), closed) == ()
+    assert run(value).actions[0].to == "quality-mgr"
+    assert dispatch(phase(value), (), (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
+                    (RemoteRef("sprint/bh-6", "abc123"),),
+                    (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),), (), REPO, "fenix", NOW,
+                    lambda _: Ok(DispatchSpec("qa", {})), roster=ROSTER, closed=closed).actions == ()
+
+
+def test_preset_assignee_outside_the_roster_dispatches_to_the_role_member() -> None:
+    for kind, member in (("qa", "quality-mgr"), ("sanity", "dev-sanity")):
+        assert run(step(kind=kind, assignee="departed-agent")).actions[0].to == member
+        assert run(step(kind=kind, assignee="solar")).actions[0].to == "solar"
+
+
+def test_ready_qa_bead_with_preset_assignee_dispatches_once_to_that_assignee() -> None:
+    value = step(assignee="quality-mgr")
+    renderer = lambda context: Ok(DispatchSpec("qa", {"checked_bead": context.step.checked_bead}))
+    args = (
+        (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
+        (RemoteRef("sprint/bh-6", "abc123"),),
+        (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),),
+        (),
+        REPO, "fenix", NOW, renderer,
+    )
+    first = dispatch(phase(value), (), *args, roster=ROSTER, closed=frozenset())
+    assert [(action.kind, action.to, action.bead_ids) for action in first.actions] == [
+        ("assign", "quality-mgr", ("atm-bh-6.group-qa",)),
+    ]
+    live = Task("atm-bh-6.group-qa", "quality-mgr", "assigned", 1, NOW, NOW, "dispatched")
+    assert dispatch(phase(value), (live,), *args, roster=ROSTER, closed=frozenset()).actions == ()
 
 
 def test_each_hold_is_flat_and_does_not_assign() -> None:
@@ -122,9 +160,10 @@ def test_a_step_already_tasked_or_in_progress_is_never_a_hold() -> None:
     worktrees = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),)
     remotes = (RemoteRef("sprint/bh-6", "abc123"),)
     active = Task("atm-bh-6.group-qa", "solar", "active", 1, NOW, NOW, "qa")
-    tasked = dispatch(phase(step(ready=False)), (active,), worktrees, remotes, (), (), REPO, "fenix", NOW, dispatch_spec)
+    tasked = dispatch(phase(step(ready=False)), (active,), worktrees, remotes, (), (), REPO, "fenix", NOW, dispatch_spec,
+                      roster=ROSTER, closed=frozenset())
     in_progress = dispatch(phase(step(status=SprintState.IN_PROGRESS, ready=False)), (), worktrees, remotes, (), (), REPO,
-                           "fenix", NOW, dispatch_spec)
+                           "fenix", NOW, dispatch_spec, roster=ROSTER, closed=frozenset())
     assert tasked.held == () and tasked.actions == ()
     assert in_progress.held == () and in_progress.actions == ()
 
