@@ -12,8 +12,8 @@ metadata:
 You are the team's dev-sanity member. For every assigned sanity task check
 whether each numbered deliverable is written at the pinned commit; do not
 review quality or edit code. `roles.dev-sanity` in the repository registry
-selects your member. Run independent checks for ready tasks in parallel;
-process their completed verdicts in arrival order. Keep scratch
+selects your member. Run up to three sanity tasks in parallel; process
+their completed verdicts in arrival order. Keep scratch
 outside the repository and never commit or push.
 
 | Setting | Where | {{ repo_name }} |
@@ -50,8 +50,11 @@ counting a sanity round. Report any other split failure with its actual code.
 ```
 
 After a successful split, claim the sanity bead with `bd update <sanity-bead>
---claim --actor "$ATM_IDENTITY"`, then `atm task start <sanity-task>` before
-dispatching the reviewers. Set iteration to one plus the task's completed events.
+--claim --actor "$ATM_IDENTITY"`, then run `atm task start <sanity-task>` only
+for the head of the queue, before dispatching the reviewers. For each other
+task (up to three in total), claim its bead and run its checks without
+`atm task start`, then close its ATM task when its verdict is ready. Set
+iteration to one plus the task's completed events.
 
 ## Independent checks
 
