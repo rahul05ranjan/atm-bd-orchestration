@@ -82,7 +82,7 @@ def test_candidate_filter_excludes_anchor_quick_fix_and_open_task() -> None:
     assert tuple(item.bead_id for item in candidates(phase(*values), (task,))) == ("atm-bh-6.group-qa",)
 
 
-def test_candidate_filter_requires_unassigned_open_sanity_or_qa_and_ignores_closed_task() -> None:
+def test_candidate_filter_requires_open_sanity_or_qa_without_a_live_task() -> None:
     values = tuple(step(bead_id=kind, kind=kind) for kind in ("sanity", "qa", "dev", "fix", "finding")) + (
         step(bead_id="assigned", kind="sanity", assignee="dev-sanity"),
         step(bead_id="in-progress", kind="sanity", status=SprintState.IN_PROGRESS),
@@ -90,7 +90,25 @@ def test_candidate_filter_requires_unassigned_open_sanity_or_qa_and_ignores_clos
     )
     tasks = (Task("sanity", "dev-sanity", "closed", 1, NOW, NOW, "prior round"),
              Task("active-task", "quality-mgr", "active", 2, NOW, NOW, "current round"))
-    assert tuple(item.bead_id for item in candidates(phase(*values), tasks)) == ("sanity", "qa")
+    assert tuple(item.bead_id for item in candidates(phase(*values), tasks)) == ("sanity", "qa", "assigned")
+
+
+def test_ready_qa_bead_with_preset_assignee_dispatches_once_to_that_assignee() -> None:
+    value = step(assignee="quality-mgr")
+    renderer = lambda context: Ok(DispatchSpec("qa", {"checked_bead": context.step.checked_bead}))
+    args = (
+        (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
+        (RemoteRef("sprint/bh-6", "abc123"),),
+        (Merge("sprint/bh-6", "sprint/bh-1", MergeState.CLEAN, (), (), NOW),),
+        (),
+        REPO, "fenix", NOW, renderer,
+    )
+    first = dispatch(phase(value), (), *args)
+    assert [(action.kind, action.to, action.bead_ids) for action in first.actions] == [
+        ("assign", "quality-mgr", ("atm-bh-6.group-qa",)),
+    ]
+    live = Task("atm-bh-6.group-qa", "quality-mgr", "assigned", 1, NOW, NOW, "dispatched")
+    assert dispatch(phase(value), (live,), *args).actions == ()
 
 
 def test_each_hold_is_flat_and_does_not_assign() -> None:

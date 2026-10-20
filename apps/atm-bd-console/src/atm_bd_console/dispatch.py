@@ -56,7 +56,7 @@ def candidates(phase: Phase, tasks: tuple[Task, ...]) -> tuple[Step, ...]:
     tasked = {task.id for task in tasks if task.state in ("assigned", "active")}
     return tuple(
         step for step in phase.steps
-        if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN and not step.assignee
+        if step.kind in ("sanity", "qa") and step.status == SprintState.OPEN
         and not step.anchor and not step.quick_fix and step.bead_id not in tasked
     )
 
@@ -163,7 +163,7 @@ def dispatch(
         if isinstance(rendered, Err):
             errors.append(rendered.error)
             continue
-        recipient = repo.sanity_member if step.kind == "sanity" else repo.qa_member
+        recipient = step.assignee or (repo.sanity_member if step.kind == "sanity" else repo.qa_member)
         actions.append(Action(now, "assign", recipient, (step.bead_id,), f"dispatch {step.bead_id}", rendered.value))
 
     return DispatchOutcome(tuple(actions), tuple(held), tuple(errors))
