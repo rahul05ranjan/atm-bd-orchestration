@@ -73,6 +73,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/bead_formulas.py
     - skills/atm-bd-orchestration/scripts/bv-analyze
     - skills/atm-bd-orchestration/scripts/check-review-completion.py
+    - skills/atm-bd-orchestration/scripts/command_timeout.py
     - skills/atm-bd-orchestration/scripts/fix-round-scope
     - skills/atm-bd-orchestration/scripts/jev_client.py
     - skills/atm-bd-orchestration/scripts/post_mortem_context.py
