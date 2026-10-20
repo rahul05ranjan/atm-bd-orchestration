@@ -10,8 +10,9 @@ from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, QaStat
 from atm_bd_console.icons import (
     AGENT_ICONS,
     CI_ICONS,
+    JEV_VERDICT_ICONS,
+    LLM_VERDICT_ICONS,
     PR_ICONS,
-    SANITY_VERDICT_ICONS,
     SPRINT_ICONS,
     icon,
     icon_for,
@@ -21,9 +22,12 @@ from atm_bd_console.types import AgentView, Member
 
 
 def test_sanity_verdict_glyphs() -> None:
-    assert SANITY_VERDICT_ICONS == {
-        "PASS": ("\U000f029b", "#2EA043"),
-        "FAIL": ("\U000f029b", "#F85149"),
+    assert LLM_VERDICT_ICONS == {
+        "PASS": ("\U000f029b", "#2EA043"), "FAIL": ("\U000f029b", "#F85149"),
+        "API_FAILURE": ("\U000f0026", "#D29922"),
+    }
+    assert JEV_VERDICT_ICONS == {
+        "PASS": ("\U000f01a6", "#2EA043"), "FAIL": ("\U000f01a6", "#F85149"),
         "API_FAILURE": ("\U000f0026", "#D29922"),
     }
 
@@ -129,7 +133,8 @@ def test_enum_icon_tables_are_complete_and_exact():
         AgentIcon.OPUS: ("\U000f06c4", "#FF8C66"), AgentIcon.FABLE: ("\U000f0717", "#FF9F80"),
         AgentIcon.ASTRA: ("\U000f0674", "#FFE066"), AgentIcon.TERRA: ("\U000f01e7", "#2DE057"),
         AgentIcon.LUNA: ("\U000f0f65", "#FFE066"), AgentIcon.SOL: ("\U000f05a8", "#FFA60D"),
-        AgentIcon.OTHER: ("·", None), AgentIcon.SEVERITY: ("\U000f01a6", "#E551BA"),
+        AgentIcon.OTHER: ("·", None), AgentIcon.SANITY: ("\U000f01a6", "#E551BA"),
+        AgentIcon.SANITY_PASS: ("\U000f01a6", "#2EA043"), AgentIcon.SANITY_FAIL: ("\U000f01a6", "#F85149"),
         AgentIcon.QA_RUNNING: ("\U000f029b", "#4A5AF8"), AgentIcon.QA_PASS: ("\U000f029b", "#2EA043"),
         AgentIcon.QA_FAIL: ("\U000f029b", "#F85149"),
     }
