@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 
-from task_close_world import EXAMPLES, SCRIPTS, World, hook
+from task_close_world import DERIVED, EXAMPLES, SCRIPTS, World, hook
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
@@ -97,7 +97,8 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
         if argv[0] == "bd":
             assert argv[-2:] == ["--actor", "caller"]
         if "--vars" in argv:
-            assert argv[argv.index("--vars") + 1] == str(world.path)
+            # The hook sends the completion file it wrote, never the lead's dispatch file.
+            assert Path(argv[argv.index("--vars") + 1]).name == "completion-vars.json"
     for argv, kwargs in world.calls:
         if argv[:3] == ["atm", "task", "assign"]:
             assert kwargs["env"]["ATM_TEAM"] == "test-team"
@@ -105,7 +106,7 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
             assert kwargs["env"].get("ATM_TEAM") == before.get("ATM_TEAM")
 
 
-def test_preview_and_native_send_use_identical_unmodified_vars(world, monkeypatch):
+def test_preview_and_native_send_use_identical_completion_vars(world, monkeypatch):
     world.values.pop("carry_forward")
     original_render = hook.sc_render.render
     inputs = []
@@ -116,8 +117,8 @@ def test_preview_and_native_send_use_identical_unmodified_vars(world, monkeypatc
 
     monkeypatch.setattr(hook.sc_render, "render", render)
     assert "ok" in world.run()
-    assert inputs and all(values == world.values for values in inputs)
-    assert all(message["values"] == world.values for message in world.messages)
+    assert inputs and world.messages
+    assert all(message["values"] == inputs[-1] for message in world.messages)
 
 
 @pytest.mark.parametrize("change,code", [({"commit": ""}, "VARS.EMPTY"), ({"extra": 1}, "VARS.UNKNOWN"),
@@ -169,9 +170,11 @@ def test_argument_errors_use_typed_json(argv):
 def test_every_role_required_field_is_validated_before_commands(world, role):
     original = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
     original.update(primary_checkout=str(world.root), worktree_path=str(world.root))
-    required = hook.header(hook.TEMPLATES / "task-close-vars.j2")["required_variables_by_role"][role]
-    assert set(original) == set(required)
-    for field in original:
+    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    required = contract["required_variables_by_role"][role]
+    results = contract.get("result_variables_by_role", {}).get(role, [])
+    assert set(original) >= set(required) | set(results)
+    for field in [*required, *results]:
         world.values = dict(original)
         del world.values[field]
         assert world.run(role)["err"]["code"] == "VARS.MISSING", (role, field)
@@ -343,11 +346,14 @@ def test_not_reproducible_assigns_runtime_top_without_rewriting_input(world):
         del world.values[field]
     result = world.run("fix", outcome="not_reproducible")
     assert "ok" in result, result
-    assert json.loads(world.path.read_text()) == world.values
+    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    results = set(contract["result_variables_by_role"]["fix"])
+    assert json.loads(world.path.read_text()) == {name: value for name, value in world.values.items()
+                                                 if name not in results and name not in DERIVED}
     assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
     assert assignment["values"]["branch"] == "integrate/phase-bj"
     assert assignment["values"]["commit"] == "b" * 40
-    assert set(assignment["values"]) == set(world.values) | {"branch", "commit"}
+    assert set(assignment["values"]) == set(world.values) | {"branch", "commit", *contract["derived_variables"]}
     assert not any(argv[0] == "gh" for argv, _kwargs in world.calls)
 
 
@@ -906,3 +912,66 @@ def test_d1_malformed_atm_events_name_producer_and_field(world, payload, field):
     assert producer in error["message"] and field in error["message"]
     assert producer in error["fix"] and field in error["fix"]
     assert world.writes == []
+
+
+def close_from_files(world, role, dispatch, result=None):
+    """Run the hook exactly as the lead and fixer do: the dispatch file, then the optional result file."""
+    world.path.write_text(json.dumps(dispatch))
+    argv = ["--role", role, "--vars", str(world.path)]
+    if result is not None:
+        world.result_path.write_text(json.dumps(result))
+        argv += ["--result", str(world.result_path)]
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        status = hook.main(argv, runner=world, clock=lambda: 42)
+    output = json.loads(stdout.getvalue())
+    assert status == int("err" in output)
+    return output
+
+
+def test_fix_close_from_dispatch_and_result_files_derives_commit_and_pr(world):
+    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    example = json.loads((EXAMPLES / "task-close-vars-fix.json").read_text())
+    example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    dispatch = {name: example[name] for name in contract["required_variables_by_role"]["fix"]}
+    dispatch.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    result = {name: example[name] for name in contract["result_variables_by_role"]["fix"]}
+    output = close_from_files(world, "fix", dispatch, result)
+    assert "ok" in output, output
+    assert output["ok"]["commit"] == example["commit"]
+    assert output["ok"]["pr_number"] == str(example["pr_number"])
+    assert not set(dispatch) & set(contract["derived_variables"])
+
+
+@pytest.mark.parametrize("role", ["dev", "fix"])
+def test_fixer_fields_in_the_dispatch_file_are_refused_before_commands(world, role):
+    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    example = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    dispatch = {name: example[name] for name in contract["required_variables_by_role"][role]}
+    dispatch.update(primary_checkout=str(world.root), worktree_path=str(world.root), outcome="fixed")
+    result = {name: example[name] for name in contract["result_variables_by_role"][role]}
+    output = close_from_files(world, role, dispatch, result)
+    assert output["err"]["code"] == "VARS.INVALID" and "outcome" in output["err"]["message"]
+    assert world.calls == []
+
+
+def test_result_file_rejects_fields_that_are_not_its_role_fields(world):
+    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    example = json.loads((EXAMPLES / "task-close-vars-dev.json").read_text())
+    example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    dispatch = {name: example[name] for name in contract["required_variables_by_role"]["dev"]}
+    dispatch.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    result = {name: example[name] for name in contract["result_variables_by_role"]["dev"]}
+    result["resolution_md"] = "fix-only field"
+    output = close_from_files(world, "dev", dispatch, result)
+    assert output["err"]["code"] == "VARS.UNKNOWN" and "resolution_md" in output["err"]["message"]
+    assert world.calls == []
+
+
+def test_dev_and_fix_close_require_a_result_file(world):
+    example = json.loads((EXAMPLES / "task-close-vars-fix.json").read_text())
+    example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
+    output = close_from_files(world, "fix", example, None)
+    assert output["err"]["code"] == "ARGS.INVALID"
+    assert world.calls == []

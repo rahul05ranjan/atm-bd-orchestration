@@ -57,97 +57,38 @@ required_variables_by_role:
     - branch
     - checked_bead
     - checked_title
-    - commit
-    - deliverables_complete
-    - deliverables_md
-    - deliverables_total
     - dev_task_id
-    - evidence
-    - findings_blocking
-    - findings_ceremony
-    - findings_count
-    - findings_important
-    - findings_md
-    - findings_minor
-    - generated_at
-    - layer
     - lint_command
-    - lint_md
     - max_sanity_rounds
-    - outcome
     - phase
-    - phase_feature
-    - policy_path
-    - pr_number
     - pr_target
-    - pr_url
     - primary_checkout
     - qa_bead
     - qa_task_id
-    - rebased_onto
-    - reviewers_md
-    - reviewers_round1
-    - round
     - sanity_bead
     - sanity_task_id
     - sprint
-    - stack
     - stack_bead
-    - stack_view
-    - stacked
     - task_id
-    - undone
-    - validation_md
-    - verdict
     - worktree_path
   fix:
     - base
     - branch
     - checked_bead
     - checked_title
-    - commit
-    - deliverables_complete
-    - deliverables_md
-    - deliverables_total
     - dev_task_id
-    - evidence
-    - findings_blocking
-    - findings_ceremony
-    - findings_count
-    - findings_important
-    - findings_md
-    - findings_minor
-    - generated_at
-    - layer
     - lint_command
-    - lint_md
     - max_sanity_rounds
-    - outcome
     - phase
-    - phase_feature
-    - policy_path
-    - pr_number
     - pr_target
-    - pr_url
     - primary_checkout
     - qa_bead
     - qa_task_id
-    - rebased_onto
-    - resolution_md
-    - reviewers_md
-    - reviewers_round1
-    - round
     - sanity_bead
     - sanity_task_id
     - sprint
-    - stack
     - stack_bead
-    - stack_view
-    - stacked
     - task_id
-    - undone
-    - validation_md
-    - verdict
     - worktree_path
   sanity:
     - base
@@ -221,6 +162,31 @@ required_variables_by_role:
     - undone
     - verdict
     - worktree_path
+# The hook derives these for dev and fix at close; the lead's dispatch file never carries them.
+derived_variables:
+  - commit
+  - generated_at
+  - pr_number
+  - pr_url
+  - rebased_onto
+result_variables_by_role:
+  dev:
+    - deliverables_complete
+    - deliverables_md
+    - deliverables_total
+    - evidence
+    - outcome
+    - stack_view
+    - validation_md
+  fix:
+    - deliverables_complete
+    - deliverables_md
+    - deliverables_total
+    - evidence
+    - outcome
+    - resolution_md
+    - stack_view
+    - validation_md
 defaults:
   base: ""
   checked_title: ""
