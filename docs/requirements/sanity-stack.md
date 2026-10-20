@@ -16,7 +16,7 @@ through; when they always work, dev-sanity runs them itself.
 
 ### Input (fenced JSON from dev-sanity)
 
-3. `checked_bead`, `branch`, `pr_number`, `commit`, `stack_bead`, `budget` (`full` or `lean`) and `timeout_s` are carried in the dev-sanity assignment's close context. The close hook copies explicit values and supplies `full` and 60 seconds only when an override is absent. GraphQL out is detected and forces `lean`.
+3. `checked_bead`, `branch`, `pr_number`, `commit`, `stack_bead` and `budget` (`full` or `lean`) are carried in the dev-sanity assignment's close context. The close hook copies explicit values and supplies `full` only when an override is absent. GraphQL out is detected and forces `lean`.
 
 ### Procedure (one next-top layer per spawn)
 
