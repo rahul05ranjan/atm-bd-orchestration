@@ -1,6 +1,9 @@
 # atm-bd-orchestration
 
-Bead-driven phase orchestration for ATM agent teams, as one installable package:
+Bead-driven phase orchestration for ATM agent teams, as one installable package.
+For a plain-language walkthrough, see
+[Getting going with atm-bd](../../docs/getting-started.md).
+
 
 | Skill / agent | What it is |
 | --- | --- |

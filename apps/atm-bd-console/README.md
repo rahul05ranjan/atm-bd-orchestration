@@ -4,6 +4,9 @@
 Beads orchestration. It also bundles the orchestration skills for installation
 into a repository.
 
+New to the workflow? Start with
+[Getting going with atm-bd](../../docs/getting-started.md).
+
 ## Development validation
 
 From the repository root, `just lint` runs the console's lint and type gates.
