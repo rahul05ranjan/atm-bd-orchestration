@@ -449,7 +449,7 @@ class FixRoundReviewerScopeTests(unittest.TestCase):
 
     def test_every_assignment_taking_carried_ids_carries_the_scope_lock(self):
         import json
-        for name in ("req-qa", "arch-qa", "flaky-test-qa"):
+        for name in ("req-qa", "arch-qa", "flaky-test-qa", "schema-reviewer"):
             base = _example(f"{name}-assignment-vars.json")
             with self.subTest(reviewer=name):
                 free = _render(f"{name}-assignment.json.j2", base)
