@@ -104,3 +104,47 @@ class FoundOnLayerGuardTests(unittest.TestCase):
             groups, result, _ = self.targets(layer)
             self.assertNotIsInstance(result[0], groups.TargetError)
             self.assertEqual(result[0]["compose"]["has_found_on_layer"], expected)
+
+
+class PhaseEndFindingTests(unittest.TestCase):
+    def targets(self, **extra):
+        loader = importlib.machinery.SourceFileLoader("bead_groups_phase_end", str(SCRIPTS / "bead-groups"))
+        groups = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(groups)
+        runner = object.__new__(groups.Run)
+        runner.option = None
+        runner.config = {"worktree_base": "/worktrees"}
+        runner.bd = Mock()
+        runner.bd.show.return_value = None
+        stack = {"id": "t-phase-d.stack", "metadata": {"trunk": "integrate/phase-d", "stack_number": None, "layers": []}}
+        epic = {"status": "open", "metadata": {"integration_branch": "integrate/phase-d"}}
+        runner.show = lambda bead: stack if bead == "t-phase-d.stack" else epic
+        runner.sidecar = lambda _: {"default_option": "C", "options": {"C": {}}, "ref": "{vars[finding_ref]}-r{vars[round]}"}
+        row = {"ref": "pe-f1", "severity": "blocking", "reviewer": "review", "title": "issue", "remedy": "fix",
+               "requirements": ["REQ-1"], "adrs": ["NONE"], **extra}
+        with tempfile.TemporaryDirectory() as directory:
+            runner.repo = Path(directory)
+            findings = runner.repo / "findings.json"
+            findings.write_text(json.dumps({"sprint": "t-phase-d", "round": 1, "filed_by": "review",
+                                            "found_at_commit": "a" * 40, "findings": [row]}))
+            with patch.object(groups.sprint_index_common, "load_phase_config", return_value={"root": "t-phase-d"}):
+                return groups, runner.finding_targets(findings)
+
+    def test_phase_epic_finding_pours_with_derived_facts(self):
+        groups, result = self.targets(difficulty="hard")
+        self.assertNotIsInstance(result[0], groups.TargetError)
+        compose = result[0]["compose"]
+        self.assertEqual((compose["phase"], compose["sprint"], compose["stack"], compose["difficulty"]),
+                         ("d", "t-phase-d", "stack", "hard"))
+        self.assertEqual(compose["pr_target"], "integrate/phase-d")
+        self.assertEqual(compose["branch"], "fix/t-phase-d-pe-f1")
+
+    def test_phase_epic_finding_without_difficulty_is_refused(self):
+        groups, result = self.targets()
+        self.assertIsInstance(result[0], groups.TargetError)
+        self.assertEqual(result[0].code, "BEAD_GROUPS_FINDINGS_INVALID")
+        self.assertIn("difficulty", str(result[0]))
+
+    def test_found_on_layer_guard_still_applies_to_phase_end(self):
+        groups, result = self.targets(difficulty="hard", found_on_layer="main (abc)")
+        self.assertEqual(result[0].code, "BEAD_GROUPS_FOUND_ON_LAYER_NOT_INTEGER")
