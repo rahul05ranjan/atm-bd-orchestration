@@ -27,7 +27,7 @@ def test_enum_members_cover_the_contract():
         "none", "running", "pass", "fail_macos", "fail_windows", "fail_linux", "fail_bug", "unknown",
     }
     assert {member.value for member in PrState} == {"none", "open", "draft", "merged", "closed", "conflict", "unknown"}
-    assert {member.value for member in MergeState} == {"clean", "conflict", "error", "unknown"}
+    assert {member.value for member in MergeState} == {"clean", "conflict", "head not pushed", "base deleted", "error", "unknown"}
 
 
 def test_icon_tables_cover_each_enum_without_cross_type_collisions():

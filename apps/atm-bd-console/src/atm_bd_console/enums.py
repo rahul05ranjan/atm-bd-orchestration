@@ -63,6 +63,8 @@ class PrState(StrEnum):
 class MergeState(StrEnum):
     CLEAN = "clean"
     CONFLICT = "conflict"
+    HEAD_NOT_PUSHED = "head not pushed"
+    BASE_DELETED = "base deleted"
     ERROR = "error"
     UNKNOWN = "unknown"
 

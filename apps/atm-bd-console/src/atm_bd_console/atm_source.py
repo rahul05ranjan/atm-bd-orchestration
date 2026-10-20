@@ -17,6 +17,8 @@ from .types import DispatchSpec, Member, Task
 TIMEOUT_S = 20
 TASK_KEYS = frozenset({"task_id", "assignee", "state", "assigned_at", "updated_at", "description"})
 TASK_STATES = frozenset({"assigned", "active"})
+# `atm task list` shows open tasks only; a closed task is seen in its history, whose last event moves it to this state.
+CLOSED_TASK_STATE = "complete"
 MEMBER_STATES = frozenset({"active", "idle", "offline", "blocked"})
 
 
@@ -108,6 +110,26 @@ def tasks(team: str, as_: str, *, timeout_s: int | None = None) -> Result[tuple[
                         if assigned is not None and updated is not None))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         return Err(ParseFailed("parse_failed", "atm task list", str(error), fix))
+
+
+def task_closed(task_id: str, team: str, as_: str, *, timeout_s: int | None = None) -> Result[bool]:
+    """Whether the ATM task `task_id` exists and its last state transition closed it. An id with no task has an empty
+    history and is not closed."""
+    argv = ["atm", "task", "events", task_id, "--all", "--json", "--team", team, "--as", as_]
+    result = _run(argv, as_, timeout_s=timeout_s, team=team)
+    if isinstance(result, Err):
+        return result
+    fix = f"rerun `{' '.join(argv)}` and check it prints a JSON object with an events list"
+    try:
+        body = json.loads(result.value)
+        events = body.get("events") if isinstance(body, dict) else None
+        if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+            return Err(ParseFailed("parse_failed", "atm task events", "atm task events must contain an events list of objects", fix))
+        # Reminder and nudge events carry no to_state; the task's state is the last transition's to_state.
+        states = [event["to_state"] for event in events if event.get("to_state") is not None]
+        return Ok(bool(states) and states[-1] == CLOSED_TASK_STATE)
+    except json.JSONDecodeError as error:
+        return Err(ParseFailed("parse_failed", "atm task events", str(error), fix))
 
 
 def send(to: str, text: str, as_: str, team: str, *, timeout_s: int | None = None) -> Result[None]:

@@ -241,6 +241,8 @@ class Inputs:
     prs: Result[tuple[PullRequest, ...]] | None
     gh: GhStatus
     task_beads: Result[tuple[Bead, ...]]
+    # Ids of would-be dispatch candidates whose ATM task history ends closed (`atm task events`); see candidates().
+    closed_tasks: Result[tuple[str, ...]]
 
 
 @dataclass(frozen=True)

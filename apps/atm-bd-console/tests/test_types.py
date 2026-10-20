@@ -16,7 +16,8 @@ PACKAGE = Path(__file__).resolve().parents[1] / "src" / "atm_bd_console"
 
 # Field names in declaration order, from the bh-1 design contract plus its later contract layers:
 # Sprint.stack and Inputs.repo/interval_s (d7ec505), DispatchContext.stack removed (Sprint.stack is its one owner),
-# Inputs.task_beads (bh-6 f4: separates a task with no bead from one whose bead is outside the phase).
+# Inputs.task_beads (bh-6 f4: separates a task with no bead from one whose bead is outside the phase),
+# Inputs.closed_tasks (#491: candidates whose ATM task is closed, read with `atm task events`).
 FIELDS: dict[str, str] = {
     "Ok": "value",
     "Err": "error",
@@ -46,7 +47,7 @@ FIELDS: dict[str, str] = {
                   "reviewers_round1 plans_dir",
     "Config": "phase lead team github interval_s dry_run no_fetch repo_root state_dir notification_sender github_poll_interval_s github_quota_threshold code_root github_repo",
     "DispatchContext": "step sprint phase_id phase_title lead commit base worktree_path pr layer_prs repo",
-    "Inputs": "now lead repo interval_s phase members tasks worktrees remotes merges prs gh task_beads",
+    "Inputs": "now lead repo interval_s phase members tasks worktrees remotes merges prs gh task_beads closed_tasks",
     "Row": "task_id state kind difficulty tag marker age_s description",
     "AgentView": "name status status_since depth rows agent_type model harness qa_state",
     "SectionRow": "bead_id age_s reason pr",
@@ -153,7 +154,7 @@ def test_tick_context_contract_field_names_are_pinned() -> None:
     )
     assert tuple(field.name for field in fields(types.Inputs)) == (
         "now", "lead", "repo", "interval_s", "phase", "members", "tasks", "worktrees", "remotes", "merges",
-        "prs", "gh", "task_beads",
+        "prs", "gh", "task_beads", "closed_tasks",
     )
 
 

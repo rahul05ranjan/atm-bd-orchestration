@@ -79,7 +79,7 @@ def test_union_failure_keeps_the_inner_path() -> None:
     sprint = Sprint("bh-6", "tick rules", 6, "sprint/bh-6", "integrate/phase-bh", "phase-bh", (), False, 0)
     inputs = Inputs(
         NOW, "fenix", repo, 60, Err(NotFound("not_found", "phase", "load it")), Ok(()), Ok(()), Ok(()),
-        None, None, None, GhStatus("off", None, None, None, False), Ok(()),
+        None, None, None, GhStatus("off", None, None, None, False), Ok(()), Ok(()),
     )
     assert from_json(Sprint, to_json(sprint)) == Ok(sprint)
     # members is Result[tuple[Member, ...]]: the Ok alternative fails inside its value.
