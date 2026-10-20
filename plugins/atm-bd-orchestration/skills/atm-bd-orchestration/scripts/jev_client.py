@@ -208,6 +208,7 @@ CLIENT_MESSAGES = re.compile("|".join([
     r"Assignment lacks deliverable text, worktree, commits or file lists",
     r"Committed evidence unreadable at the pinned commits",
     r"Assignment external_evidence entry is not a bead_notes, pr_body or pr_comment reference",
+    r"External evidence reference is invalid",
     r"External evidence unreadable: \S+ \S+",
     r"Context entry .+ names lines outside its file at the pinned commit",
 ]))

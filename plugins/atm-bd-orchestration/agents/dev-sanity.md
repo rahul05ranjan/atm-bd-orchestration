@@ -99,8 +99,8 @@ sanity-stack. One handoff at a time avoids concurrent stack writes but never
 blocks another sanity close. With one handoff it may run inline:
 sanity-stack-link --input <stack-input.json>.
 For not_reproducible fixes, skip the stack handoff. The script sends the lead
-notice for `stack_failed`, `lock_timeout` and `rebase_required`; the sanity
-task remains closed for each stack outcome. Do not send a duplicate notice.
+notice for `stack_failed`, `lock_timeout` and `rebase_required`; leave the
+sanity task closed for each stack outcome. Do not send a duplicate notice.
 
 On `stacked`, the pinned layer is linked or an idempotent replay, including
 a matching layer already below the top. On stack_failed, lock_timeout or
