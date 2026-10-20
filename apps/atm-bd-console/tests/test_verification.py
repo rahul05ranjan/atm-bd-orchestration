@@ -111,11 +111,20 @@ def test_failed_merge_overwrites_cached_clean_and_recovery_resumes(runtime, repo
 
     assert assigned == []
     assert "merge verification unavailable" in snapshot.problems[0].text
-    assert snapshot.errors
+    assert not any(problem.key.startswith("merge_error:") for problem in snapshot.problems) is (failure == "missing")
     cached = store.load_merges().value.merges["clean"]
-    assert cached.state == MergeState.ERROR and cached.messages
     assert any(action == "hold" and "unavailable" in fields["reason"] for action, fields in events)
-    assert any(fields.get("source") == "git.merge" and fields.get("error") == asdict(snapshot.errors[0]) for _, fields in events)
+    if failure == "missing":
+        # A base that is gone from origin is a typed merge state: it holds the assignment and names the ref,
+        # but it is neither an error nor a "merge check failed" announcement.
+        assert snapshot.errors == ()
+        assert cached.state == MergeState.BASE_DELETED and cached.messages == ("origin/main not on origin",)
+        assert "origin/main not on origin" in snapshot.problems[0].text
+        assert any(fields.get("source") == "git.merge" and fields.get("outcome") == "ok" for _, fields in events)
+    else:
+        assert snapshot.errors
+        assert cached.state == MergeState.ERROR and cached.messages
+        assert any(fields.get("source") == "git.merge" and fields.get("error") == asdict(snapshot.errors[0]) for _, fields in events)
     monkeypatch.setattr(git_source, "_run", original_run)
     assert git_source.fetch(repo) == Ok(None)
 

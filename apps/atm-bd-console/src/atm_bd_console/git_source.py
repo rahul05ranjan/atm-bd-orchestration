@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import command
 from .enums import MergeState
-from .result import Err, NotFound, Ok, Result
+from .result import Err, Ok, Result
 from .types import Merge, RemoteRef, Worktree
 
 # git fetch talks to the remote; local reads get the default timeout.
@@ -72,12 +72,16 @@ def _conflict_output(stdout: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 
 def merge(repo: str | Path, branch: str, target: str) -> Result[Merge]:
-    for ref in (f"origin/{target}", f"origin/{branch}"):
+    """Merge ``origin/branch`` into ``origin/target`` without touching the working tree.
+
+    A ref missing on origin is a typed merge state (the branch is not pushed, or its base is gone), not a failed
+    check; ``Err`` is reserved for git itself failing."""
+    for ref, missing in ((f"origin/{branch}", MergeState.HEAD_NOT_PUSHED), (f"origin/{target}", MergeState.BASE_DELETED)):
         found = _run(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", ok_codes=(0, 1))
         if isinstance(found, Err):
             return found
         if found.value.code == 1:
-            return Err(NotFound("not_found", ref, "fetch the named branch and retry"))
+            return Ok(Merge(branch, target, missing, (), (f"{ref} not on origin",), datetime.now(UTC)))
     result = _run(repo, "merge-tree", "--write-tree", "--name-only", "-z", f"origin/{target}", f"origin/{branch}",
                   ok_codes=(0, 1))
     if isinstance(result, Err):

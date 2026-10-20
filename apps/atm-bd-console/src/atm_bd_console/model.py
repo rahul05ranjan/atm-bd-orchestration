@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import Literal
 
 from rich.cells import cell_len
 
@@ -464,7 +465,7 @@ def _problems(
     if phase is None:
         return tuple(
             problem for problem in state.problems
-            if problem.key.startswith(("missing_pr:", "top_ci:", "conflict:"))
+            if problem.key.startswith(("missing_pr:", "top_ci:", "conflict:", "merge_error:"))
         )
     by_branch = _branch_owners(phase)
     by_id = {step.bead_id: step for step in phase.steps}
@@ -526,12 +527,23 @@ def _problems(
         ))
     current_keys = {problem.key for problem in problems}
     refreshed_merges = {merge.branch for merge in merges if merge.state != MergeState.ERROR}
+    # A merge check only runs on its cycle; between cycles its failure is still current until the pair is
+    # rechecked with a non-error result, its PR ends, or the phase no longer holds the pair.
+    phase_pairs = {
+        (step.branch, target) for step in phase.steps
+        if step.branch and (target := _target(step, phase, inputs.repo.bead_prefix))
+    }
+    refreshed_pairs = {(merge.branch, merge.target) for merge in merges if merge.state != MergeState.ERROR}
+    kept_merge_errors = {
+        f"merge_error:{branch}:{target}" for branch, target in phase_pairs - refreshed_pairs - ended_pairs
+    }
     for previous in state.problems:
         if previous.key in current_keys:
             continue
         if (
             previous.key.startswith(("missing_pr:", "top_ci:")) and not fresh_github
             or previous.key.startswith("conflict:") and previous.key.removeprefix("conflict:") not in refreshed_merges
+            or previous.key in kept_merge_errors
         ):
             problems.append(previous)
     return tuple(problems)
@@ -549,7 +561,6 @@ def _reconcile_problems(
         for problem in proposed
     )
     new = tuple(problem for problem in problems if problem.key not in previous or previous[problem.key].to != problem.to)
-    actions = [Action(now, "send", problem.to, (problem.bead_id,) if problem.bead_id else (), problem.text, None) for problem in new]
     by_recipient: dict[str, list[Problem]] = {}
     for problem in problems:
         by_recipient.setdefault(problem.to, []).append(problem)
@@ -557,15 +568,28 @@ def _reconcile_problems(
     for problem in new:
         batch_due.setdefault(problem.to, now + CYCLE)
     last_batch = state.last_batch
+    batches: list[Action] = []
     for recipient, due_at in tuple(batch_due.items()):
         if now >= due_at:
-            current = by_recipient[recipient]
-            bead_ids = tuple(problem.bead_id for problem in current if problem.bead_id)
-            text = "\n".join(problem.text for problem in current)
-            actions.append(Action(now, "batch", recipient, bead_ids, text, None))
+            batches.append(_notice(now, "batch", recipient, by_recipient[recipient]))
             while due_at <= now:
                 due_at += CYCLE
             batch_due[recipient] = due_at
             last_batch = now
+    # One message per recipient per tick: every new problem goes in one combined send, and a recipient
+    # whose periodic batch (which lists every current problem) goes out this tick gets only the batch.
+    batched = {action.to for action in batches}
+    new_by_recipient: dict[str, list[Problem]] = {}
+    for problem in new:
+        if problem.to not in batched:
+            new_by_recipient.setdefault(problem.to, []).append(problem)
+    actions = [_notice(now, "send", recipient, current) for recipient, current in new_by_recipient.items()]
+    actions.extend(batches)
     first_send = (state.cycle_first_send or min(problem.first_seen for problem in problems)) if problems else None
     return problems, tuple(actions), batch_due, first_send, last_batch
+
+
+def _notice(now: datetime, kind: Literal["send", "batch"], recipient: str, problems: list[Problem]) -> Action:
+    """One message to ``recipient`` listing ``problems``, one per line, naming each distinct bead once."""
+    bead_ids = tuple(dict.fromkeys(problem.bead_id for problem in problems if problem.bead_id))
+    return Action(now, kind, recipient, bead_ids, "\n".join(problem.text for problem in problems), None)

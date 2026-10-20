@@ -359,6 +359,79 @@ def test_per_recipient_problem_batches_survive_state_round_trip() -> None:
     assert len(state.sent) == 5
 
 
+def test_new_problems_are_one_combined_send_per_recipient_per_tick() -> None:
+    def update(current: State, proposed: tuple[Problem, ...], at: datetime):
+        problems, actions, batch_due, first_send, last_batch = _reconcile_problems(proposed, current, at, False)
+        return replace(current, problems=problems, batch_due=batch_due, cycle_first_send=first_send,
+                       last_batch=last_batch), actions
+
+    lead = tuple(Problem(f"merge_error:b{index}:base", None, "fenix", f"merge check failed for b{index} against base", NOW)
+                 for index in range(3))
+    owned = Problem("hold:qa", "qa", "fenix", "no worktree for qa", NOW)
+    assignee = Problem("conflict:topic", "dev", "solar", "merge conflict with base: a.py", NOW)
+
+    state, actions = update(STATE, (*lead, owned, assignee), NOW)
+    assert [(action.kind, action.to, action.bead_ids) for action in actions] == [
+        ("send", "fenix", ("qa",)), ("send", "solar", ("dev",)),
+    ]
+    assert actions[0].text == "\n".join(problem.text for problem in (*lead, owned))
+    assert actions[1].text == assignee.text
+
+    # Unchanged problems are never re-sent, and nothing goes out between batches.
+    state, actions = update(state, (*lead, owned, assignee), NOW + timedelta(minutes=1))
+    assert actions == ()
+
+    # A recipient whose batch is due this tick gets only the batch, which already lists the new problem.
+    late = Problem("merge_error:b9:base", None, "fenix", "merge check failed for b9 against base", NOW + timedelta(minutes=10))
+    state, actions = update(state, (*lead, owned, assignee, late), NOW + timedelta(minutes=10))
+    assert [(action.kind, action.to) for action in actions] == [("batch", "fenix"), ("batch", "solar")]
+    assert actions[0].text == "\n".join(problem.text for problem in (*lead, owned, late))
+    assert all(problem.first_seen == NOW for problem in state.problems if problem.key != late.key)
+
+
+def test_merge_check_failure_is_announced_once_until_rechecked() -> None:
+    """A merge check runs only on its cycle; its failure stays one problem across the ticks in between."""
+    owner = step("dev", "atm-bh-1", branch="topic", target="base", assignee="solar")
+    failed = Merge("topic", "base", MergeState.ERROR, (), ("command_failed: git merge-tree (exit 128): boom",), NOW)
+    checked = inputs(phase(owner), merges=(Ok(failed),))
+    unchecked = inputs(phase(owner), merges=())
+
+    snapshot, actions, state = tick(checked, STATE, NOW, render)
+    assert [problem.key for problem in snapshot.problems] == ["merge_error:topic:base"]
+    assert [(action.kind, action.to, action.text) for action in actions] == [
+        ("send", "fenix", "merge check failed for topic against base"),
+    ]
+    for minute in (1, 2):
+        snapshot, actions, state = tick(unchecked, state, NOW + timedelta(minutes=minute), render)
+        assert [problem.key for problem in snapshot.problems] == ["merge_error:topic:base"]
+        assert actions == ()
+    snapshot, actions, state = tick(checked, state, NOW + timedelta(minutes=3), render)
+    assert actions == () and snapshot.problems[0].first_seen == NOW
+    snapshot, actions, state = tick(checked, state, NOW + timedelta(minutes=10), render)
+    assert [(action.kind, action.to, action.text) for action in actions] == [
+        ("batch", "fenix", "merge check failed for topic against base"),
+    ]
+    snapshot, actions, state = tick(unchecked, state, NOW + timedelta(minutes=11), render)
+    assert [problem.key for problem in snapshot.problems] == ["merge_error:topic:base"] and actions == ()
+
+    clean = replace(checked, merges=(Ok(replace(failed, state=MergeState.CLEAN, messages=())),))
+    snapshot, actions, cleared = tick(clean, state, NOW + timedelta(minutes=12), render)
+    assert snapshot.problems == () and actions == () and cleared.problems == ()
+
+    landed = PullRequest(7, "https://example.test/pull/7", "topic", "base", "abc", CiState.PASS, (), state=PrState.MERGED)
+    snapshot, actions, _ = tick(replace(unchecked, prs=Ok((landed,))), state, NOW + timedelta(minutes=12), render)
+    assert snapshot.problems == () and actions == ()
+
+
+@pytest.mark.parametrize("missing", (MergeState.HEAD_NOT_PUSHED, MergeState.BASE_DELETED))
+def test_missing_remote_ref_is_not_a_merge_check_failure(missing: MergeState) -> None:
+    owner = step("dev", "atm-bh-1", branch="topic", target="base", assignee="solar")
+    unpushed = Merge("topic", "base", missing, (), ("origin/topic not on origin",), NOW)
+    snapshot, actions, state = tick(inputs(phase(owner), merges=(Ok(unpushed),)), STATE, NOW, render)
+    assert snapshot.problems == () and actions == () and state.problems == ()
+    assert [row.merge for row in snapshot.prs] == []
+
+
 def test_pr_rows_are_layer_ordered_and_only_top_ci_is_a_problem() -> None:
     steps = tuple(step(f"dev-{number}", f"atm-bh-{number}", branch=f"branch-{number}", layer=number)
                   for number in (1, 2, 3))
@@ -495,7 +568,8 @@ def test_shared_branch_reports_one_problem_per_kind_to_work_owner() -> None:
         snapshot, actions, _ = tick(supplied, STATE, NOW, render)
         assert [problem.key for problem in snapshot.problems] == ["conflict:shared", "missing_pr:shared"]
         assert [(problem.bead_id, problem.to) for problem in snapshot.problems] == [("dev", "solar")] * 2
-        assert [(action.kind, action.to) for action in actions] == [("send", "solar")] * 2
+        assert [(action.kind, action.to, action.bead_ids) for action in actions] == [("send", "solar", ("dev",))]
+        assert actions[0].text == "merge conflict with base: model.py\npushed branch shared has no open PR"
 
 
 def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
@@ -567,7 +641,8 @@ def test_hold_is_shown_and_sent_once_then_batched() -> None:
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
     assert snapshot.sections[0].label == "Held"
     assert snapshot.sections[0].rows[0].bead_id == "qa"
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar"), ("send", "solar")]
+    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert actions[0].text == "\n".join(problem.text for problem in snapshot.problems)
     _, actions, state = tick(supplied, state, NOW + timedelta(minutes=5), render)
     assert actions == ()
     _, actions, _ = tick(supplied, state, NOW + timedelta(minutes=10), render)
@@ -655,7 +730,7 @@ def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> 
     assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:topic"]
     assert [problem.text for problem in snapshot.problems] == ["no worktree for topic", conflict_text]
     assert [(action.kind, action.to, action.text) for action in actions] == [
-        ("send", "solar", "no worktree for topic"), ("send", "solar", conflict_text),
+        ("send", "solar", f"no worktree for topic\n{conflict_text}"),
     ]
 
     refreshed = replace(supplied, merges=(Ok(replace(conflict, checked_at=NOW + timedelta(minutes=5))),))

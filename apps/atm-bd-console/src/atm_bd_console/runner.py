@@ -78,21 +78,18 @@ def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], r
     """Commit only effects whose boundary call actually succeeded.
 
     A new problem is a delivery obligation, not merely an observation.  A
-    failed first send must therefore be absent from durable state so the next
-    tick proposes it again; a failed batch keeps its previous due time.
+    recipient's new problems travel in one combined send, so when that send
+    fails every one of them must be absent from durable state so the next
+    tick proposes them again; a failed batch keeps its previous due time.
     """
     successful = tuple(action for action in reported if action.outcome == "sent")
     failed = tuple(action for action in reported if action.outcome and action.outcome.startswith("failed "))
     previous = {problem.key: problem for problem in state.problems}
-    failed_new = {
-        action.bead_ids[0]
-        for action in failed
-        if action.kind == "send" and action.bead_ids
-    }
+    failed_sends = {action.to for action in failed if action.kind == "send"}
     problems = tuple(
         problem
         for problem in proposed.problems
-        if problem.key in previous or problem.bead_id not in failed_new
+        if problem.key in previous or problem.to not in failed_sends
     )
     failed_batches = {action.to for action in failed if action.kind == "batch"}
     batch_due = dict(proposed.batch_due)

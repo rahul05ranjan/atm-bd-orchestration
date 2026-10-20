@@ -133,9 +133,16 @@ local to the lead's team (cross-team assignments are tracked by atm-core #1870).
 Ready sanity and QA assignments require a successful merge check for their
 branch and target. Missing results, missing targets, timeouts, and unsupported
 git commands hold assignment with an actionable problem until verification
-succeeds. The persisted merge states remain `clean` (verified), `conflict`, and
-`error` (verification unavailable); a failed probe replaces any cached clean
-result. PR and CI status never hold assignment.
+succeeds. The persisted merge states are `clean` (verified), `conflict`,
+`head not pushed` and `base deleted` (the branch or its target has no ref on
+origin: shown, held, never announced as a failed check), and `error` (git
+itself failed); a failed probe replaces any cached clean result. PR and CI
+status never hold assignment.
+
+Problem notices are one message per recipient per tick: every problem new in
+a tick travels in one combined send, and the periodic batch lists every
+current problem for its recipient. A merge check failure stays one problem
+between its cycles and is announced again only when it recurs after clearing.
 
 Each tick with a ready assignment candidate refreshes origin before pinning a
 commit. A fetch or remote-ref read failure appears in the snapshot and logs,

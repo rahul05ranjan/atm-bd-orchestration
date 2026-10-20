@@ -1198,6 +1198,23 @@ def test_failed_notice_is_not_committed_and_remains_pending() -> None:
     assert durable.cycle_first_send == STATE.cycle_first_send
 
 
+def test_failed_combined_send_drops_every_new_problem_for_its_recipient() -> None:
+    owned = Problem("hold:atm-bh-6.fix", "atm-bh-6.fix", "fenix", "no worktree", ACTION.at)
+    unowned = Problem("merge_error:topic:base", None, "fenix", "merge check failed for topic against base", ACTION.at)
+    kept = Problem("conflict:other", "atm-bh-7.fix", "solar", "merge conflict with base: a.py", ACTION.at)
+    sends = (
+        replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), text=f"{owned.text}\n{unowned.text}", spec=None),
+        replace(ACTION, kind="send", to="solar", bead_ids=("atm-bh-7.fix",), text=kept.text, spec=None),
+    )
+    proposed = replace(STATE, problems=(owned, unowned, kept), batch_due={"fenix": ACTION.at, "solar": ACTION.at})
+
+    durable = runner._durable_state(
+        STATE, proposed, sends, (replace(sends[0], outcome="failed command_failed"), replace(sends[1], outcome="sent")),
+    )
+
+    assert durable.problems == (kept,) and durable.batch_due == {"solar": ACTION.at}
+
+
 def test_dry_run_reports_actions_without_advancing_durable_state(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
     writes = []

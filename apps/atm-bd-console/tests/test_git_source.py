@@ -8,7 +8,7 @@ from process_helpers import run_process
 
 from atm_bd_console import git_source
 from atm_bd_console.enums import MergeState
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.result import Ok
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -91,11 +91,19 @@ def test_conflicting_branch_lists_the_conflicted_files_and_messages(repo: Path) 
     )
 
 
-@pytest.mark.parametrize(("branch", "target", "missing"), [("nope", "main", "origin/nope"), ("clean", "gone", "origin/gone")])
-def test_missing_branch_is_an_error(repo: Path, branch: str, target: str, missing: str) -> None:
+@pytest.mark.parametrize(("branch", "target", "state", "missing"), [
+    ("nope", "main", MergeState.HEAD_NOT_PUSHED, "origin/nope"),
+    ("clean", "gone", MergeState.BASE_DELETED, "origin/gone"),
+    ("nope", "gone", MergeState.HEAD_NOT_PUSHED, "origin/nope"),
+])
+def test_missing_remote_ref_is_a_typed_merge_state_not_a_failed_check(
+    repo: Path, branch: str, target: str, state: MergeState, missing: str,
+) -> None:
+    """A branch that is not pushed, or a base that is gone, is reported as that state; Err is for git failing."""
     result = git_source.merge(repo, branch, target)
-    assert isinstance(result, Err) and isinstance(result.error, NotFound)
-    assert result.error.what == missing
+    assert isinstance(result, Ok)
+    assert (result.value.branch, result.value.target, result.value.state) == (branch, target, state)
+    assert result.value.files == () and result.value.messages == (f"{missing} not on origin",)
 
 
 def test_bare_repository_record_without_head_is_skipped(repo: Path, tmp_path: Path) -> None:
