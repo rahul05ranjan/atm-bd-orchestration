@@ -1406,3 +1406,24 @@ def test_config_error_reports_write_failures(monkeypatch, tmp_path, failed_write
     assert writes[0][1] == STATE and next_state == STATE
     assert writes[1][1].errors == (error, *((IO_FAILED,) if "state" in failed_writes else ()))
     assert snapshot.errors == (error, *(IO_FAILED for _ in failed_writes))
+
+
+@pytest.mark.parametrize(("patched", "source"), [
+    ("open_rows", "beads.open"), ("ready", "beads.ready"),
+])
+def test_step_reports_failed_bead_reads(monkeypatch, github_runtime, patched, source) -> None:
+    store, _, _, _ = github_runtime
+    assert not any(name.startswith("beads.") for name in runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads)
+    monkeypatch.setattr(runner.beads_source, patched, lambda *_: Err(TIMEOUT))
+    failed = runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads
+    assert failed[source] == TIMEOUT
+
+
+def test_step_reports_failed_atm_and_git_reads(monkeypatch, github_runtime) -> None:
+    store, _, _, _ = github_runtime
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Err(TIMEOUT))
+    failed = runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads
+    for source in ("atm.members", "atm.tasks", "git.worktrees"):
+        assert failed[source] == TIMEOUT

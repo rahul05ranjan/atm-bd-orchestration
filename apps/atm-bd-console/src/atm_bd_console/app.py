@@ -33,6 +33,7 @@ from .build import display_identity
 from .enums import QaState, SprintState
 from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
 from .log import create_console_logger, error_message
+from .poll_health import PollHealth
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
@@ -327,6 +328,7 @@ class ConsoleApp(App[int]):
         self.state = state
         self.startup_error = startup_error
         self.snapshot: Snapshot | None = None
+        self.health = PollHealth()
         self.status_text = ""
         self.status_error: Error | None = None
         self.tick_error: Error | None = None
@@ -509,6 +511,7 @@ class ConsoleApp(App[int]):
         tick_error: Error | None = None
         run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None = None
         runs_error = None
+        failed: dict[str, Error] = {}
         self._step_lock.acquire()
         try:
             step_result = self.step(self.config, self.state, force_github)
@@ -516,6 +519,7 @@ class ConsoleApp(App[int]):
             self.state = state
             run_data = step_result.run_data
             runs_error = step_result.runs_error
+            failed = dict(getattr(step_result, "failed_reads", {}))
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
         finally:
@@ -525,11 +529,11 @@ class ConsoleApp(App[int]):
                 text, error = status.status_text(snapshot)
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
-        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error)
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error, failed)
 
     def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None,
                      run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None,
-                     runs_error: str | None) -> None:
+                     runs_error: str | None, failed: dict[str, Error] | None = None) -> None:
         if run_data is not None:
             self.sanity_runs, self._open_quality_runs, self._open_findings = run_data
             self._combine_quality()
@@ -537,7 +541,7 @@ class ConsoleApp(App[int]):
         if tick_error is not None:
             self._show_tick_error(tick_error)
         elif snapshot is not None:
-            self._show(snapshot, text, error)
+            self._show(self.health.apply(snapshot, failed or {}), text, error)
         self._tick_running = False
         if self._pending_forced_refresh:
             self._pending_forced_refresh = False
@@ -546,7 +550,11 @@ class ConsoleApp(App[int]):
     def _show_tick_error(self, error: Error) -> None:
         if not self.is_running:
             return
-        self.tick_error = error
+        if self.snapshot is not None:
+            # Keep the last good data on screen; the header indicator says the tick failed and since when.
+            self.health.tick_failed(error, datetime.now(UTC))
+        else:
+            self.tick_error = error
         logger = create_console_logger(self.config.repo_root)
         if isinstance(logger, Ok):
             logger.value.event("error", level="error", message=error_message(asdict(error)), error=asdict(error))
@@ -678,6 +686,9 @@ class ConsoleApp(App[int]):
             header.overflow = "ellipsis"
             if self.status_error is not None:
                 header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
+            indicator = self.health.indicator()
+            if indicator:
+                header.append(f"  {indicator}", style="yellow")
             header.truncate(width, overflow="ellipsis")
             self.query_one("#status-header", Static).update(header)
             self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))

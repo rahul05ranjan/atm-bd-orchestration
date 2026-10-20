@@ -181,7 +181,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         runs_error = None
     except (OSError, ValueError, RuntimeError) as error:
         run_data, runs_error = None, str(error)
-    return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error)
+    return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error, failed_reads=logger.failed_reads)
 
 
 def _closed_tasks(
@@ -221,7 +221,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         logger.finish(actions=0)
         persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
-        return StepResult(persisted, state)
+        return StepResult(persisted, state, failed_reads=logger.failed_reads)
     config = replace(config, lead=file.value.lead)
     root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
@@ -372,5 +372,5 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return StepResult(persisted, durable, reported, run_data, runs_error)
+            return StepResult(persisted, durable, reported, run_data, runs_error, logger.failed_reads)
     return persist(store)

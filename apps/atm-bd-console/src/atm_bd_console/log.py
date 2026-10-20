@@ -99,6 +99,7 @@ class TickLog:
         self.logger = logger
         self.errors: list[Error] = [logger.error] if isinstance(logger, Err) else []
         self._reported_errors: set[Error] = set()
+        self.failed_reads: dict[str, Error] = {}
 
     def mark_reported(self, error: Error) -> None:
         self._reported_errors.add(error)
@@ -137,6 +138,7 @@ class TickLog:
     def result(self, source: str, result: Result[Value], **fields: object) -> Result[Value]:
         if isinstance(result, Err):
             self.mark_reported(result.error)
+            self.failed_reads[source] = result.error
         self.event(
             "read", source=source, outcome="failed" if isinstance(result, Err) else "ok",
             level="error" if isinstance(result, Err) else "info",
