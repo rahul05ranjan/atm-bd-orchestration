@@ -24,6 +24,10 @@ AGENT_ICONS: dict[AgentIcon, Icon] = {
     AgentIcon.QA_PASS: ("\U000f029b", "#2EA043"),
     AgentIcon.QA_FAIL: ("\U000f029b", "#F85149"),
 }
+QA_FAIL_NON_BLOCKING: Icon = (
+    AGENT_ICONS[AgentIcon.QA_FAIL][0],
+    AGENT_ICONS[AgentIcon.FABLE][1],
+)
 SPRINT_ICONS: dict[SprintState, Icon] = {
     SprintState.OPEN: ("\U000f0766", "#2D81E0"),
     SprintState.BLOCKED: ("\U000f033e", "#FA8537"),

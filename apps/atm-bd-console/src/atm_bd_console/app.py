@@ -29,8 +29,8 @@ from textual.widgets.option_list import Option
 
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .build import display_identity
-from .enums import SprintState
-from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for
+from .enums import AgentIcon, QaState, SprintState
+from .icons import AGENT_ICONS, JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, QA_FAIL_NON_BLOCKING, SPRINT_ICONS, icon_for
 from .log import create_console_logger, error_message
 from .result import Err, Error, IoFailed, Ok
 from .state import StateStore, acquire_lock
@@ -171,14 +171,76 @@ def sanity_text(
     return _aligned(lines), _aligned(errors)
 
 
-def _quality_run_label(
+_QUALITY_HEADERS = ("Completed", "QA", "Sprint", "QA bead", "PR", "Round", "B", "I", "M", "Elapsed")
+
+
+def _quality_run_cells(
     run: runs.QaRun, findings: list[dict], *, local_zone: tzinfo | None = None,
-) -> str:
+) -> tuple[tuple[str, ...], QaState | None, int]:
     counts = [sum(f["severity"] == severity for f in findings) for severity in ("blocking", "important", "minor")]
-    verdict = run.verdict.name if run.verdict is not None else "—"
-    return (f"{_run_time(run.completed_at, local_zone=local_zone)}  {run.sprint}  {run.bead.get('id', '')}  "
-            f"#{run.pr_number or '—'}  {run.round or '—'}  {verdict}  "
-            f"{counts[0]}/{counts[1]}/{counts[2]}  {_duration(run.elapsed_s)}")
+    state = run.verdict
+    qa_status = state.name.lower() if state is not None and state != QaState.RUNNING else ""
+    cells = (
+        _run_time(run.completed_at, local_zone=local_zone),
+        qa_status,
+        run.sprint,
+        str(run.bead.get("id", "")),
+        f"#{run.pr_number or '—'}",
+        str(run.round or "—"),
+        str(counts[0]),
+        str(counts[1]),
+        str(counts[2]),
+        _duration(run.elapsed_s),
+    )
+    return cells, run.verdict, counts[0]
+
+
+def _quality_widths(rows: list[tuple[tuple[str, ...], QaState | None, int]]) -> tuple[int, ...]:
+    def width(row: tuple[str, ...], state: QaState | None, index: int) -> int:
+        rendered = cell_len(row[index])
+        if index == 1 and state in (QaState.PASS, QaState.FAIL):
+            icon = AGENT_ICONS[AgentIcon.QA_PASS if state == QaState.PASS else AgentIcon.QA_FAIL]
+            rendered += cell_len(icon[0]) + 1
+        return rendered
+
+    return tuple(max([cell_len(header), *(width(row, state, index) for row, state, _blocking in rows)])
+                 for index, header in enumerate(_QUALITY_HEADERS))
+
+
+def _quality_row(cells: tuple[str, ...], state: QaState | None, blocking: int, widths: tuple[int, ...]) -> Text:
+    label = Text(no_wrap=True)
+    for index, (value, width) in enumerate(zip(cells, widths, strict=True)):
+        if index == 1 and state in (QaState.PASS, QaState.FAIL):
+            icon = (AGENT_ICONS[AgentIcon.QA_PASS] if state == QaState.PASS else
+                    AGENT_ICONS[AgentIcon.QA_FAIL] if blocking else QA_FAIL_NON_BLOCKING)
+            glyph, color = icon
+            label.append(glyph, style=color or "")
+            label.append(f" {value}".ljust(max(0, width - cell_len(glyph))))
+        elif index in (6, 7, 8) and value == "0":
+            label.append(" " * width)
+        else:
+            rendered = value.rjust(width) if index in (6, 7, 8) else value.ljust(width)
+            label.append(rendered)
+        if index < len(cells) - 1:
+            label.append(" | ")
+    return label
+
+
+def _quality_run_label(
+    run: runs.QaRun, findings: list[dict], *, widths: tuple[int, ...] | None = None,
+    local_zone: tzinfo | None = None,
+) -> Text:
+    cells, state, blocking = _quality_run_cells(run, findings, local_zone=local_zone)
+    return _quality_row(cells, state, blocking, widths or _quality_widths([(cells, state, blocking)]))
+
+
+def _quality_header(widths: tuple[int, ...]) -> Text:
+    header = Text(no_wrap=True, style="bold")
+    for index, (value, width) in enumerate(zip(_QUALITY_HEADERS, widths, strict=True)):
+        header.append(value.ljust(width))
+        if index < len(_QUALITY_HEADERS) - 1:
+            header.append(" | ")
+    return header
 
 
 def _lock_message(error: Error) -> str:
@@ -248,6 +310,7 @@ class ConsoleApp(App[int]):
     #sanity-list { height: 3fr; overflow: auto; }
     #sanity-errors { height: 2fr; overflow: auto; }
     #quality-runs { height: 3fr; }
+    #quality-runs-header { height: 1; }
     #quality-findings { height: 2fr; overflow: auto; }
     """
     # Only q quits (ANC-014): Textual's default ctrl+q quit binding is replaced.
@@ -307,6 +370,7 @@ class ConsoleApp(App[int]):
                 yield Static(id="sanity-errors")
             with TabPane("Quality", id="quality"):
                 yield Static(id="quality-error")
+                yield Static(id="quality-runs-header")
                 yield OptionList(id="quality-runs")
                 yield FindingsMarkdown(id="quality-findings")
             with TabPane("Diagnostics", id="diagnostics"):
@@ -628,12 +692,18 @@ class ConsoleApp(App[int]):
             quality_error.update(Text(f"Unable to load runs: {quality_message}", style="red") if quality_message else "")
             quality_error.display = bool(quality_message)
             quality = self.query_one("#quality-runs", OptionList)
+            quality_header = self.query_one("#quality-runs-header", Static)
             highlighted = quality.highlighted
             quality.clear_options()
-            options = []
+            rows = []
             for run in self.quality_runs:
                 findings = runs.run_findings(run.bead, self.finding_beads)
-                label = _quality_run_label(run, findings)
+                rows.append((run, findings, _quality_run_cells(run, findings)))
+            widths = _quality_widths([cells for _, _, cells in rows])
+            quality_header.update(_quality_header(widths))
+            options = []
+            for run, findings, (cells, verdict, blocking) in rows:
+                label = _quality_row(cells, verdict, blocking, widths)
                 options.append(Option(label, id=str(run.bead.get("id"))))
             quality.add_options(options)
             if options:

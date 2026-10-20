@@ -175,7 +175,7 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
     finding = {"id": "f1", "description": "missing test", "design": "add a test",
                "metadata": {"severity": "important", "reviewer": "req-qa"},
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
-    assert "13:14" in _quality_run_label(runs.qa_runs([qa])[0], [], local_zone=UTC)
+    assert "13:14" in _quality_run_label(runs.qa_runs([qa])[0], [], local_zone=UTC).plain
     rendered = []
     monkeypatch.setattr(findings_renderer, "render_findings", lambda _root, findings: rendered.extend(findings) or "# Findings\n\nmissing test")
 
@@ -190,9 +190,11 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
             tabs.active = "quality"
             options = app.query_one("#quality-runs")
             assert options.option_count == 1
-            label = str(options.get_option_at_index(0).prompt)
-            assert "bj-4" in label and "1/0" in label and "FAIL" in label
-            assert label.endswith("840s")
+            label = options.get_option_at_index(0).prompt
+            fields = label.plain.split(" | ")
+            assert fields[1].strip().endswith("fail") and fields[2].strip() == "bj-4"
+            assert [fields[index].strip() for index in (6, 7, 8)] == ["", "1", ""]
+            assert label.plain.rstrip().endswith("840s")
             widget = app.query_one("#quality-findings")
             pending = capture_updates(monkeypatch, widget)
             app._show_findings("qa-1")
