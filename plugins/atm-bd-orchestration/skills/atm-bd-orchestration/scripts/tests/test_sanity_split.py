@@ -308,7 +308,7 @@ class SanitySplit(unittest.TestCase):
         noted = self.run_split([{**bead()[0], "notes": "Ran the retry tests: 12 passed."}], None, self.repo.sha)
         self.assertEqual(noted.returncode, 0, noted.stderr)
         self.assertEqual(json.loads(noted.stdout)["assignments"][0]["assignment"]["external_evidence"],
-                         [{"kind": "bead_notes", "bead": "{{ bead_prefix }}-x-1"}])
+                         [{"kind": "bead_notes", "bead": "{{ bead_prefix }}-x-1", "text": "Ran the retry tests: 12 passed."}])
         self.assertNotIn("acceptance_criteria", first)
         self.assertNotIn("design", first)
         self.assertEqual(first["commit"], self.repo.sha)

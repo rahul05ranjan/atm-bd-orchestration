@@ -97,6 +97,24 @@ class SanityHistory(unittest.TestCase):
             self.assertEqual(HISTORY.phase_from_bead(bead, "bj-4"), "bj")
             self.assertEqual(run.call_count, 1)
 
+    def test_llm_elapsed_is_derived_and_manifest_bead_avoids_lookup(self):
+        values = {"sprint": "bj-4", "run_id": "x", "reviewer": "sanity-llm", "commit": "a" * 40,
+                  "started_at": "2026-10-02T00:00:00Z", "completed_at": "2026-10-02T00:01:05Z",
+                  "verdict": "PASS", "findings_count": 0, "llm_elapsed_s": 999,
+                  "checked_bead_data": {"assignee": "dev-one", "metadata": {"phase": "bj"}}}
+        vars_path = self.root / "elapsed-vars.json"
+        vars_path.write_text(json.dumps(values))
+        args = ["sanity-run-history", "--vars", str(vars_path), "--task", "task", "--bead", "bead",
+                "--pr-number", "1", "--iteration", "1", "--final-verdict", "PASS"]
+        with patch.object(sys, "argv", args), patch.object(HISTORY, "bead_data") as lookup, \
+                patch.object(HISTORY, "primary_root", return_value=self.root), \
+                patch.object(HISTORY, "append_record") as append:
+            HISTORY.main()
+        lookup.assert_not_called()
+        row = append.call_args.args[1]
+        self.assertEqual(row["llm_elapsed_s"], 65)
+        self.assertEqual(row["dev"], "dev-one")
+
     def test_jev_elapsed_uses_maximum_and_missing_is_null(self):
         self.assertEqual(HISTORY.reviewer_elapsed({"reviewer": "sanity-jev", "reviewer_results": [
             {"elapsed_s": 1.2}, {"elapsed_s": 4.2}, {"elapsed_s": 2.0}]}), 4.2)

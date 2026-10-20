@@ -78,6 +78,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/jev_client.py
     - skills/atm-bd-orchestration/scripts/post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/post_mortem_jev.py
+    - skills/atm-bd-orchestration/scripts/sanity-close-vars
     - skills/atm-bd-orchestration/scripts/sanity-merge
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
@@ -122,6 +123,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_jev.py
     - skills/atm-bd-orchestration/scripts/tests/test_qa_report_contract.py
+    - skills/atm-bd-orchestration/scripts/tests/test_sanity_close_vars.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_run_history.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_split.py

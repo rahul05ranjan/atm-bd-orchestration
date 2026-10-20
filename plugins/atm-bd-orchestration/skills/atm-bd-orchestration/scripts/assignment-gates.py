@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stack_top import select_stack_top, stack_bead_id
+from stack_top import pending_handoffs, select_stack_top, stack_bead_id
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
@@ -36,8 +36,8 @@ def run(runner: Runner, *args: str, cwd: str | None = None) -> str:
     return result.stdout.strip()
 
 
-def run_json(runner: Runner, *args: str) -> Any:
-    return json.loads(run(runner, *args))
+def run_json(runner: Runner, *args: str, cwd: str | None = None) -> Any:
+    return json.loads(run(runner, *args, cwd=cwd))
 
 
 def metadata(bead: dict[str, Any]) -> dict[str, Any]:
@@ -111,6 +111,11 @@ def stack_top(runner: Runner, args: argparse.Namespace) -> str:
 
 
 def dev_gate(args: argparse.Namespace, runner: Runner, identity: str) -> str:
+    stack = run_json(runner, "bd", "show", stack_bead_id(args.root), "--json", cwd=str(PRIMARY))
+    if not isinstance(stack, list) or len(stack) != 1 or not isinstance(stack[0], dict):
+        raise ValueError("stack bead lookup must return exactly one bead object")
+    if pending_handoffs(stack[0]):
+        return "STACK_HANDOFF_PENDING"
     plan = invoke(runner, [VALIDATE_PLAN, "--root", args.root], capture_output=True, text=True, cwd=str(PRIMARY))
     if plan.returncode == 5:
         print((plan.stdout + plan.stderr).strip(), file=sys.stderr)

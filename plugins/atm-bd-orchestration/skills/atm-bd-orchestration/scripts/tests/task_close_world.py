@@ -34,6 +34,8 @@ class World:
         self.values.update(primary_checkout=str(root), worktree_path=str(root))
         self.values["rebased_onto"] = "b" * 40
         self.values["carry_forward"] = ""
+        (root / "scripts").mkdir()
+        (root / "scripts/example.py").write_text("pass\n")
         # HEAD is stable even when a test removes commit from the dispatch values.
         self.head = self.values["commit"]
         self.pr_number = self.values["pr_number"]
@@ -65,6 +67,7 @@ class World:
         self.reassign_after_write = None
         self.overrides = {}
         monkeypatch.setenv("ATM_IDENTITY", "caller")
+        monkeypatch.delenv("BEADS_DIR", raising=False)
 
     def assignment(self, number):
         return dict(event="assigned", message_id=f"assignment-{number}", seq=number,
@@ -103,7 +106,9 @@ class World:
         if argv[0] == "git" and argv[1] == self.git_network_failure:
             return subprocess.CompletedProcess(argv, 1, "", "remote unavailable")
         output, write = "", False
-        if argv[:2] == ["bd", "show"]:
+        if argv[:3] == ["bd", "where", "--json"]:
+            output = {"path": str(self.root / ".beads")}
+        elif argv[:2] == ["bd", "show"]:
             output = [self.beads[argv[2]]]
         elif argv[:2] == ["bd", "list"]:
             output = [row for row in self.beads.values() if row["metadata"].get("dev_bead")]
@@ -116,7 +121,10 @@ class World:
             for name in ("status", "assignee", "metadata"):
                 if "--" + name in argv:
                     value = argv[argv.index("--" + name) + 1]
-                    record[name] = json.loads(value) if name == "metadata" else value
+                    if name == "metadata":
+                        record[name] = json.loads(Path(value[1:]).read_text()) if value.startswith("@") else json.loads(value)
+                    else:
+                        record[name] = value
             for index, flag in enumerate(argv):
                 if flag == "--set-metadata":
                     key, value = argv[index + 1].split("=", 1)

@@ -169,6 +169,58 @@ def world(tmp_path, monkeypatch):
     return World(tmp_path, monkeypatch)
 
 
+def test_already_linked_lower_layer_at_pinned_commit_is_stacked(world):
+    first = world.branch('first', 'trunk', 1)
+    second = world.branch('second', 'first', 2)
+    assert world.link(first)['result'] == 'stacked'
+    assert world.link(second)['result'] == 'stacked'
+    before = copy.deepcopy(world.bead['metadata'])
+    world.calls.clear()
+    replay = world.link(first)
+    assert replay['result'] == 'stacked'
+    assert replay['top']['branch'] == 'second'
+    assert world.bead['metadata'] == before
+    assert not any(call[:3] == ['gh', 'stack', 'link'] for call in world.calls)
+
+
+def test_successful_handoff_clears_its_pending_ledger_marker(world):
+    values = world.branch('first', 'trunk', 1)
+    world.bead['metadata']['pending_handoffs'] = [{
+        'sanity_bead': 'sanity', 'checked_bead': values['checked_bead'], 'branch': values['branch'],
+        'commit': values['commit'], 'pr_number': values['pr_number'],
+    }]
+
+    result = world.link(values)
+
+    assert result['result'] == 'stacked'
+    assert world.bead['metadata']['pending_handoffs'] == []
+    assert world.bead['metadata']['layers'][-1]['head'] == values['commit']
+
+
+def test_failed_post_close_handoff_notifies_lead_without_task_writes(world):
+    values = world.branch('first', 'trunk', 1)
+    values['lead'] = 'phase-lead'
+    world.pulls.clear()
+    notices = []
+
+    def run(argv, **kwargs):
+        if argv[:2] == ['atm', 'send']:
+            notices.append(argv)
+            return subprocess.CompletedProcess(argv, 0, '', '')
+        return world(argv, **kwargs)
+
+    path = world.root / 'post-close.json'
+    path.write_text(json.dumps(values))
+    output = io.StringIO()
+    with redirect_stdout(output):
+        status = LINK.main(['--input', str(path)], runner=run, clock=world.clock, sleep=world.clock.sleep)
+    assert status == 1
+    assert json.loads(output.getvalue())['result'] == 'stack_failed'
+    assert len(notices) == 1 and notices[0][2] == 'phase-lead'
+    assert 'already closed' in notices[0][3]
+    assert not any(call[:2] == ['atm', 'task'] for call in world.calls)
+
+
 def test_stack_top_selector_drives_empty_and_populated_ledgers(world, monkeypatch):
     selected = []
 

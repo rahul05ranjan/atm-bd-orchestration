@@ -217,6 +217,14 @@ class Linker:
             self.command(['bd', 'update', self.values['stack_bead'], '--if-assignee', self.actor,
                           '--metadata', '@' + stream.name, '--actor', self.actor])
 
+    def clear_pending(self, metadata):
+        pending = metadata.get('pending_handoffs', [])
+        if not isinstance(pending, list) or any(not isinstance(item, dict) for item in pending):
+            raise StackError('stack bead metadata.pending_handoffs must be an array of objects')
+        metadata['pending_handoffs'] = [item for item in pending
+                                        if (item.get('checked_bead'), item.get('branch'), item.get('commit')) !=
+                                        (self.values['checked_bead'], self.values['branch'], self.values['commit'])]
+
     def execute(self):
         timeout = self.acquire()
         if timeout:
@@ -256,18 +264,30 @@ class Linker:
         def resolve_head(branch):
             return self.command(['git', 'rev-parse', 'refs/remotes/origin/' + branch]).stdout.strip()
 
-        base, recorded_head = select_stack_top({'metadata': metadata}, metadata['trunk'], resolve_head)
+        top_metadata = {**metadata, 'pending_handoffs': []}
+        base, recorded_head = select_stack_top({'metadata': top_metadata}, metadata['trunk'], resolve_head)
         if layers and layers[-1]['pr'] == self.values['pr_number']:
             top = layers[-1]
             actual = resolve_head(base)
             if (base != self.values['branch'] or recorded_head != self.values['commit'] or
                     actual != recorded_head or candidate['base'] != top['base']):
                 raise StackError('checked pull request conflicts with the recorded stack top')
+            self.clear_pending(metadata)
             if metadata != original:
                 self.write(metadata)
             return {'result': 'stacked', 'top': top, 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
-        if any(layer['pr'] == self.values['pr_number'] or layer['branch'] == self.values['branch'] for layer in layers):
-            raise StackError('checked layer is already below the stack top')
+        recorded = next((layer for layer in layers
+                         if layer['pr'] == self.values['pr_number'] or layer['branch'] == self.values['branch']), None)
+        if recorded is not None:
+            if (recorded['pr'] != self.values['pr_number'] or recorded['branch'] != self.values['branch'] or
+                    recorded['head'] != self.values['commit'] or candidate['base'] != recorded['base'] or
+                    resolve_head(recorded['branch']) != self.values['commit']):
+                raise StackError('checked layer conflicts with its recorded pinned commit')
+            self.clear_pending(metadata)
+            if metadata != original:
+                self.write(metadata)
+            return {'result': 'stacked', 'top': layers[-1], 'stack_number': metadata.get('stack_number'),
+                    'reclaimed': self.reclaimed}
         ancestor = self.command(['git', 'merge-base', '--is-ancestor', 'origin/' + base, self.values['commit']], check=False)
         actual = resolve_head(base) if layers else recorded_head
         if actual != recorded_head:
@@ -298,6 +318,7 @@ class Linker:
             for entry in pending:
                 entry['linked'] = True
         layers.append(new)
+        self.clear_pending(metadata)
         self.write(metadata)
         return {'result': 'stacked', 'top': new, 'stack_number': metadata.get('stack_number'), 'reclaimed': self.reclaimed}
 
@@ -305,7 +326,10 @@ class Linker:
 def main(argv=None, runner=subprocess.run, clock=time.time, sleep=time.sleep):
     parser = Parser(description=__doc__)
     parser.add_argument('--input', required=True, type=Path)
+    parser.add_argument('--notify-lead')
     linker = None
+    args = None
+    values = {}
     try:
         args = parser.parse_args(argv)
         values = json.loads(args.input.read_text(encoding='utf-8'))
@@ -344,6 +368,16 @@ def main(argv=None, runner=subprocess.run, clock=time.time, sleep=time.sleep):
         result = {'result': 'stack_failed', 'evidence': str(error)}
     if linker is not None and linker.mode is not None:
         result.update(mode=linker.mode, lean_reason=linker.lean_reason)
+    lead = (args.notify_lead if args is not None else None) or (values.get('lead') if isinstance(values, dict) else None)
+    if lead and result['result'] != 'stacked':
+        try:
+            notice = runner(['atm', 'send', lead,
+                             'Sanity task already closed; stack handoff needs lead action: ' + json.dumps(result)],
+                            capture_output=True, text=True, timeout=30)
+            if notice.returncode:
+                result['notification_error'] = notice.stderr or notice.stdout
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result['notification_error'] = str(error)
     print(json.dumps(result))
     return int(result['result'] == 'stack_failed')
 

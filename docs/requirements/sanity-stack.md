@@ -30,9 +30,9 @@ through; when they always work, dev-sanity runs them itself.
 ### Lock timeout (never blocks the team, never a human)
 
 10. On `timeout_s` the subagent returns `lock_timeout` with the holder, the claim time and the holder's active task (stack bead assignee and `atm task list`).
-11. dev-sanity keeps the sanity task active, sends the holder one plain message asking for the release, continues its other sanity checks, and re-spawns after the holder's reply or after another `timeout_s`. The dev keeps waiting on its open task. It never refuses the task, never sends the dev a FAIL, never escalates to a person; when the lease expires, item 2 applies.
+11. A lock_timeout is reported mechanically to the phase lead as stack owner. The sanity task has already closed; it is never held active, refused or changed to FAIL for a stack outcome. The lead owns any subsequent retry or lease recovery under item 2.
 
 ### dev-sanity's side
 
-12. One sanity task open: dev-sanity runs items 4 to 7 itself (same order, same lock). More than one open, or its own inline link failed: it spawns sanity-stack, one spawn at a time in verdict order, never two in flight.
-13. The sanity close hook runs only after `stacked`; the vars carry the stack result and the hook refuses a PASS close without one. `rebase_required` goes to the dev as `rebase-required.xml.j2` on the dev's open task; the checked bead is reopened to the dev; `sanity_round` does not move; the PASS verdict stays in the ledger.
+12. After its selected PASS closes, dev-sanity hands the generated stack input to sanity-stack. Handoffs are serialized one at a time, independently of sanity close order; an inline sanity-stack-link invocation follows the same locking procedure.
+13. The sanity close hook runs on the selected verdict before linking and accepts an absent stack result. An already-linked layer at the same pinned commit returns stacked, even below the top. rebase_required, lock_timeout and stack_failed notify the phase lead and leave the sanity task closed; none increments sanity_round. The lead owns further dev redispatch or stack repairs.

@@ -6,11 +6,26 @@ def stack_bead_id(root: str) -> str:
     return f"{root}.stack"
 
 
+def pending_handoffs(bead):
+    """Read pending post-PASS stack handoffs from the stack ledger metadata."""
+    metadata = bead.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("stack bead metadata must be an object or null")
+    pending = (metadata or {}).get("pending_handoffs", [])
+    if not isinstance(pending, list) or any(not isinstance(item, dict) for item in pending):
+        raise ValueError("stack bead metadata.pending_handoffs must be an array of objects")
+    return pending
+
+
 def select_stack_top(bead, pr_target, resolve_head):
     metadata = bead.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
         raise ValueError("stack bead metadata must be an object or null")
     layers = (metadata or {}).get("layers", [])
+    pending = pending_handoffs(bead)
+    if pending:
+        refs = ", ".join(str(item.get("checked_bead", "?")) for item in pending)
+        raise ValueError(f"stack has pending sanity handoff(s): {refs}")
     if not isinstance(layers, list):
         raise ValueError("stack bead metadata.layers must be an array")
     if layers:

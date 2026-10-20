@@ -21,6 +21,7 @@ from contract_samples import (
     MERGE,
     PHASE,
     PHASE_FILE,
+    PHASE_TEMPLATES,
     REMOTE_REF,
     REPO_CONFIG,
     SNAPSHOT,
@@ -822,7 +823,8 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
         def now(cls, tz=None):
             return fixed_now if tz else fixed_now.replace(tzinfo=None)
 
-    phase_file = replace(PHASE_FILE, sprints=(SPRINT.id,), depends_on={SPRINT.id: ()})
+    phase_file = replace(PHASE_FILE, sprints=(SPRINT.id,), depends_on={SPRINT.id: ()},
+                         templates={**PHASE_TEMPLATES, "sanity": "custom-sanity.xml.j2"})
     root = replace(BEAD, id=phase_file.root_id, title="phase", status=SprintState.OPEN, labels=(phase_file.label,), parent=None, metadata={})
     sprint = replace(
         BEAD, id=SPRINT.id, title=SPRINT.title, status=SprintState.OPEN, labels=("stage:sprint",), parent=root.id,

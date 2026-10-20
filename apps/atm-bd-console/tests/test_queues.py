@@ -24,6 +24,7 @@ def bead(ident: str, stage: str, *, status: str = "open", parent: str | None = N
 def fixture_rows():
     rows = [
         bead(ROOT, "root", metadata={"integration_branch": "integrate/phase-bj"}),
+        bead(f"{ROOT}.stack", "stack", metadata={"pending_handoffs": []}),
         bead("sprint-empty", "sprint", parent=ROOT),
         bead("dev-flight", "dev", parent=ROOT),
         bead("dev-stalled", "dev", parent=ROOT),
@@ -146,6 +147,24 @@ def test_all_mode_exposes_not_ready_reasons():
     assert "== Not ready (prerequisite open) (4)" in shown
     assert "blocked by prereq" in shown
     assert "handled by dev-fix for dev-parent" in shown
+
+
+def test_pending_sanity_pass_is_visible_and_suppresses_dev_and_qa_dispatch():
+    pending = {"sanity_bead": "sanity-pass", "checked_bead": "dev-pass", "branch": "fix/bj-3", "commit": "abc123"}
+    rows = fixture_rows()
+    stack_id = f"{ROOT}.stack"
+    rows = [row for row in rows if row["id"] != stack_id]
+    rows.append(bead(stack_id, "stack", metadata={"pending_handoffs": [pending]}))
+    rows.append(bead("qa-pass", "qa", parent=ROOT, metadata={"checked_bead": "dev-pass"}))
+    ready = [row for row in rows if row["id"] in {"dev-ready", "qa-pass"}]
+    runner, _ = fixed_runner(open_rows=rows, ready_rows=ready, task_rows=[])
+    result = queues.build(SimpleNamespace(phase=None, root=ROOT, stack=False), Path("/fixture"), now=NOW, runner=runner)
+    q = result["queues"]
+
+    assert [row["id"] for row in q["stack_handoff_pending"]] == ["dev-pass"]
+    assert not any(row["id"] == "dev-ready" for key in ("needs_dev", "needs_fix") for row in q[key])
+    assert "qa-pass" not in {row["id"] for row in q["needs_qa"]}
+    assert any(row["id"] == "dev-ready" and "stack handoff pending" in row["detail"] for row in q["not_ready"])
 
 
 def test_not_ready_summary_counts_stages_and_metadata_in_order():

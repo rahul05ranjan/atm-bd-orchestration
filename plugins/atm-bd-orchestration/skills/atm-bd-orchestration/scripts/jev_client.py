@@ -41,11 +41,8 @@ class JevError(Exception):
 
 REPORT = "Report this error unchanged; the coordinator records the slot unavailable."
 RETRY = "The client retry budget is exhausted. " + REPORT
-REBUILD = ("Rebuild `context` and rerun `--assignment <file>`: narrow each entry to the line ranges the deliverable "
-           "needs (`path:start-end`, e.g. `docs/x.md:120-180`), drop entries the deliverable does not need, and never "
-           "remove `deliverable.text` or `changed_files`. Drop `external_evidence` entries the deliverable does not need. "
-           "Leave `context` empty only when nothing in it is needed: with `context` empty the client splits "
-           "`changed_files` into requests that each fit, when `external_evidence` is empty too.")
+REBUILD = ("The client owns lossless splitting of evidence, context and inline notes. "
+           "Its bounded split/retry budget is exhausted; do not hand-trim the assignment. " + REPORT)
 CONTEXT_RANGE = re.compile(r"(?P<path>.+):(?P<start>[0-9]+)-(?P<end>[0-9]+)")  # a `context` entry naming lines
 FENCED = re.compile(r"\s*```(?:json)?[ \t]*\n(.*?)\n```\s*", re.S)  # an assignment as received: fenced JSON
 FIXES = (  # message prefix -> what the calling agent does next
@@ -434,6 +431,10 @@ EVIDENCE_REFS = {"bead_notes": ("bead",), "pr_body": ("repo", "pr"), "pr_comment
 
 def evidence_ref(ref):
     """True for one well-formed `external_evidence` reference."""
+    if isinstance(ref, dict) and ref.get("kind") == "bead_notes" and set(ref) == {"kind", "bead", "text"}:
+        return isinstance(ref["bead"], str) and bool(ref["bead"]) and not ref["bead"].startswith("-") and isinstance(ref["text"], str)
+    if isinstance(ref, dict) and ref.get("kind") == "bead_notes":
+        return False
     keys = EVIDENCE_REFS.get(ref.get("kind")) if isinstance(ref, dict) else None
     return keys is not None and set(ref) == {"kind", *keys} and all(
         type(ref[k]) is int and ref[k] > 0 if k in ("pr", "comment_id")
@@ -444,8 +445,9 @@ def external_evidence(ref, worktree):
     """One bead's notes, PR body or PR comment, fetched here so no agent writes it, labelled with where it came from."""
     kind = ref["kind"]
     label = ref["bead"] if kind == "bead_notes" else f"{ref['repo']}#{ref.get('pr', ref.get('comment_id'))}"
-    argv = (["bd", "show", ref["bead"], "--json"] if kind == "bead_notes" else
-            ["gh", "api", f"repos/{ref['repo']}/pulls/{ref['pr']}"] if kind == "pr_body" else
+    if kind == "bead_notes" and "text" in ref:
+        return {"kind": kind, "ref": label, "url": None, "updated_at": None, "author": None, "text": ref["text"]}
+    argv = (["gh", "api", f"repos/{ref['repo']}/pulls/{ref['pr']}"] if kind == "pr_body" else
             ["gh", "api", f"repos/{ref['repo']}/issues/comments/{ref['comment_id']}"])
     try:
         proc = subprocess.run(argv, cwd=worktree, capture_output=True, text=True, timeout=60)

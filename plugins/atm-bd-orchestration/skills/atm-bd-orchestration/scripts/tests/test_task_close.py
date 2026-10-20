@@ -90,7 +90,8 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
     calls = [argv for argv, _kwargs in world.calls]
     close_index = next(index for index, argv in enumerate(calls) if argv[:2] == ["bd", "close"])
     assert calls[close_index + 1][:2] == ["atm", "send"]
-    assert calls[close_index + 2][:3] == ["atm", "task", "assign"]
+    assert calls[close_index + 2] == ["bd", "where", "--json"]
+    assert calls[close_index + 3][:3] == ["atm", "task", "assign"]
     assert world.tasks[world.values["dev_task_id"]][-1]["to_state"] == "assigned"
     for argv, sender in world.writes:
         assert sender == ("phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller")
@@ -118,7 +119,7 @@ def test_preview_and_native_send_use_identical_completion_vars(world, monkeypatc
     monkeypatch.setattr(hook.sc_render, "render", render)
     assert "ok" in world.run()
     assert inputs and world.messages
-    assert all(message["values"] == inputs[-1] for message in world.messages)
+    assert all(any(message["values"] == rendered for rendered in inputs) for message in world.messages)
 
 
 @pytest.mark.parametrize("change,code", [({"commit": ""}, "VARS.EMPTY"), ({"extra": 1}, "VARS.UNKNOWN"),
@@ -353,8 +354,30 @@ def test_not_reproducible_assigns_runtime_top_without_rewriting_input(world):
     assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
     assert assignment["values"]["branch"] == "integrate/phase-bj"
     assert assignment["values"]["commit"] == "b" * 40
-    assert set(assignment["values"]) == set(world.values) | {"branch", "commit", *contract["derived_variables"]}
+    assert assignment["values"]["beads_dir"] == str(world.root / ".beads")
+    assert any(argv == ["bd", "where", "--json"] for argv, _kwargs in world.calls)
+    assert set(assignment["values"]) == set(world.values) | {"branch", "commit", *contract["derived_variables"],
+                                                          "close_context", "beads_dir", "phase_lead"}
     assert not any(argv[0] == "gh" for argv, _kwargs in world.calls)
+
+
+def test_not_reproducible_fix_without_stack_bead_uses_pr_target(world):
+    world.values.pop("stack_bead")
+    for field in ("branch", "commit", "pr_number"):
+        world.values.pop(field, None)
+    result = world.run("fix", outcome="not_reproducible")
+    assert "ok" in result, result
+    assert any(argv == ["git", "rev-parse", "origin/integrate/phase-bj"] for argv, _kwargs in world.calls)
+    assert not any(argv[:2] == ["bd", "show"] and argv[2] == "atm-phase-bj.stack" for argv, _kwargs in world.calls)
+    assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
+    assert assignment["values"]["stack_bead"] == ""
+
+
+def test_not_reproducible_hook_verifies_the_cited_file_and_line(world):
+    result = world.run("fix", outcome="not_reproducible", evidence="missing.py:1")
+    assert result["err"]["code"] == "EVIDENCE.INVALID"
+    assert "missing.py:1" in result["err"]["message"]
+    assert world.writes == []
 
 
 def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
@@ -365,11 +388,17 @@ def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
     assert world.messages[-1]["recipient"] == "quality"
 
 
-def test_sanity_requires_stack_except_not_reproducible_fix(world):
-    assert world.run("sanity", stacked=None)["err"]["code"] == "SANITY.NOT_STACKED"
-    assert world.writes == []
-    world.beads[world.values["checked_bead"]]["metadata"]["role"] = "fix"
-    assert "ok" in world.run("sanity", outcome="not_reproducible", carry_forward=world.values["checked_bead"])
+def test_sanity_pass_closes_without_waiting_for_stack(world):
+    assert "ok" in world.run("sanity", stacked=None)
+    assert world.beads[world.values["sanity_bead"]]["status"] == "closed"
+    pending = world.beads[world.values["stack_bead"]]["metadata"]["pending_handoffs"]
+    assert pending == [{"sanity_bead": world.values["sanity_bead"], "checked_bead": world.values["checked_bead"],
+                       "branch": world.values["branch"], "commit": world.values["commit"],
+                       "pr_number": world.values["pr_number"]}]
+    calls = [argv for argv, _kwargs in world.calls]
+    marker = next(index for index, argv in enumerate(calls) if argv[:3] == ["bd", "update", world.values["stack_bead"]])
+    close = next(index for index, argv in enumerate(calls) if argv[:3] == ["bd", "close", world.values["sanity_bead"]])
+    assert marker < close
 
 
 @pytest.mark.parametrize("configured_cap", [None, 2])
@@ -686,6 +715,8 @@ def test_dev_replay_does_not_bypass_round_cap(world):
 def test_dev_changed_sha_after_completed_sanity_is_conflict(world):
     assert "ok" in world.run("dev")
     assert "ok" in world.run("sanity")
+    # Model the successful post-close stack handoff before the next layer runs.
+    world.beads["atm-phase-bj.stack"]["metadata"]["pending_handoffs"] = []
     writes = list(world.writes)
     assert world.run("dev", commit="c" * 40)["err"]["code"] == "REPLAY.CONFLICT"
     assert world.writes == writes
@@ -719,8 +750,11 @@ def test_shared_contract_covers_all_role_templates_and_ids(world):
     names = ("dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2", "sanity-fail.xml.j2",
              "dev-sanity-complete.md.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     for name in names:
-        assert set(hook.header(hook.TEMPLATES / name)["required_variables"]) <= declared, name
-        body = hook.sc_render.render(hook.TEMPLATES / name, world.values)
+        dispatch_only = {"beads_dir", "phase_lead", "close_context"} if name == "dev-sanity-template.xml.j2" else set()
+        assert set(hook.header(hook.TEMPLATES / name)["required_variables"]) <= declared | dispatch_only, name
+        values = {**world.values, "beads_dir": str(world.root / ".beads"), "phase_lead": "phase-lead",
+                  "close_context": {**world.values, "phase_lead": "phase-lead"}}
+        body = hook.sc_render.render(hook.TEMPLATES / name, values)
         role_id = "sanity_task_id" if name.startswith("dev-sanity") else "qa_task_id" if name.startswith("qa-") else "dev_task_id"
         if name != "sanity-fail.xml.j2":
             assert world.values[role_id] in body
@@ -739,6 +773,8 @@ def test_each_role_example_renders_every_shared_template(world, role):
     hook.validate(values, role)
     if role in ("dev", "fix"):
         values = {**world.values, **values}
+    values.update(beads_dir=str(world.root / ".beads"), phase_lead="phase-lead",
+                  close_context={**values, "phase_lead": "phase-lead"})
     common = ("dev-sanity-complete.md.j2", "sanity-fail.xml.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     names = {
         "dev": ("dev-complete.md.j2", "dev-sanity-template.xml.j2", *common, "rebase-required.xml.j2"),
@@ -760,7 +796,7 @@ def test_each_role_example_executes_its_close_path(world, role):
 @pytest.mark.parametrize("role, expected_writes", [
     ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
     ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
-    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
+    ("sanity", [["bd", "update"], ["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
     ("qa", [["bd", "close"], ["atm", "send"], ["atm", "task", "close"]]),
 ])
 def test_each_role_command_order_and_identity(world, role, expected_writes):
@@ -950,7 +986,7 @@ def test_close_from_documented_dispatch_and_result_files_derives_handoff(world, 
     derived = {"commit": world.head, "pr_number": str(world.pr_number),
                "pr_url": f"https://github.com/example/repo/pull/{world.pr_number}",
                "rebased_onto": "b" * 40}
-    assert set(assignment["values"]) == set(dispatch) | set(result) | set(DERIVED)
+    assert set(assignment["values"]) == set(dispatch) | set(result) | set(DERIVED) | {"close_context", "beads_dir", "phase_lead"}
     assert {name: assignment["values"][name] for name in derived} == derived
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", assignment["values"]["generated_at"])
     update = next(argv for argv, _ in world.writes if argv[:3] == ["bd", "update", dispatch["checked_bead"]])

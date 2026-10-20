@@ -3,6 +3,7 @@
 ## [0.18.1] - Unreleased
 
 ### Changed
+- Sanity closes on its selected verdict before handing off stacking. `dev-sanity` 3.2.0 and `dev-sanity-task` 2.19.0 use generated close inputs, inline bead notes (`dev-sanity-assignment` 1.3.0), derived reviewer timing, and idempotent stack replay (#498).
 - `dev-template.xml.j2` (`dev-task`) 3.16.0 requires the separate `--result` file for dev completion.
 - Close-hook dev/fix completion uses immutable dispatch vars plus a separate result file, deriving commit and PR identity at close (#485). The role-specific contract rejects missing derived identity even with skipped checks or unavailable GitHub, refuses ambiguous PRs, and renders only that role's required/result fields. Matching split examples and end-to-end handoff tests document assignment-time vars consumption.
 

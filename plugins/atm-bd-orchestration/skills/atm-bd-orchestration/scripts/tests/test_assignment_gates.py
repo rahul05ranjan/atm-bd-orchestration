@@ -44,6 +44,7 @@ def dumped(value): return json.dumps(value)
 
 def dev_runner(overrides=None):
     data = {
+        ("bd", "show", gates.stack_bead_id("{{ bead_prefix }}-phase-d"), "--json"): (0, dumped([{"metadata": {"pending_handoffs": []}}])),
         (gates.VALIDATE_PLAN, "--root", "{{ bead_prefix }}-phase-d"): (0, ""),
         ("bd", "ready", "-n", "0", "--json"): (0, dumped([{"id": "bead"}])),
         ("bd", "show", "bead", "--json"): (0, dumped([{"status": "open", "assignee": "", "metadata": {"difficulty": "normal", "pr_target": "target"}}])),
@@ -140,6 +141,13 @@ class AssignmentGateTests(unittest.TestCase):
         ]
         for fixture, runner in cases:
             with self.subTest(fixture=fixture): self.assert_fixture(fixture, ns("dev"), runner)
+
+    def test_dev_gate_stops_while_a_pass_handoff_is_pending(self):
+        pending = {"checked_bead": "atm-phase-d.fix-1", "branch": "fix/d-1", "commit": "abc"}
+        runner = dev_runner({("bd", "show", gates.stack_bead_id("{{ bead_prefix }}-phase-d"), "--json"):
+                             (0, dumped([{"metadata": {"pending_handoffs": [pending]}}]))})
+        self.assertEqual(gates.evaluate(ns("dev"), runner), "STACK_HANDOFF_PENDING")
+        self.assertFalse(any(argv == (gates.VALIDATE_PLAN, "--root", "{{ bead_prefix }}-phase-d") for _, argv in runner.calls))
 
     def test_a_poured_dev_bead_takes_its_sprint_containers_pr_target(self):
         poured = {("bd", "show", "bead", "--json"): (0, dumped([{"status": "open", "assignee": "", "labels": ["stage:dev"],
@@ -274,6 +282,7 @@ class AssignmentGateTests(unittest.TestCase):
             ("bd fails", {bead: (1, "", "database down")}, ("GATE_CANNOT_RUN", 2)),
             ("invalid metadata", {bead: (0, dumped([{"metadata": "bad"}]))}, ("GATE_CANNOT_RUN", 2)),
             ("invalid layers", {bead: (0, dumped([{"metadata": {"layers": "bad"}}]))}, ("GATE_CANNOT_RUN", 2)),
+            ("pending sanity handoff", {bead: (0, dumped([{"metadata": {"pending_handoffs": [{"checked_bead": "fix"}], "layers": []}}]))}, ("GATE_CANNOT_RUN", 2)),
             ("missing head", {bead: (0, dumped([{"metadata": {"layers": [{"branch": "top"}]}}]))}, ("GATE_CANNOT_RUN", 2)),
             ("missing fallback", {bead: (0, "[{}]"), head: (1, "", "unknown ref")}, ("GATE_CANNOT_RUN", 2)),
         ]
