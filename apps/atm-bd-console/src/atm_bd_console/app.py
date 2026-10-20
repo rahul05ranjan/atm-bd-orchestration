@@ -173,6 +173,7 @@ def sanity_text(
 
 _QUALITY_HEADERS = ("Completed", "QA", "Sprint", "QA bead", "PR", "Round", "B", "I", "M", "Elapsed")
 _QUALITY_QA_COLUMN = 1
+_QUALITY_SPRINT_COLUMN = 2
 _QUALITY_BLOCKING_COLUMN = 6
 _QUALITY_IMPORTANT_COLUMN = 7
 _QUALITY_MINOR_COLUMN = 8

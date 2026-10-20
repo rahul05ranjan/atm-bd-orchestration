@@ -14,6 +14,11 @@ from textual.widgets._markdown import MarkdownBlock
 
 from atm_bd_console import findings_renderer, ledger_source, render, runs
 from atm_bd_console.app import (
+    _QUALITY_BLOCKING_COLUMN,
+    _QUALITY_IMPORTANT_COLUMN,
+    _QUALITY_MINOR_COLUMN,
+    _QUALITY_QA_COLUMN,
+    _QUALITY_SPRINT_COLUMN,
     ConsoleApp,
     _agent_name,
     _quality_row,
@@ -195,8 +200,13 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
             assert options.option_count == 1
             label = options.get_option_at_index(0).prompt
             fields = label.plain.split(" | ")
-            assert fields[1].strip().endswith("fail") and fields[2].strip() == "bj-4"
-            assert [fields[index].strip() for index in (6, 7, 8)] == ["", "1", ""]
+            assert (
+                fields[_QUALITY_QA_COLUMN].strip().endswith("fail")
+                and fields[_QUALITY_SPRINT_COLUMN].strip() == "bj-4"
+            )
+            assert [fields[index].strip() for index in (
+                _QUALITY_BLOCKING_COLUMN, _QUALITY_IMPORTANT_COLUMN, _QUALITY_MINOR_COLUMN,
+            )] == ["", "1", ""]
             assert label.plain.rstrip().endswith("840s")
             widget = app.query_one("#quality-findings")
             pending = capture_updates(monkeypatch, widget)
