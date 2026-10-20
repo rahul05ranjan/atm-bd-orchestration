@@ -658,6 +658,10 @@ def render(template: str, values: dict, tmp_path: Path) -> subprocess.CompletedP
 @pytest.mark.parametrize("kind", list(STEPS))
 def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullRequest | None, tmp_path: Path) -> None:
     spec = dispatch_spec(context(mapped(STEPS[kind]), pr), PHASE_TEMPLATES)
+    if kind == "sanity":
+        assert isinstance(spec, Err), spec
+        assert "beads_dir, phase_lead, and close_context" in spec.error.fix
+        return
     assert isinstance(spec, Ok), spec
     template, values = expected(kind, pr)
     assert spec.value.template == f".claude/skills/atm-bd-orchestration/templates/{template}"
@@ -671,10 +675,10 @@ def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullReque
 def test_dispatch_spec_uses_named_template_variable_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(DISPATCH_KEYS, "task", "task_identifier")
 
-    spec = dispatch_spec(context(mapped(SANITY), None), PHASE_TEMPLATES)
+    spec = dispatch_spec(context(mapped(SPRINT_QA), PR), PHASE_TEMPLATES)
 
     assert isinstance(spec, Ok), spec
-    assert spec.value.vars["task_identifier"] == SANITY.id
+    assert spec.value.vars["task_identifier"] == SPRINT_QA.id
     assert "task_id" not in spec.value.vars
 
 

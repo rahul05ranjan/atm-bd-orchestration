@@ -93,10 +93,10 @@ class TemplateContractTests(unittest.TestCase):
 
     def test_sanity_assignment_checks_only_frozen_history_and_pinned_commit_before_link(self):
         text = (ROOT / "templates/dev-sanity-template.xml.j2").read_text()
-        self.assertIn("frozen PASS history and pinned commit", text)
+        self.assertIn("assignment-gates.py sanity", text)
         self.assertIn("assignment-gates.py sanity --bead", text)
         self.assertIn("--commit {{ commit }}", text)
-        self.assertIn("An unlinked PR is normal", text)
+        self.assertIn("Do not run a separate bd ready or bd show", text)
         for obsolete in ("gh pr view", "SANITY.ZERO_DELTA", "SANITY.NOT_REBASED"):
             self.assertNotIn(obsolete, text)
 
@@ -115,11 +115,11 @@ class TemplateContractTests(unittest.TestCase):
 
     def test_sanity_template_links_after_selection_and_completes_through_hook(self):
         text = (ROOT / "templates/dev-sanity-template.xml.j2").read_text()
-        self.assertIn("linking happens after the selected sanity PASS", text)
-        self.assertIn("For PASS, first obtain the sanity-stack result", text)
+        self.assertIn("without waiting for any stack result", text)
+        self.assertIn("after successful close", text)
         self.assertIn("atm-task-close.py --role sanity --vars", text)
-        self.assertIn("creates no finding bead", text)
-        self.assertIn("For CANNOT_RUN, the hook refuses", text)
+        self.assertIn("FAIL retains selected undone numbers and reasons", text)
+        self.assertIn("CANNOT_RUN refuses through the hook", text)
         self.assertNotIn("sanity-run-table.md.j2", text)
         self.assertNotIn('<step id="e3">', text)
         self.assertNotIn("STALE_BASE", text)
@@ -466,7 +466,7 @@ class BlockedRefusalTests(unittest.TestCase):
     """A task whose bead is not ready, or that meets a blocker mid-task, is refused with the bead left open; never held."""
 
     NOT_READY_STEP = {"dev-template.xml.j2": "a1", "fix-assignment.xml.j2": "a1",
-                      "dev-sanity-template.xml.j2": "a1", "qa-template.xml.j2": "a2",
+                      "qa-template.xml.j2": "a2",
                       "review-template.xml.j2": "a", "plan-review-template.xml.j2": "a"}
 
     def _rendered(self, name: str) -> str:
@@ -499,11 +499,11 @@ class BlockedRefusalTests(unittest.TestCase):
                 if name == "qa-template.xml.j2":
                     self.assertLess(step_a.index("bd ready -n 0 --json"), step_a.index("gh pr view"))
                 else:
-                    self.assertLess(step_a.index("bd ready"), step_a.index("claim with"))
-                    self.assertLess(step_a.index("bd ready"), step_a.index("assignment-gates.py sanity"))
+                    self.assertLess(step_a.index("assignment-gates.py sanity"), step_a.index("claim with"))
+                    self.assertNotIn("bd ready -n 0", step_a)
 
     def test_a_mid_task_blocker_returns_the_bead_open_and_refuses(self):
-        for name in self.NOT_READY_STEP:
+        for name in (*self.NOT_READY_STEP, "dev-sanity-template.xml.j2"):
             with self.subTest(template=name):
                 text = self._rendered(name)
                 if name == "dev-sanity-template.xml.j2":
@@ -582,7 +582,7 @@ class DevAssignmentTests(unittest.TestCase):
         self.assertEqual(fixed.returncode, 0, fixed.stderr)
         self.assertIn("<layer-prs><![CDATA[250 262]]></layer-prs>", fixed.stdout)
         self.assertIn("Run sanity-split once, with `--layer-pr <n>` for each PR in `<layer-prs>` (empty: the single range from `<base>`)", fixed.stdout)
-        self.assertIn('--base "$base" "${layer_pr_args[@]}"', (ROOT.parents[1] / "agents/dev-sanity.md").read_text())
+        self.assertIn("--layer-pr", (ROOT.parents[1] / "agents/dev-sanity.md").read_text())
         self.assertNotIn("diff_base", (ROOT / "templates/dev-sanity-template.xml.j2").read_text())
         qa = _example("qa-template-vars.json")
         single = _render("qa-template.xml.j2", qa)
@@ -596,11 +596,12 @@ class DevAssignmentTests(unittest.TestCase):
         self.assertIn("change = git diff <baseRefOid>...<headRefOid> of each layer PR 250 262 (gh pr view <n> --json baseRefOid,headRefOid).", layered.stdout)
         self.assertNotIn(f"git diff origin/{qa['base']}", layered.stdout)
 
-    def test_sanity_links_the_stack_on_pass(self):
+    def test_sanity_closes_pass_before_stack_handoff(self):
         text = (ROOT.parents[1] / "agents/dev-sanity.md").read_text()
-        self.assertIn("sanity-stack-link --input <file>", text)
+        self.assertIn("sanity-stack-link --input <stack-input.json>", text)
         self.assertIn("On `stacked`", text)
-        self.assertIn("only then run `atm-task-close.py", text)
+        self.assertIn("Only after successful PASS close", text)
+        self.assertIn("never edit generated vars", text)
         self.assertNotIn("SANITY.NOT_STACKED", text)
 
     def test_completion_preserves_stack_evidence_without_requiring_link_or_landing(self):

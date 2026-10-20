@@ -381,9 +381,9 @@ def phase(
                                  f"label the phase root {file.label}"))
     by_id = {bead.id: bead for bead in shown + open_beads + ready}
     beads = tuple(by_id.values())
+    errors: list[tuple[str, Error]] = []
     ready_ids = {bead.id for bead in ready}
     sprints: list[Sprint] = []
-    errors: list[tuple[str, Error]] = []
     for sprint_id in file.sprints:
         bead = by_id.get(sprint_id)
         if bead is None:
@@ -427,6 +427,11 @@ def dispatch_spec(ctx: DispatchContext, templates: Mapping[str, str]) -> Result[
         keys["pr_number"]: str(pr.number) if pr else "", keys["pr_url"]: pr.url if pr else "",
         keys["layer_prs"]: layer_prs,
     }
+    if current.kind == SANITY_KIND and template.rsplit("/", 1)[-1] == "dev-sanity-template.xml.j2":
+        return Err(ConfigInvalid(
+            "config_invalid", f"{current.bead_id}.sanity_assignment", "close vars unavailable",
+            "supply beads_dir, phase_lead, and close_context from the dev close handoff before dispatching sanity",
+        ))
     if current.kind == SANITY_KIND:
         values |= {
             keys["primary_checkout"]: ctx.repo.primary_checkout,

@@ -43,6 +43,7 @@ def runtime(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(runner.beads_source, "ready", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "members", lambda *_: Ok(()))
     monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Ok(()))
+    monkeypatch.setattr(runner.atm_source, "task_closed", lambda *_, **__: Ok(False))
     monkeypatch.setattr(runner.atm_source, "send", lambda *_: Ok(None))
     monkeypatch.setattr(runner.atm_source, "assign", lambda *args: assigned.append(args) or Ok(None))
     config = replace(CONFIG, repo_root=str(repo), code_root=str(repo), github="off", dry_run=False, no_fetch=False)

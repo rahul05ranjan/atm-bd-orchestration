@@ -151,7 +151,7 @@ def test_config_template_declares_exactly_the_spec_variables_and_sanity_default(
 
 def test_versions_agree():
     version = install.package_version(PKG)
-    assert version == "0.18.0"
+    assert version == "0.18.1"
     assert json.loads((PKG / ".claude-plugin/plugin.json").read_text())["version"] == version
     assert f"## [{version}]" in (PKG / "CHANGELOG.md").read_text()
 
@@ -563,7 +563,7 @@ def test_fresh_install(tmp_path, capsys):
     assert config["reviewers_round1"] == ["req-qa", "arch-qa"]
     # the install record: version and the sha256 of every file written
     record = lock(repo)
-    assert record["package"] == "atm-bd-orchestration" and record["version"] == "0.18.0"
+    assert record["package"] == "atm-bd-orchestration" and record["version"] == "0.18.1"
     expected = {f".claude/{rel}" for rel in artifacts["skills"] + artifacts["agents"]} | {install.CONFIG_OUT}
     assert set(record["files"]) == expected
     assert all(sha((repo / k).read_bytes()) == v for k, v in record["files"].items())
@@ -577,7 +577,8 @@ def test_fresh_install(tmp_path, capsys):
     assert role.startswith("---\nname: dev-sanity\n")
     assert "| Setting | Where | my-repo |" in role and "`my-sanity`" in role
     send_commands = re.findall(r"\batm\s+send\b[^`]*", role)
-    assert any("rebase-required.xml.j2" in command for command in send_commands)
+    assert not any("rebase-required.xml.j2" in command for command in send_commands)
+    assert "sanity-stack-link notifies the lead" in role
     assert all(not re.search(r"(?<!\S)--task-id(?:=|\s|$)", command) for command in send_commands)
     example = (dest / "skills/atm-bd-orchestration/examples/dev-sanity-template-vars.json").read_text()
     assert "https://github.com/owner/my-repo/pull/" in example and str(repo.resolve().parent / "my-repo-worktrees") in example
@@ -877,7 +878,7 @@ def test_migration_owns_shipped_and_legacy_bytes_and_fails_on_others(tmp_path, p
     assert rc == 0, err
     assert (repo / ".claude" / script).read_bytes() == (PKG / script).read_bytes()
     assert not (repo / ".claude" / dropped).exists()
-    assert lock(repo)["version"] == "0.18.0"
+    assert lock(repo)["version"] == "0.18.1"
 
 
 def _git_has(rev: str) -> bool:

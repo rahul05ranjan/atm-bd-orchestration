@@ -1,5 +1,5 @@
 name: atm-bd-orchestration
-version: 0.18.0
+version: 0.18.1
 description: >
   Bead-driven phase orchestration for ATM agent teams: the phase plan as a
   beads graph (atm-beads), dispatch, dev-sanity, QA and stack landing driven
@@ -68,7 +68,6 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/assignment-gates.py
     - skills/atm-bd-orchestration/scripts/atm-hook-doctor.py
     - skills/atm-bd-orchestration/scripts/atm-task-close.py
-    - skills/atm-bd-orchestration/scripts/bd_commands.py
     - skills/atm-bd-orchestration/scripts/bead-groups
     - skills/atm-bd-orchestration/scripts/bead-queues
     - skills/atm-bd-orchestration/scripts/bead_formulas.py
@@ -78,6 +77,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/jev_client.py
     - skills/atm-bd-orchestration/scripts/post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/post_mortem_jev.py
+    - skills/atm-bd-orchestration/scripts/sanity-close-vars
     - skills/atm-bd-orchestration/scripts/sanity-merge
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
@@ -122,6 +122,7 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_jev.py
     - skills/atm-bd-orchestration/scripts/tests/test_qa_report_contract.py
+    - skills/atm-bd-orchestration/scripts/tests/test_sanity_close_vars.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_run_history.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_split.py

@@ -86,7 +86,9 @@ def validate_shared_vars(values, role):
     contract = header(TEMPLATES / "task-close-vars.j2")
     fields = contract["render_variables_by_role"][role]
     if role == "fix" and values["outcome"] == "not_reproducible":
-        fields = [name for name in fields if name != "branch"]
+        fields = [name for name in fields if name not in ("branch", "stack_bead")]
+    if role == "sanity" and values["outcome"] == "not_reproducible":
+        fields = [name for name in fields if name != "stack_bead"]
     render_values = {name: values[name] for name in fields if name in values}
     contract.update(required_variables=fields, defaults={})
     try:
@@ -223,15 +225,20 @@ def validate(values, role):
     declared = set(contract["required_variables"])
     missing = required - values.keys()
     if role == "fix" and values.get("outcome") == "not_reproducible":
-        missing -= {"branch", "commit", "pr_number"}
+        missing -= {"branch", "commit", "pr_number", "stack_bead"}
+    if role == "sanity" and values.get("outcome") == "not_reproducible":
+        missing -= {"stack_bead"}
     unknown = values.keys() - declared - contract.get("defaults", {}).keys()
     if missing:
         raise CloseError("VARS.MISSING", ", ".join(sorted(missing)), "Supply every shared template variable in the lead's vars file.")
     if unknown:
         raise CloseError("VARS.UNKNOWN", ", ".join(sorted(unknown)), "Remove variables no shared template declares.")
     names = ["phase", "sprint", "primary_checkout", "worktree_path", "checked_bead", "dev_task_id", "sanity_task_id", "qa_task_id"]
-    if role in ("dev", "fix", "sanity"):
+    stack_required = values["outcome"] != "not_reproducible"
+    if role in ("dev", "fix", "sanity") and stack_required:
         names.append("stack_bead")
+    if role == "fix" and values["outcome"] == "not_reproducible" and not values.get("stack_bead"):
+        names.append("pr_target")
     if values["outcome"] != "not_reproducible":
         names += ["branch"] if role in ("dev", "fix") else ["branch", "commit", "pr_number"]
     elif not re.search(r"\S+:\d+", str(values["evidence"])):
@@ -239,7 +246,7 @@ def validate(values, role):
     for name in names:
         if not str(values[name] or "").strip():
             raise CloseError("VARS.EMPTY", name, f"Populate {name} in the shared vars file.")
-    for name in ("primary_checkout", "worktree_path", "phase", *(["stack_bead"] if role in ("dev", "fix", "sanity") else [])):
+    for name in ("primary_checkout", "worktree_path", "phase", *(["stack_bead"] if role in ("dev", "fix", "sanity") and stack_required else [])):
         if not isinstance(values[name], str):
             raise CloseError("VARS.INVALID", f"{name} must be a string, got {type(values[name]).__name__}",
                              f"Set {name} to a non-empty string in the lead's shared vars file.")
@@ -326,19 +333,31 @@ class Hook:
     def events(self, task):
         return self.json(["atm", "task", "events", task, "--all", "--json"])["events"]
 
+    def beads_directory(self):
+        configured = self.env.get("BEADS_DIR")
+        if configured:
+            return configured
+        location = self.json(["bd", "where", "--json"])
+        path = location.get("path") if isinstance(location, dict) else None
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise CloseError("BEADS_DIR.INVALID", repr(path), "Set BEADS_DIR or repair `bd where --json` to return an absolute beads path.")
+        return path
+
     def snapshot(self, *, include_stack=False):
         values = self.values
         beads = {self.task}
         tasks = {self.task}
         if self.role in ("dev", "fix"):
             beads.add(values["sanity_bead"])
-            if include_stack:
+            if include_stack and values.get("stack_bead"):
                 beads.add(values["stack_bead"])
             tasks.add(values["sanity_task_id"])
         elif self.role == "sanity":
             beads.add(values["checked_bead"])
             if values["verdict"] == "PASS":
                 beads.add(values["qa_bead"])
+                if values.get("outcome") != "not_reproducible":
+                    beads.add(values["stack_bead"])
                 tasks.update((values["dev_task_id"], values["qa_task_id"]))
         self.records = {bead: self.read_bead(bead) for bead in sorted(beads)}
         self.task_history = {task: self.events(task) for task in sorted(tasks)}
@@ -399,6 +418,14 @@ class Hook:
         return assignment_id == self.assignment_id
 
     def stack_top(self):
+        if not self.values.get("stack_bead"):
+            branch = self.values.get("pr_target") or self.values.get("base")
+            if not branch:
+                raise CloseError("VARS.EMPTY", "pr_target", "Set pr_target to the checked layer's lower-bound branch.")
+            head = self.run(["git", "rev-parse", f"origin/{branch}"], git=True).stdout.strip()
+            if not head:
+                raise CloseError("STACK.TOP", branch, f"Fetch and verify origin/{branch} before retrying.")
+            return branch, head
         self.last_json_argv = ["bd", "show", self.values["stack_bead"], "--json"]
         return select_stack_top(
             self.bead(self.values["stack_bead"]), self.values["pr_target"],
@@ -496,8 +523,20 @@ class Hook:
         if due is None:
             due = not events or (is_terminal(events) and self.bead(bead).get("status") == "open")
         if due:
-            self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
-                      "--vars", str(path or self.path)], lead=True)
+            if template == "dev-sanity-template.xml.j2":
+                context = read_vars(Path(path or self.path))
+                with tempfile.TemporaryDirectory(prefix="sanity-dispatch-") as directory:
+                    dispatch = Path(directory) / "completion-vars.json"
+                    close_context = {**context, "phase_lead": self.lead,
+                                     "budget": context.get("budget", "full")}
+                    dispatch.write_text(json.dumps({**context, "close_context": close_context,
+                                                    "beads_dir": self.beads_directory()}))
+                    self.render(template, read_vars(dispatch))
+                    self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
+                              "--vars", str(dispatch)], lead=True)
+            else:
+                self.run(["atm", "task", "assign", member, "--task-id", bead, "--template", str(TEMPLATES / template),
+                          "--vars", str(path or self.path)], lead=True)
         self.assigned.append(bead)
 
     def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False):
@@ -526,6 +565,23 @@ class Hook:
         self.require_completion_identity(("commit",))
         self.key = [self.task, self.values.get("verdict", ""), head]
 
+    def verify_not_reproducible_evidence(self):
+        evidence = str(self.values.get("evidence", ""))
+        match = re.fullmatch(r"(.+):([1-9][0-9]*)", evidence)
+        if not match:
+            raise CloseError("EVIDENCE.INVALID", evidence, "Supply a repo-relative file:line citation.")
+        relative, line = match.group(1), int(match.group(2))
+        path = Path(relative)
+        target = (self.worktree / path).resolve()
+        if path.is_absolute() or ".." in path.parts or not target.is_relative_to(self.worktree):
+            raise CloseError("EVIDENCE.INVALID", evidence, "Cite a file inside the assigned worktree.")
+        try:
+            lines = target.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as error:
+            raise CloseError("EVIDENCE.INVALID", evidence, f"Restore the cited file in {self.worktree}: {error}") from error
+        if line > len(lines):
+            raise CloseError("EVIDENCE.INVALID", evidence, f"Cited line {line} does not exist in {relative} ({len(lines)} lines).")
+
     def require_completion_identity(self, fields=("commit", "pr_number", "pr_url")):
         if self.values["outcome"] == "not_reproducible":
             return
@@ -537,7 +593,7 @@ class Hook:
     def dev(self, skip):
         values = self.values
         self.derive_local()
-        if self.snapshot(include_stack=not skip or values["outcome"] == "not_reproducible"):
+        if self.snapshot(include_stack=not skip or (values["outcome"] == "not_reproducible" and bool(values.get("stack_bead")))):
             return
         template = "fix-complete.md.j2" if self.role == "fix" else "dev-complete.md.j2"
         record = self.bead(values["checked_bead"])
@@ -552,7 +608,9 @@ class Hook:
             completion = Path(directory) / "completion-vars.json"
             if values["outcome"] == "not_reproducible":
                 branch, commit = self.stack_top()
-                assignment = {**values, "branch": branch, "commit": commit}
+                assignment = {**values, "branch": branch, "commit": commit,
+                              "close_context": {**values, "phase_lead": self.lead},
+                              "beads_dir": self.beads_directory()}
                 self.render("dev-sanity-template.xml.j2", assignment)
                 assignment_path = Path(directory) / "sanity-vars.json"
                 assignment_path.write_text(json.dumps(assignment), encoding="utf-8")
@@ -567,7 +625,6 @@ class Hook:
                 self.keep_recorded_pr()
                 values["rebased_onto"] = self.run(["git", "rev-parse", f"origin/{values['pr_target']}"], git=True).stdout.strip()
             self.require_completion_identity()
-            self.render("dev-sanity-template.xml.j2")
             self.render(template)
             completion.write_text(json.dumps(values), encoding="utf-8")
             self.path = completion
@@ -610,15 +667,13 @@ class Hook:
         if verdict == "PASS":
             checked = self.bead(values["checked_bead"])
             is_fix = (checked.get("metadata") or {}).get("role") == "fix" or "stage:fix" in checked.get("labels", [])
-            if not (is_fix and values["outcome"] == "not_reproducible") and (not isinstance(values["stacked"], dict) or values["stacked"].get("result") != "stacked"):
-                raise CloseError("SANITY.NOT_STACKED", "PASS has no stacked result", "Link the checked layer through sanity-stack before closing PASS.")
             self.render("qa-template.xml.j2")
             if is_fix and values.get("carry_forward", "") != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "fix QA requires carry_forward", "Supply the checked fix bead as carry_forward.")
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
             self.close_bead(bead, f"PASS at {values['commit']}")
-            self.close_task(values["dev_task_id"], lead=True)
+            self.close_task(values["dev_task_id"], "dev-sanity-complete.md.j2", lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
             self.assign(self.config["qa_member"], values["qa_bead"], "qa-template.xml.j2")
             return
@@ -680,6 +735,8 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
             values = merge_result(values, read_vars(args.result), args.role)
         validate_shared_vars(values, args.role)
         hook = Hook(args.role, values, args.vars, runner, clock)
+        if args.role == "fix" and values.get("outcome") == "not_reproducible":
+            hook.verify_not_reproducible_evidence()
         started = clock()
         escalated = hook.dev(args.skip_checks) if args.role in ("dev", "fix") else hook.sanity() if args.role == "sanity" else hook.qa()
         result = {"role": args.role, "bead": hook.task, "commit": values.get("commit", ""), "pr_number": values.get("pr_number", ""),

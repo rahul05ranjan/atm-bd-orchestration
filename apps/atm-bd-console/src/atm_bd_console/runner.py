@@ -8,10 +8,10 @@ from functools import partial
 from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
-from .dispatch import sprint_of, verification_reason
-from .enums import MergeState, SprintState
+from .dispatch import candidates, sprint_of, verification_reason
+from .enums import MergeState, PrState, SprintState
 from .log import TickLog, create_console_logger, error_message
-from .result import Err, NotFound, Ok
+from .result import Err, NotFound, Ok, Result
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import (
     Action,
@@ -22,10 +22,12 @@ from .types import (
     Merge,
     MergeFile,
     Metrics,
+    Phase,
     PrsFile,
     Snapshot,
     State,
     StepResult,
+    Task,
 )
 
 
@@ -179,7 +181,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         for line in history.value[-5:]
     ) if isinstance(history, Ok) else ()
     snapshot, _, next_state = model.tick(
-        Inputs(now, config.lead, repo, config.interval_s, phase, Ok(()), Ok(()), Ok(()), None, merges, prs, gh, Ok(())),
+        Inputs(now, config.lead, repo, config.interval_s, phase, Ok(()), Ok(()), Ok(()), None, merges, prs, gh, Ok(()), Ok(())),
         state,
         now,
         partial(atm_bd.dispatch_spec, templates=file.templates),
@@ -202,6 +204,24 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     except (OSError, ValueError, RuntimeError) as error:
         run_data, runs_error = None, str(error)
     return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error)
+
+
+def _closed_tasks(
+    config: Config, phase: Result[Phase], tasks: Result[tuple[Task, ...]], logger: TickLog,
+) -> Result[tuple[str, ...]]:
+    """Ids of would-be dispatch candidates whose ATM task is closed. `atm task list` shows open tasks only, so each
+    candidate's history is read once per tick with `atm task events`; no other bead costs a call."""
+    if not isinstance(phase, Ok) or not isinstance(tasks, Ok):
+        return Ok(())
+    closed: list[str] = []
+    for step in candidates(phase.value, tasks.value, frozenset()):
+        result = logger.result("atm.task_events", atm_source.task_closed(step.bead_id, config.team, config.lead),
+                               task_id=step.bead_id)
+        if isinstance(result, Err):
+            return result
+        if result.value:
+            closed.append(step.bead_id)
+    return Ok(tuple(closed))
 
 
 def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
@@ -257,6 +277,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
             runs_error = str(run_error)
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
+    closed_tasks = _closed_tasks(config, phase, tasks, logger)
+    closed = frozenset(closed_tasks.value) if isinstance(closed_tasks, Ok) else frozenset()
     code_root = config.code_root or config.repo_root
     worktrees = logger.result("git.worktrees", git_source.worktrees(code_root))
     task_ids = tuple(task.id for task in tasks.value) if isinstance(tasks, Ok) else ()
@@ -270,6 +292,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         config.github,
         now,
         tasks.value if isinstance(tasks, Ok) else (),
+        closed,
     ) if isinstance(phase, Ok) else None
     remotes = None
     if due and due.fetch and not config.no_fetch:
@@ -282,24 +305,10 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                     replace(state, remotes=remotes.value), phase.value,
                     repo.value.bead_prefix, config.github, now,
                     tasks.value if isinstance(tasks, Ok) else (),
+                    closed,
                 )
     saved_merges = logger.result("cache.merges", store.load_merges())
     saved_prs = logger.result("cache.prs", store.load_prs())
-    merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
-    merge_results = []
-    if due:
-        for branch, target in due.merges:
-            checked = remotes if isinstance(remotes, Err) else logger.result(
-                "git.merge", git_source.merge(code_root, branch, target), branch=branch, target=target,
-            )
-            if not isinstance(remotes, Err):
-                merge_results.append(checked)
-            if isinstance(checked, Ok):
-                merges[branch] = checked.value
-            else:
-                unavailable = Merge(branch, target, MergeState.ERROR, (), (verification_reason(checked.error),), now)
-                merges[branch] = unavailable
-                merge_results.append(Ok(unavailable))
     cached_prs = saved_prs.value if config.github != "off" and isinstance(saved_prs, Ok) else None
     gh = cached_prs.gh if cached_prs is not None else _gh(config.github)
     gh = replace(gh, poll_interval_s=config.github_poll_interval_s, quota_threshold=config.github_quota_threshold)
@@ -315,18 +324,47 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         refreshed_prs, gh = _refresh_github(config, now, gh, branch_groups)
         attempted_at = now
         if isinstance(refreshed_prs, Ok):
-            prs_input = refreshed_prs
-            prs = refreshed_prs.value
-            prs_read_at = now
+            prs_input, prs, prs_read_at = refreshed_prs, refreshed_prs.value, now
         elif cached_prs is None:
             prs_input = refreshed_prs
         else:
             refresh_errors.append(refreshed_prs.error)
-        logger.event(
-            "github_read", forced=force_github, outcome="paused" if gh.paused else "failed" if isinstance(refreshed_prs, Err) else "ok",
-            error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None,
-        )
-    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads)
+        logger.event("github_read", forced=force_github, outcome="paused" if gh.paused else "failed" if isinstance(refreshed_prs, Err) else "ok",
+                     error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None)
+    merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
+    merge_results = []
+    # A pair whose PR is closed or merged is not a merge candidate; a pair with no PR yet is still
+    # checked, because dispatch verification of a ready step needs its merge result.
+    open_pairs = {(pr.head, pr.base) for pr in prs if pr.state in (PrState.OPEN, PrState.DRAFT)}
+    ended_pairs = {(pr.head, pr.base) for pr in prs if pr.state in (PrState.MERGED, PrState.CLOSED)} - open_pairs
+    listed = remotes.value if isinstance(remotes, Ok) else state.remotes if remotes is None else None
+    remote_branches = None if listed is None else {remote.branch for remote in listed}
+    if due:
+        for branch, target in due.merges:
+            if (branch, target) in ended_pairs:
+                if (cached := merges.get(branch)) is not None and cached.target == target:
+                    del merges[branch]
+                continue
+            missing = None if remote_branches is None or (branch, target) not in open_pairs else (
+                MergeState.HEAD_NOT_PUSHED if branch not in remote_branches else
+                MergeState.BASE_DELETED if target not in remote_branches else None
+            )
+            if missing is not None:
+                merges[branch] = Merge(branch, target, missing, (), (missing.value,), now)
+                merge_results.append(Ok(merges[branch]))
+                continue
+            checked = remotes if isinstance(remotes, Err) else logger.result(
+                "git.merge", git_source.merge(code_root, branch, target), branch=branch, target=target,
+            )
+            if not isinstance(remotes, Err):
+                merge_results.append(checked)
+            if isinstance(checked, Ok):
+                merges[branch] = checked.value
+            else:
+                unavailable = Merge(branch, target, MergeState.ERROR, (), (verification_reason(checked.error),), now)
+                merges[branch] = unavailable
+                merge_results.append(Ok(unavailable))
+    inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads, closed_tasks)
     snapshot, actions, next_state = model.tick(inputs, state, now, partial(atm_bd.dispatch_spec, templates=file.value.templates))
     steps = {item.bead_id: item for item in phase.value.steps} if isinstance(phase, Ok) else {}
     for section in snapshot.sections:

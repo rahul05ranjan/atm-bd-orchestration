@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import assert_never
 
+from .agent_roles import agent_group
 from .enums import AgentIcon, CiState, MergeState, PrState, QaState, SprintState
 from .types import AgentView, Member
 
@@ -114,6 +115,8 @@ def merge_icon(state: MergeState) -> Icon:
             return MERGE_CLEAN
         case MergeState.CONFLICT:
             return icon(PrState.CONFLICT)
+        case MergeState.HEAD_NOT_PUSHED | MergeState.BASE_DELETED:
+            return icon(PrState.UNKNOWN)
         case MergeState.ERROR:
             return MERGE_ERROR
         case MergeState.UNKNOWN:
@@ -128,7 +131,7 @@ def icon_for(member: Member | AgentView | None) -> Icon:
 
     if member is None:
         return icon(AgentIcon.OTHER)
-    agent_type = (member.agent_type or "").lower()
+    agent_type = agent_group(member.agent_type)
     glyph, color = icon(agent_icon_of(member, agent_type))
     # A qa agent whose state is not known yet is drawn without a colour.
     if agent_type == "qa" and getattr(member, "qa_state", None) is None:

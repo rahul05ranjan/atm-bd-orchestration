@@ -232,6 +232,33 @@ def test_merge_error_keeps_pr_state_and_reports_problem():
     assert any("merge check failed" in problem.text and pr.head in problem.text for problem in result.problems)
 
 
+def test_merge_check_states_are_open_pr_only_and_named():
+    snapshot = _snapshot()
+    pr = replace(PR_ROW.pr, state=PrState.OPEN, head=SPRINT.branch)
+    error = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.ERROR)
+    closed = replace(pr, state=PrState.CLOSED)
+    assert sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=closed, merge=error),)))[0].problems == ()
+    closed_inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
+                            members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((closed,)), merges=(Ok(error),),
+                            remotes=None)
+    result, _, _ = tick(closed_inputs, INITIAL_STATE, NOW, lambda _: None)
+    assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
+    result, _, _ = tick(replace(closed_inputs, prs=Ok((pr,))), INITIAL_STATE, NOW, lambda _: None)
+    assert any(problem.key.startswith("merge_error:") for problem in result.problems)
+
+    unpushed = replace(error, state=MergeState.HEAD_NOT_PUSHED)
+    facts = sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=pr, merge=unpushed),)))[0]
+    assert facts.problems == (f"head not pushed for {pr.head}",)
+    inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
+                     members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((pr,)), merges=(Ok(unpushed),), remotes=None)
+    result, _, _ = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
+    assert not any("merge check failed" in problem.text for problem in result.problems)
+
+    deleted = replace(error, state=MergeState.BASE_DELETED)
+    facts = sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=pr, merge=deleted),)))[0]
+    assert facts.problems == (f"base deleted for {pr.base}",)
+
+
 def test_markdown_is_stable_and_escapes_sprint_ids():
     snapshot = _snapshot()
     sprint = replace(snapshot.phase_data.sprints[0], id="atm-bi-1|test\\x")

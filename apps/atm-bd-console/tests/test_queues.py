@@ -24,6 +24,7 @@ def bead(ident: str, stage: str, *, status: str = "open", parent: str | None = N
 def fixture_rows():
     rows = [
         bead(ROOT, "root", metadata={"integration_branch": "integrate/phase-bj"}),
+        bead(f"{ROOT}.stack", "stack"),
         bead("sprint-empty", "sprint", parent=ROOT),
         bead("dev-flight", "dev", parent=ROOT),
         bead("dev-stalled", "dev", parent=ROOT),

@@ -85,7 +85,8 @@ SPRINT = Sprint(
     "atm-bh-6", "tick rules", 6, "sprint/bh-6-tick-rules", "integrate/phase-bh", "phase-bh", ("atm-bh-1", "atm-bh-4"),
     True, 3, SprintState.CLOSED, "closed",
 )
-PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (STEP,), (("atm-bh-7.qa", NOT_FOUND),))
+PHASE = Phase("atm-phase-bh", "phase:bh", "atm-bd-console", True, (SPRINT,), (STEP,),
+              (("atm-bh-7.qa", NOT_FOUND),))
 PHASE_TEMPLATES = {
     purpose: f".claude/skills/atm-bd-orchestration/templates/{filename}.xml.j2"
     for purpose, filename in (
@@ -119,7 +120,7 @@ DISPATCH_CONTEXT = DispatchContext(
 )
 INPUTS = Inputs(
     NOW, "fenix", REPO_CONFIG, 60, Ok(PHASE), Ok((MEMBER,)), Err(TIMEOUT), Ok((WORKTREE,)), Ok((REMOTE_REF,)),
-    (Ok(MERGE), Err(UNREACHABLE)), Ok((PULL_REQUEST,)), GH_STATUS, Ok((BEAD,)),
+    (Ok(MERGE), Err(UNREACHABLE)), Ok((PULL_REQUEST,)), GH_STATUS, Ok((BEAD,)), Ok(("atm-bh-6.group-qa",)),
 )
 ROW = Row("atm-bh-6", "running", "sprint_qa", "normal", "bh-6", "yellow", 420, "QA bh-6 round 2")
 AGENT_VIEW = AgentView("arch-ctm", "busy", EARLIER, 2, (ROW,))

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len
 
+from atm_bd_console.agent_roles import agent_group
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
 from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
@@ -77,7 +78,7 @@ def phase(*steps: Step, sprints=None, closed=False, step_errors=()) -> Phase:
 def inputs(value: Phase, **changes) -> Inputs:
     original = Inputs(
         NOW, "fenix", REPO, 60, Ok(value), Ok(()), Ok(()), Ok(()), Ok(()), (), Ok(()),
-        GhStatus("graphql", True, None, None, False), Ok(()),
+        GhStatus("graphql", True, None, None, False), Ok(()), Ok(()),
     )
     return replace(original, **changes)
 
@@ -200,8 +201,10 @@ def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> N
         ("  FAIL: 3 findings filed", None, None),
     ),
 )
-def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color) -> None:
-    qa = Member("quality-mgr", "active", NOW, agent_type="qa")
+@pytest.mark.parametrize("agent_type", ["qa", "QA", "sprint_qa"])
+def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color, agent_type) -> None:
+    qa = Member("quality-mgr", "active", NOW, agent_type=agent_type)
+    assert agent_group(qa.agent_type) == "qa"
     active = step("atm-bi-5.group-qa", "atm-bi-5", kind="qa", status=SprintState.IN_PROGRESS, assignee=qa.name)
     task = Task(active.bead_id, qa.name, "active", 0, NOW, NOW, "QA review")
 
@@ -713,6 +716,20 @@ def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
     recovered, actions, _ = tick(verified, state, NOW, lambda context: Ok(DispatchSpec("qa", {})))
     assert [action.kind for action in actions] == ["assign"]
     assert recovered.sections == () and recovered.problems == ()
+
+
+def test_closed_task_read_gates_dispatch_and_a_closed_candidate_is_never_assigned() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base", assignee="quality-mgr")
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+                      merges=(Ok(Merge("topic", "base", MergeState.CLEAN, (), (), NOW)),))
+    _, actions, _ = tick(supplied, STATE, NOW, lambda context: Ok(DispatchSpec("qa", {})))
+    assert [action.kind for action in actions] == ["assign"]
+    _, actions, _ = tick(replace(supplied, closed_tasks=Ok((candidate.bead_id,))), STATE, NOW, render)
+    assert actions == ()
+    error = Timeout("timeout", ("atm", "task", "events"), 20, "retry")
+    snapshot, actions, _ = tick(replace(supplied, closed_tasks=Err(error)), STATE, NOW, render)
+    assert error in snapshot.errors and actions == ()
 
 
 def test_ready_candidate_refreshes_even_when_origin_ref_is_cached() -> None:

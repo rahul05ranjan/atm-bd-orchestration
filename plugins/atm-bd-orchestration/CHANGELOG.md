@@ -1,10 +1,16 @@
 # Changelog
 
-## [0.18.1] - Unreleased
+## [0.18.1] - 2026-10-20
 
 ### Changed
+- Sanity closes on its selected verdict before handing off stacking. `dev-sanity` 3.3.0 and `dev-sanity-task` 2.20.0 use generated close inputs, inline bead notes (`dev-sanity-assignment` 1.3.0), derived reviewer timing, and linked-only idempotent stack replay (#498).
 - `dev-template.xml.j2` (`dev-task`) 3.16.0 requires the separate `--result` file for dev completion.
 - Close-hook dev/fix completion uses immutable dispatch vars plus a separate result file, deriving commit and PR identity at close (#485). The role-specific contract rejects missing derived identity even with skipped checks or unavailable GitHub, refuses ambiguous PRs, and renders only that role's required/result fields. Matching split examples and end-to-end handoff tests document assignment-time vars consumption.
+- The console dispatches ready QA beads (including those with a pre-set assignee) and never re-dispatches a bead whose ATM task is already closed (#491).
+- The console's merge check skips closed or merged PRs and still checks PR-less steps.
+- The console's Dispatch view groups agents by shared role classification and name.
+- `sanity-stack-link` runs its `git` and `gh` commands in the checked layer's worktree (`worktree_path` in the generated stack input), so a checked PR in another repository no longer returns `stack_failed`; a missing or invalid input key also returns `stack_failed`. The unused `timeout_s` input is removed.
+- A sanity PASS closes the dev ATM task with `dev-sanity-complete.md.j2` (ATM rejects a close without a reason or template). The sanity gate accepts a replay of a bead the caller already claimed. `validate-plan` runs under a 300 s limit in the assignment gates; other gate commands keep 30 s.
 
 ## [0.18.0] - 2026-10-19
 
@@ -42,7 +48,7 @@
 ## [0.14.1] - 2026-10-14
 
 ### Fixed
-- `jev_client.py --assignment` can carry evidence that lives outside the repository files (randlee/atm-bd-orchestration#124). A sanity assignment may list `external_evidence` references: `{"kind": "bead_notes", "bead": <id>}`, `{"kind": "pr_body", "repo": "owner/name", "pr": <n>}` or `{"kind": "pr_comment", "repo": "owner/name", "comment_id": <n>}`. The client fetches each one itself (`bd show --json` or `gh api`, from `worktree_path`) and sends it in `state.external_evidence` together with its source (`kind`, `ref`, `url`, `updated_at`, `author`), so the receipt's `request_sha256` also covers it. Before this, the request carried only the deliverable text, the changed-file diff and `context` files, so an evidence-only deliverable was judged without its evidence. A malformed reference or a fetch that fails is a named `VALIDATION.INPUT` error with its fix, before any Jev call. An oversized request that carries external evidence is asked to be rebuilt, not split.
+- `jev_client.py --assignment` can carry evidence that lives outside repository files (randlee/atm-bd-orchestration#124). A sanity assignment may carry inline bead notes (`{"kind": "bead_notes", "bead": <id>, "text": <notes>}`) or PR body/comment references (`{"kind": "pr_body", "repo": "owner/name", "pr": <n>}` or `{"kind": "pr_comment", "repo": "owner/name", "comment_id": <n>}`). The client includes inline notes and fetches PR content with `gh api`, labelled with its source (`kind`, `ref`, `url`, `updated_at`, `author`), so the receipt's `request_sha256` covers the evidence. A bead reference without inline text is invalid; the client no longer looks up bead notes. An oversized request that carries external evidence is asked to be rebuilt, not split.
 - `bead-queues` leaves `anchor`-labelled reference beads out of the ready queues (`bd ready --exclude-label anchor`). They stay open for provenance and still block the work that depends on them (#123).
 - `sanity-split` adds the checked bead's notes (when it has any) and, with `--layer-pr`, the checked PR's body to every assignment's `external_evidence`. `dev-sanity-assignment.json.j2` 1.2.0 renders the field (default `[]`).
 

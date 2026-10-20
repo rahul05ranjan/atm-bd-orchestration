@@ -64,6 +64,31 @@ def test_tasks_preserve_position_and_use_updated_at_for_state_since(fake_bin, mo
     assert fake_bin.argv() == [("atm", "task", "list", "--all", "--json", "--team", "atm-dev", "--as", "trinity")]
 
 
+def test_task_closed_reads_the_last_state_transition_of_the_task_history(fake_bin, monkeypatch) -> None:
+    closed = _fixture("task-events-closed.json")
+    reopened = json.loads(closed)
+    reopened["events"].append({**reopened["events"][0], "seq": 5, "event": "reopened", "from_state": "complete"})
+    for body, expected in ((closed, True), (json.dumps(reopened), False), ('{"events": [], "handoffs": []}', False)):
+        monkeypatch.setenv("ATM_BODY", body)
+        fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+
+        assert atm_source.task_closed("atm-bh-6.group-qa", "atm-dev", "trinity") == Ok(expected)
+    assert fake_bin.argv()[-1] == (
+        "atm", "task", "events", "atm-bh-6.group-qa", "--all", "--json", "--team", "atm-dev", "--as", "trinity",
+    )
+
+
+@pytest.mark.parametrize("body", ('[]', '{"events": {}}', '{"events": [1]}', 'not json'))
+def test_task_closed_rejects_a_malformed_history(fake_bin, monkeypatch, body: str) -> None:
+    monkeypatch.setenv("ATM_BODY", body)
+    fake_bin.make("atm", 'printf "%s" "$ATM_BODY"\n')
+
+    result = atm_source.task_closed("t", "atm-dev", "trinity")
+
+    assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
+    assert result.error.source == "atm task events"
+
+
 def test_tasks_rejects_a_complete_state_as_unknown(fake_bin, monkeypatch) -> None:
     # Closed rows never appear in `atm task list` output (its help: the caller's open tasks), so a complete state is an unknown state here.
     body = '[{"task_id": "t", "assignee": "aria", "state": "complete", "assigned_at": "2026-10-15T09:10:00Z", "updated_at": "2026-10-15T09:11:00Z", "description": ""}]'
