@@ -184,7 +184,7 @@ def sprint_facts(snapshot: Snapshot) -> tuple[SprintFacts, ...]:
                 problems.append(f"unknown PR state {selected.pr.raw_state!r} for #{selected.pr.number}")
             merge = selected.merge
             if merge is not None and merge.branch == selected.pr.head and merge.target == selected.pr.base:
-                if pr_state != PrState.OPEN:
+                if selected.pr.state not in (PrState.OPEN, PrState.DRAFT):
                     pass
                 elif merge.state == MergeState.HEAD_NOT_PUSHED:
                     problems.append(f"head not pushed for {merge.branch}")

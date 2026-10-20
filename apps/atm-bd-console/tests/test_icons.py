@@ -122,6 +122,8 @@ def test_status_and_github_icon_tables_use_single_cell_glyphs() -> None:
     assert {state: merge_icon(state) for state in MergeState} == {
         MergeState.CLEAN: ("\U000f062d", "#2EA043"),
         MergeState.CONFLICT: ("\U000f062c", "#F85149"),
+        MergeState.HEAD_NOT_PUSHED: ("?", "#2D81E0"),
+        MergeState.BASE_DELETED: ("?", "#2D81E0"),
         MergeState.ERROR: ("\U000f062d", "#F85149"),
         MergeState.UNKNOWN: ("?", "#2D81E0"),
     }

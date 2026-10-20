@@ -238,6 +238,13 @@ def test_merge_check_states_are_open_pr_only_and_named():
     error = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.ERROR)
     closed = replace(pr, state=PrState.CLOSED)
     assert sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=closed, merge=error),)))[0].problems == ()
+    closed_inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
+                            members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((closed,)), merges=(Ok(error),),
+                            remotes=None)
+    result, _, _ = tick(closed_inputs, INITIAL_STATE, NOW, lambda _: None)
+    assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
+    result, _, _ = tick(replace(closed_inputs, prs=Ok((pr,))), INITIAL_STATE, NOW, lambda _: None)
+    assert any(problem.key.startswith("merge_error:") for problem in result.problems)
 
     unpushed = replace(error, state=MergeState.HEAD_NOT_PUSHED)
     facts = sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=pr, merge=unpushed),)))[0]

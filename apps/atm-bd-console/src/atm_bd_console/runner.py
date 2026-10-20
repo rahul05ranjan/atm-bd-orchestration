@@ -333,18 +333,24 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                      error=asdict(refreshed_prs.error) if isinstance(refreshed_prs, Err) else None)
     merges = dict(saved_merges.value.merges) if isinstance(saved_merges, Ok) else {}
     merge_results = []
-    remote_branches = {remote.branch for remote in remotes.value} if isinstance(remotes, Ok) else set()
-    open_pairs = {(pr.head, pr.base) for pr in prs if pr.state == PrState.OPEN}
+    # A pair whose PR is closed or merged is not a merge candidate; a pair with no PR yet is still
+    # checked, because dispatch verification of a ready step needs its merge result.
+    open_pairs = {(pr.head, pr.base) for pr in prs if pr.state in (PrState.OPEN, PrState.DRAFT)}
+    ended_pairs = {(pr.head, pr.base) for pr in prs if pr.state in (PrState.MERGED, PrState.CLOSED)} - open_pairs
+    listed = remotes.value if isinstance(remotes, Ok) else state.remotes if remotes is None else None
+    remote_branches = None if listed is None else {remote.branch for remote in listed}
     if due:
         for branch, target in due.merges:
-            if (branch, target) not in open_pairs:
+            if (branch, target) in ended_pairs:
+                if (cached := merges.get(branch)) is not None and cached.target == target:
+                    del merges[branch]
                 continue
-            if branch not in remote_branches:
-                merges[branch] = Merge(branch, target, MergeState.HEAD_NOT_PUSHED, (), (), now)
-                merge_results.append(Ok(merges[branch]))
-                continue
-            if target not in remote_branches:
-                merges[branch] = Merge(branch, target, MergeState.BASE_DELETED, (), (), now)
+            missing = None if remote_branches is None or (branch, target) not in open_pairs else (
+                MergeState.HEAD_NOT_PUSHED if branch not in remote_branches else
+                MergeState.BASE_DELETED if target not in remote_branches else None
+            )
+            if missing is not None:
+                merges[branch] = Merge(branch, target, missing, (), (missing.value,), now)
                 merge_results.append(Ok(merges[branch]))
                 continue
             checked = remotes if isinstance(remotes, Err) else logger.result(

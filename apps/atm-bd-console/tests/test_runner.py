@@ -13,6 +13,7 @@ from contract_samples import (
     COMMAND_FAILED,
     CONFIG,
     EARLIER,
+    INPUTS,
     IO_FAILED,
     MERGE_FILE,
     NOW,
@@ -29,7 +30,7 @@ from contract_samples import (
 from atm_bd_console import log, runner
 from atm_bd_console.beads_source import open_rows
 from atm_bd_console.command import Output
-from atm_bd_console.enums import QaState, SprintState
+from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
@@ -42,8 +43,10 @@ from atm_bd_console.types import (
     Due,
     GhStatus,
     Member,
+    Merge,
     PhaseFile,
     Problem,
+    PullRequest,
     RemoteRef,
     Section,
     SectionRow,
@@ -882,8 +885,42 @@ def test_fetch_replans_cycle_merges_from_refreshed_remote_refs(github_runtime, m
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
     assert due_states == [RUNNING_STATE.remotes, (fresh,)]
-    assert merges == []
+    assert merges == [("new-branch", "base")]
     assert inputs[0].remotes == Ok((fresh,))
+
+
+@pytest.mark.parametrize(("pr_state", "remote_branches", "expected"), [
+    (PrState.CLOSED, ("topic", "base"), None),
+    (PrState.MERGED, ("topic", "base"), None),
+    (PrState.OPEN, ("base",), MergeState.HEAD_NOT_PUSHED),
+    (PrState.OPEN, ("topic",), MergeState.BASE_DELETED),
+    (PrState.DRAFT, ("topic", "base"), MergeState.CLEAN),
+])
+def test_merge_check_runs_only_for_open_pr_and_names_missing_remote_branches(
+    github_runtime, monkeypatch, pr_state, remote_branches, expected,
+) -> None:
+    store, _, events, inputs = github_runtime
+    pr = PullRequest(7, "https://example.test/pull/7", "topic", "base", "abc", CiState.PASS, (), state=pr_state)
+    status = GhStatus("rest", True, None, NOW, False)
+    checked = []
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"),), True))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (Ok((pr,)), status))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs",
+                        lambda *_: Ok(tuple(RemoteRef(branch, REMOTE_REF.sha) for branch in remote_branches)))
+    monkeypatch.setattr(runner.git_source, "merge", lambda _root, branch, target: checked.append((branch, target))
+                        or Ok(Merge(branch, target, MergeState.CLEAN, (), (), NOW)))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, True, store)
+
+    merges = [result.value for result in inputs[0].merges]
+    assert checked == ([("topic", "base")] if expected == MergeState.CLEAN else [])
+    assert [merge.state for merge in merges] == ([] if expected is None else [expected])
+    assert not any(fields.get("source") == "git.merge" and fields.get("outcome") == "failed" for _, fields in events)
+    if expected is not None:
+        result, _, _ = model_tick(replace(INPUTS, prs=Ok((pr,)), merges=(Ok(merges[0]),), remotes=None),
+                                  INITIAL_STATE, NOW, lambda _: None)
+        assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
 
 
 def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(github_runtime, monkeypatch) -> None:
@@ -903,6 +940,7 @@ def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(gi
         ("worktrees", "/code-checkout"),
         ("fetch", "/code-checkout"),
         ("remote_refs", "/code-checkout"),
+        ("merge", "/code-checkout", "feature/x", "main"),
     ]
 
 
@@ -1126,7 +1164,9 @@ def test_fetch_and_merge_failures_are_logged_with_context(github_runtime, monkey
     monkeypatch.setattr(runner.git_source, "remote_refs", lambda *_: Ok(()))
     runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
 
-    assert not any(fields.get("source") == "git.merge" for _, fields in events)
+    assert ("read", {"source": "git.merge", "outcome": "failed", "error": asdict(COMMAND_FAILED),
+                     "level": "error", "message": error_message(asdict(COMMAND_FAILED)),
+                     "branch": "topic", "target": "base"}) in events
 
 
 def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch):
