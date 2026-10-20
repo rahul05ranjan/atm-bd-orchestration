@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -1131,3 +1132,81 @@ def test_assignment_consumes_completion_vars_before_the_temporary_file_is_remove
     assert assignment["values"]["commit"] == world.head
     assert world.values["checked_bead"] in assignment["body"]
     assert json.loads(world.path.read_text())
+
+
+class ScriptedRunner:
+    """Fake runner: the first `drops` calls fail like a dropped Dolt connection, or time out, then succeed."""
+
+    def __init__(self, drops, *, timeouts=False):
+        self.drops, self.timeouts, self.calls = drops, timeouts, 0
+
+    def __call__(self, argv, **kwargs):
+        self.calls += 1
+        if self.calls <= self.drops:
+            if self.timeouts:
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            return subprocess.CompletedProcess(argv, 1, "", "driver: invalid connection")
+        return subprocess.CompletedProcess(argv, 0, "[]", "")
+
+
+def retry_hook(world, runner):
+    ticks, sleeps = iter(range(0, 10_000, 5)), []
+    loads = iter(range(1, 100))
+    sample = lambda: {"load_avg": [float(next(loads))] * 3, "cpu_pct": 50.0}
+    return hook.Hook("dev", world.values, world.path, runner, lambda: next(ticks), sleeps.append, sample), sleeps
+
+
+@pytest.mark.parametrize("drops", [0, 1, 3])
+def test_dropped_bd_calls_are_retried_with_logged_attempts(world, drops):
+    runner = ScriptedRunner(drops)
+    instance, sleeps = retry_hook(world, runner)
+    assert instance.run(["bd", "show", "x", "--json"]).returncode == 0
+    assert runner.calls == drops + 1
+    assert sleeps == [hook.DOLT_RETRY_SLEEP_S] * drops
+    assert [a["outcome"] for a in instance.attempts] == ["dolt_drop_retry"] * drops + (["ok"] if drops else [])
+    assert [a["attempt"] for a in instance.attempts] == list(range(1, len(instance.attempts) + 1))
+    for record in instance.attempts:
+        assert record["timeout_s"] == hook.COMMAND_TIMEOUT and record["elapsed_s"] == 5
+        assert record["cpu_pct"] == 50.0 and len(record["load_avg"]) == 3
+    if drops:
+        assert instance.attempts[-1]["retries_until_now"] == drops
+
+
+def test_bd_drop_beyond_the_retry_budget_fails_after_four_attempts(world):
+    runner = ScriptedRunner(99)
+    instance, sleeps = retry_hook(world, runner)
+    with pytest.raises(hook.CloseError) as error:
+        instance.run(["bd", "show", "x", "--json"])
+    assert error.value.code == "COMMAND.FAILED" and "invalid connection" in str(error.value)
+    assert runner.calls == hook.DOLT_RETRIES + 1 and len(sleeps) == hook.DOLT_RETRIES
+    assert [a["outcome"] for a in instance.attempts] == ["dolt_drop_retry"] * hook.DOLT_RETRIES + ["failed"]
+
+
+def test_timeouts_and_non_bd_failures_are_not_retried_but_are_logged(world):
+    runner = ScriptedRunner(1, timeouts=True)
+    instance, sleeps = retry_hook(world, runner)
+    with pytest.raises(hook.CloseError, match="timed out"):
+        instance.run(["bd", "show", "x", "--json"])
+    assert runner.calls == 1 and sleeps == []
+    assert [a["outcome"] for a in instance.attempts] == ["timeout"]
+    runner = ScriptedRunner(99)
+    instance, sleeps = retry_hook(world, runner)
+    with pytest.raises(hook.CloseError):
+        instance.run(["git", "status"])
+    assert runner.calls == 1 and sleeps == []
+
+
+def test_attempts_reach_the_hook_output(world):
+    world.timeout_command = ["git", "rev-parse"]
+    output = world.run()
+    assert output["attempts"][0]["outcome"] == "timeout" and output["attempts"][0]["attempt"] == 1
+
+
+def test_load_sample_is_portable(monkeypatch):
+    monkeypatch.setattr(hook.os, "getloadavg", lambda: (4.0, 2.0, 1.0))
+    monkeypatch.setattr(hook.os, "cpu_count", lambda: 8)
+    assert hook.load_sample() == {"load_avg": [4.0, 2.0, 1.0], "cpu_pct": 50.0}
+    def unavailable():
+        raise OSError
+    monkeypatch.setattr(hook.os, "getloadavg", unavailable)
+    assert hook.load_sample() == {"load_avg": None, "cpu_pct": None}

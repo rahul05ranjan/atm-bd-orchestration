@@ -42,3 +42,12 @@ runs it.
 19. Sanity and QA assignment are mechanical and belong to the hook. The fallback for a sanity or QA bead that `bd ready` lists with no ATM task (a hook that died between its commands) is the console or the lead assigning it as the lead; the console checks `atm task list` before assigning, and a second assign of the same id is an in-place update, never a second task.
 20. The lead does not link layers: after the PASS close hook succeeds, the sanity side links under the stack bead lock ([sanity-stack.md](sanity-stack.md)). The lead creates the stack bead with the integration branch, claims it before its own unstack, restack and land, and owns stack hygiene and every `stack_failed`. A sanity FAIL or rebase-required is fixed on the same unlinked branch.
 21. Dev and fix assignment stay with the lead: the hook closes the dev's own task (as the caller) at dev complete, after assigning sanity, so the dev starts its next queued task at once; a sanity FAIL re-assigns the same task id; fix beads from QA go to the dev the lead picks at the finding's difficulty.
+
+## Command timeouts, retries and diagnostics
+
+Each `bd`, `git` and `gh` call is bounded by `COMMAND_TIMEOUT` seconds (30 on `main`; 180 once `ATM_BD_GATE_TIMEOUT_S` lands). A call that times out is not retried: it fails the close with `COMMAND.FAILED` after one `COMMAND_TIMEOUT`. A `bd` call that fails with a dropped Dolt connection (output matching `invalid connection` or `i/o timeout`, seen at host load 40-55) is retried `DOLT_RETRIES = 3` times, sleeping `DOLT_RETRY_SLEEP_S = 10` seconds between attempts.
+
+Worst case for one `bd` call that keeps dropping: `(3 + 1) x COMMAND_TIMEOUT + 3 x 10`. That is 150s at the 30s timeout and 750s at the 180s timeout. A close makes several `bd` calls, so a fully starved close can wait that long per call. A close that times out waits one `COMMAND_TIMEOUT` (30s or 180s) before failing.
+
+The hook records every attempt that was not a clean first-try success, and a success that needed a retry, under `attempts` in its JSON output: `command`, `attempt`, `timeout_s`, `elapsed_s`, `outcome` (`ok`, `dolt_drop_retry`, `failed`, `timeout`, `error`), `retries_until_now`, `total_elapsed_s`, `load_avg` (1, 5 and 15 minute `os.getloadavg`) and `cpu_pct` (1 minute load as a percentage of CPU count; `null` where `os.getloadavg` is unavailable).
+
