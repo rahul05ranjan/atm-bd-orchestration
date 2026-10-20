@@ -1,7 +1,6 @@
 """Impure tick boundary; scheduling and decisions remain in :mod:`model`."""
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -77,23 +76,11 @@ def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore,
 def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], reported: tuple[Action, ...]) -> State:
     """Commit only effects whose boundary call actually succeeded.
 
-    A new problem is a delivery obligation, not merely an observation.  A
-    failed first send must therefore be absent from durable state so the next
-    tick proposes it again; a failed batch keeps its previous due time.
+    A failed batch keeps its previous due time (or none, so the next tick sends
+    it again), so a recipient's problems are never marked delivered unsent.
     """
     successful = tuple(action for action in reported if action.outcome == "sent")
     failed = tuple(action for action in reported if action.outcome and action.outcome.startswith("failed "))
-    previous = {problem.key: problem for problem in state.problems}
-    failed_new = {
-        action.bead_ids[0]
-        for action in failed
-        if action.kind == "send" and action.bead_ids
-    }
-    problems = tuple(
-        problem
-        for problem in proposed.problems
-        if problem.key in previous or problem.bead_id not in failed_new
-    )
     failed_batches = {action.to for action in failed if action.kind == "batch"}
     batch_due = dict(proposed.batch_due)
     for recipient in failed_batches:
@@ -101,22 +88,13 @@ def _durable_state(state: State, proposed: State, actions: tuple[Action, ...], r
             batch_due[recipient] = state.batch_due[recipient]
         else:
             batch_due.pop(recipient, None)
-    for recipient in tuple(batch_due):
-        if not any(problem.to == recipient for problem in problems):
-            batch_due.pop(recipient)
-    notices_succeeded = any(action.kind in ("send", "batch") for action in successful)
-    failed_collision_ids = {action.bead_ids[0] for action in failed
-                            if action.kind == "send" and action.bead_ids and action.text.startswith("collision:")}
-    collision_notices = tuple(key for key in proposed.collision_notices
-                              if key in state.collision_notices or json.loads(key)[0] not in failed_collision_ids)
+    notices_succeeded = any(action.kind == "batch" for action in successful)
     return replace(
         proposed,
-        problems=problems,
         cycle_first_send=proposed.cycle_first_send if notices_succeeded else state.cycle_first_send,
         last_batch=proposed.last_batch if any(action.kind == "batch" for action in successful) else state.last_batch,
         sent=(*state.sent, *successful)[-5:],
         batch_due=batch_due,
-        collision_notices=collision_notices,
     )
 
 
@@ -353,13 +331,19 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 merges[branch] = Merge(branch, target, missing, (), (missing.value,), now)
                 merge_results.append(Ok(merges[branch]))
                 continue
-            checked = remotes if isinstance(remotes, Err) else logger.result(
-                "git.merge", git_source.merge(code_root, branch, target), branch=branch, target=target,
-            )
-            if not isinstance(remotes, Err):
+            checked = remotes if isinstance(remotes, Err) else git_source.merge(code_root, branch, target)
+            ref_missing = checked.error if isinstance(checked, Err) and isinstance(checked.error, NotFound) and (
+                checked.error.what in (f"origin/{branch}", f"origin/{target}")) else None
+            if not isinstance(remotes, Err) and ref_missing is None:
+                checked = logger.result("git.merge", checked, branch=branch, target=target)
                 merge_results.append(checked)
             if isinstance(checked, Ok):
                 merges[branch] = checked.value
+            elif ref_missing is not None:
+                # A ref missing on origin is an unpushed branch or deleted base, not a failed merge check.
+                missing = MergeState.HEAD_NOT_PUSHED if ref_missing.what == f"origin/{branch}" else MergeState.BASE_DELETED
+                merges[branch] = Merge(branch, target, missing, (), (missing.value,), now)
+                merge_results.append(Ok(merges[branch]))
             else:
                 unavailable = Merge(branch, target, MergeState.ERROR, (), (verification_reason(checked.error),), now)
                 merges[branch] = unavailable

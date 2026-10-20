@@ -923,6 +923,29 @@ def test_merge_check_runs_only_for_open_pr_and_names_missing_remote_branches(
         assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
 
 
+@pytest.mark.parametrize(("missing_ref", "expected"), (
+    ("origin/topic", MergeState.HEAD_NOT_PUSHED), ("origin/base", MergeState.BASE_DELETED),
+))
+def test_merge_check_for_a_ref_missing_on_origin_is_unpushed_not_a_failed_check(
+    github_runtime, monkeypatch, missing_ref, expected,
+) -> None:
+    store, _, events, inputs = github_runtime
+    pr = PullRequest(7, "https://example.test/pull/7", "topic", "base", "abc", CiState.PASS, (), state=PrState.OPEN)
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"),), True))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (Ok((pr,)), GhStatus("rest", True, None, NOW, False)))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    # The cached ref list still names both branches while the local origin ref is gone.
+    monkeypatch.setattr(runner.git_source, "remote_refs",
+                        lambda *_: Ok(tuple(RemoteRef(branch, REMOTE_REF.sha) for branch in ("topic", "base"))))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Err(NotFound("not_found", missing_ref, "fetch the named branch and retry")))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, True, store)
+
+    assert [result.value.state for result in inputs[0].merges] == [expected]
+    assert all(isinstance(result, Ok) for result in inputs[0].merges)
+    assert not any(fields.get("source") == "git.merge" and fields.get("outcome") == "failed" for _, fields in events)
+
+
 def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
     config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code", no_fetch=False)
@@ -1003,7 +1026,7 @@ def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_run
 
     snapshot, _ = runner.step(config, INITIAL_STATE, False, store)
 
-    assert any(problem.to == "fenix" and problem.text == "missing branch configuration" for problem in snapshot.problems)
+    assert any(problem.to == "fenix" and "missing branch configuration; set the branch" in problem.text for problem in snapshot.problems)
     calls = fake_bin.argv()
     sends = [argv for argv in calls if argv[1] == "send"]
     assert sends == [("atm", "send", "fenix@atm-dev", "--as", sender, "--team", sender_team, "--stdin")]
@@ -1188,13 +1211,13 @@ def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch
 
 
 def test_failed_notice_is_not_committed_and_remains_pending() -> None:
-    action = replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
+    action = replace(ACTION, kind="batch", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
     problem = Problem("missing_pr:branch", "atm-bh-6.fix", "fenix", "missing PR", ACTION.at)
     proposed = replace(STATE, problems=(problem,), cycle_first_send=ACTION.at, sent=(action,), batch_due={"fenix": ACTION.at})
 
     durable = runner._durable_state(STATE, proposed, (action,), (replace(action, outcome="failed command_failed"),))
 
-    assert durable.problems == () and durable.sent == STATE.sent and durable.batch_due == {}
+    assert durable.problems == (problem,) and durable.sent == STATE.sent and durable.batch_due == {}
     assert durable.cycle_first_send == STATE.cycle_first_send
 
 
@@ -1218,7 +1241,7 @@ def test_dry_run_reports_actions_without_advancing_durable_state(github_runtime,
 def test_failed_delivery_is_retried_on_the_next_tick(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
     attempts = []
-    action = replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
+    action = replace(ACTION, kind="batch", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
     problem = Problem("missing_pr:branch", "atm-bh-6.fix", "fenix", "missing PR", ACTION.at)
 
     def tick(_inputs, state, now, _spec):
@@ -1232,7 +1255,8 @@ def test_failed_delivery_is_retried_on_the_next_tick(github_runtime, monkeypatch
     _, after_second = runner.step(replace(CONFIG, dry_run=False), after_first, False, store)
 
     assert attempts == [1, 1]
-    assert after_first.problems == after_second.problems == ()
+    assert after_first.problems == after_second.problems == (problem,)
+    assert after_first.batch_due == after_second.batch_due == {}
 
 
 def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> None:

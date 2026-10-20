@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.3] - 2026-10-20
+
+### Fixed
+- The console sends each recipient one message per 10-minute cycle that lists all of their problems (collision and unknown-state problems included), instead of one message per new problem plus a batch. A recipient's due time is kept while its problems clear and return, so a returning problem is no longer sent again minutes later.
+- A branch or base missing on origin is reported as what it is (`branch not on origin` with `git -C <worktree> push -u origin <branch>`, or `base branch <b> is not on origin`), only when it holds a ready step, and never as `merge check failed`. `merge check failed` now appears only when `git merge-tree` ran and returned a conflict, with its files, its output and the merge fix. An unavailable merge check on a step that is not ready is no longer a problem.
+- Every console problem names the bead and step it blocks and the exact fix.
+- `bead-queues --stack` makes one `gh stack view --json` check and files one `stack_incoherent` row listing every stack issue (layer, its base against the lower layer's head, the stack writer's `gh stack rebase`/`gh stack submit`). A coherent stack gives no row. When `gh` cannot give the stack it falls back to a read-only `git merge-base --is-ancestor` chain check over the phase's layer branches, silent when coherent; a `gh` failure is never a stack fault. It never rebases or changes the stack. The `pr_unlinked` queue and the `gh api .../stacks` read are removed.
+
 ## [0.18.2] - 2026-10-20
 
 ### Fixed

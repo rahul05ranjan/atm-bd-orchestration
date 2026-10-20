@@ -31,8 +31,7 @@ QUEUES = [
     ("minor_backlog", "Minor finding (backlog)", "lead (schedule)"),
     ("container_closable", "All children closed -> close it", "lead"),
     ("ready_other", "Other ready, no task", "lead"),
-    ("pr_unlinked", "PR on the phase, not on an open stack", "lead (link)"),
-    ("stack_incoherent", "Open stack not coherent", "lead (stack writer)"),
+    ("stack_incoherent", "Stack needs the stack writer", "lead (stack writer)"),
     ("not_ready", "Not ready (prerequisite open)", "-"),
 ]
 QUIET = {"in_flight", "not_ready"}
@@ -144,7 +143,7 @@ def _valid_id(row: dict[str, Any], command_name: str) -> str:
 def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.run) -> dict[str, Any]:
     """Read open, ready, task and relevant closed rows once each and classify the phase."""
     now = now or datetime.now(UTC)
-    root, integration_branch, code_root, github_repo = _resolve(args, repo_root)
+    root, integration_branch, code_root, _ = _resolve(args, repo_root)
     phase = root.rsplit("-phase-", 1)[-1]
     label = f"phase-{phase}"
     scoped = ["-l", label, "--exclude-label", "anchor", "-n", "0", "--json"]
@@ -260,14 +259,12 @@ def build(args, repo_root: Path, *, now: datetime | None = None, runner=command.
         if not integration_branch:
             stack_note = "no integration_branch: stack not checked"
         else:
-            if not github_repo:
-                result = runner(["git", "remote", "get-url", "origin"], "set origin to a GitHub repository URL", cwd=code_root)
-                if isinstance(result, Err):
-                    raise QueueFailure(_command_error(result))
-                github_repo = config._github_repo(result.value.stdout.strip())
-                if github_repo is None:
-                    raise QueueFailure("git remote get-url origin: expected a GitHub repository URL: set origin to a GitHub repository URL")
-            stack_note = stacks(str(integration_branch), queues, now, code_root, github_repo, runner)
+            metas = [_meta(bead) for bead in beads]
+            layered = sorted((meta["layer"], meta["branch"]) for meta in metas
+                             if isinstance(meta.get("layer"), int) and not isinstance(meta["layer"], bool)
+                             and isinstance(meta.get("branch"), str) and meta["branch"])
+            layers = tuple(dict.fromkeys(branch for _, branch in layered))
+            stack_note = stacks(str(integration_branch), queues, now, code_root, runner, layers)
     for rows in queues.values():
         rows.sort(key=lambda row: (row["priority"] if row["priority"] is not None else 9, row["id"]))
     return {"schema": SCHEMA, "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "root": root,
@@ -288,60 +285,81 @@ def _worktrees(repo_root: Path, runner=command.run) -> dict[str, str]:
     return found
 
 
-def _stack_view(trunk: str, candidates: list[str], repo_root: Path, runner=command.run) -> dict[str, Any]:
-    paths = _worktrees(repo_root, runner)
-    errors = []
-    for branch in dict.fromkeys([trunk, *candidates]):
+def _stack_view(trunk: str, candidates: list[str], paths: dict[str, str], runner=command.run) -> dict[str, Any] | None:
+    """The one `gh stack view --json` of the phase stack, read from the trunk worktree or, failing that, a layer worktree.
+    None when no worktree can produce it (gh missing, no API, not a stack): the caller then reads git locally."""
+    for branch in list(dict.fromkeys([trunk, *candidates]))[:5]:
         worktree = paths.get(branch)
         if worktree is None:
             continue
-        view = run_json(["gh", "stack", "view", "--json"], cwd=worktree, runner=runner)
-        if isinstance(view, dict) and view.get("trunk") == trunk:
+        result = runner(["gh", "stack", "view", "--json"], "run `gh stack view --json` in a worktree of the phase stack", cwd=worktree)
+        if isinstance(result, Err):
+            continue
+        try:
+            view = json.loads(result.value.stdout)
+        except ValueError:
+            continue
+        if isinstance(view, dict) and view.get("trunk") == trunk and isinstance(view.get("branches"), list):
             return view
-        errors.append(f"{branch}: stack view trunk did not match {trunk}")
-        if len(errors) >= 5:
-            break
-    reason = "; ".join(errors) if errors else f"no worktree on {trunk} or an open stack layer"
-    raise QueueFailure(f"gh stack view --json: {reason}: check out a worktree on the phase stack")
+    return None
 
 
-def stacks(trunk: str, queues: dict[str, list[dict[str, Any]]], now: datetime, repo_root: Path, github_repo: str, runner=command.run) -> str:
-    endpoint = f"repos/{github_repo}/stacks?per_page=100"
-    pages = run_json(["gh", "api", "--paginate", "--slurp", endpoint], cwd=repo_root, runner=runner)
-    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
-        raise QueueFailure(f"gh api {endpoint}: expected pages of stack objects: repair GitHub JSON output")
-    heads = [pr["head"]["ref"] for page in pages for stack in page if isinstance(stack, dict) and stack.get("open")
-             and (stack.get("base") or {}).get("ref") in (trunk, None)
-             for pr in reversed(stack.get("pull_requests") or [])
-             if isinstance(pr, dict) and pr.get("state") == "open" and isinstance(pr.get("head"), dict)
-             and pr["head"].get("ref")]
-    view = _stack_view(trunk, heads, repo_root, runner)
-    layers = [branch for branch in view.get("branches") or [] if not branch.get("isMerged") and branch.get("name") != trunk]
-    numbers = {(branch.get("pr") or {}).get("number") for branch in layers} - {None}
-    on_trunk = sorted((stack for page in pages for stack in page if isinstance(stack, dict) and stack.get("open") and (
-        (stack.get("base") or {}).get("ref") == trunk or numbers & {pr.get("number") for pr in stack.get("pull_requests") or [] if isinstance(pr, dict)})),
-                      key=lambda stack: stack.get("number", 0))
+def _sha(value: Any) -> str:
+    return str(value)[:9] if value else "unknown"
 
-    def add(key: str, row_id: str, title: str, detail: str) -> None:
-        queues[key].append({"queue": key, "id": row_id, "stage": "stack", "status": "open", "assignee": "-",
-                            "priority": None, "since": None, "age": age(None, now), "title": title, "detail": detail})
 
-    linked = {pr["number"] for stack in on_trunk for pr in stack.get("pull_requests") or [] if isinstance(pr, dict) and "number" in pr}
-    for stack in on_trunk:
-        mine = {pr["number"] for pr in stack.get("pull_requests") or [] if isinstance(pr, dict) and pr.get("state") == "open" and "number" in pr}
-        problems = [f"{branch['name']} needs rebase" for branch in layers if branch.get("needsRebase")]
-        problems += [f"{branch['name']} has no PR" for branch in layers if not branch.get("pr")]
-        problems += [f"#{number} not in the local stack" for number in sorted(mine - numbers)]
-        if len(on_trunk) > 1:
-            problems.append(f"{len(on_trunk)} open stacks on {trunk}: not landable in one merge")
-        if problems:
-            add("stack_incoherent", f"stack#{stack['number']}", f"stack #{stack['number']} on {trunk}", "; ".join(problems))
-    loose = [branch for branch in layers if branch.get("pr") and branch["pr"].get("number") not in linked]
-    if not on_trunk and len(layers) == 1:
-        loose = []
-    for branch in loose:
-        add("pr_unlinked", f"pr#{branch['pr']['number']}", branch["name"], f"{branch['name']} on the {trunk} stack")
-    return f"{len(on_trunk)} open stack(s) on {trunk}, {len(layers)} unmerged layer(s) in the local stack"
+def _view_issues(view: dict[str, Any], trunk: str, paths: dict[str, str]) -> list[str]:
+    """Every stack fault in one view: a layer needing rebase, or an unmerged layer with no PR. Reports only; never changes the stack."""
+    issues, lower, lower_head = [], trunk, None
+    for branch in view["branches"]:
+        name = branch.get("name")
+        if name == trunk:
+            lower, lower_head = trunk, branch.get("head")
+            continue
+        if not branch.get("isMerged"):
+            where = paths.get(name) or paths.get(trunk) or "<stack worktree>"
+            pr = branch.get("pr") or {}
+            label = f"{name} (PR #{pr['number']})" if pr.get("number") else name
+            if branch.get("needsRebase"):
+                issues.append(f"{label} needs rebase: its base {_sha(branch.get('base'))} is not the head {_sha(lower_head)} of {lower}; "
+                              f"the stack writer runs `gh stack rebase` in {where}")
+            if not pr:
+                issues.append(f"{name} has no PR; the stack writer runs `gh stack submit` in {where}")
+        lower, lower_head = name, branch.get("head")
+    return issues
+
+
+def _local_issues(trunk: str, layers: list[str], paths: dict[str, str], repo_root: Path, runner=command.run) -> list[str]:
+    """Read-only fallback when gh cannot give the stack: each layer must contain the head of the layer below."""
+    issues, lower = [], trunk
+    for name in layers:
+        if name not in paths or lower not in (paths.keys() | {trunk}):
+            continue
+        fix = f"inspect `git merge-base --is-ancestor {lower} {name}`"
+        result = runner(["git", "merge-base", "--is-ancestor", lower, name], fix, cwd=repo_root, ok_codes=(0, 1))
+        if isinstance(result, Err):
+            continue
+        if result.value.code == 1:
+            issues.append(f"{name} does not contain the head of {lower} (`git merge-base --is-ancestor {lower} {name}` exited 1); "
+                          f"the stack writer rebases it onto {lower} in {paths[name]}")
+        lower = name
+    return issues
+
+
+def stacks(trunk: str, queues: dict[str, list[dict[str, Any]]], now: datetime, repo_root: Path, runner=command.run,
+           layers: tuple[str, ...] = ()) -> str:
+    """One stack check: one `gh stack view --json`, or the local read-only fallback, producing at most one queue row."""
+    paths = _worktrees(repo_root, runner)
+    view = _stack_view(trunk, list(reversed(layers)), paths, runner)
+    if view is not None:
+        issues, source = _view_issues(view, trunk, paths), "gh stack view"
+    else:
+        issues, source = _local_issues(trunk, list(layers), paths, repo_root, runner), "local git"
+    if issues:
+        queues["stack_incoherent"].append({
+            "queue": "stack_incoherent", "id": f"stack:{trunk}", "stage": "stack", "status": "open", "assignee": "-",
+            "priority": None, "since": None, "age": age(None, now), "title": f"stack on {trunk}", "detail": "; ".join(issues)})
+    return f"{len(issues)} stack issue(s) on {trunk} ({source})"
 
 
 def cron(report: dict[str, Any], state_file: Path, min_age: int, *, now: datetime | None = None) -> dict[str, Any] | None:

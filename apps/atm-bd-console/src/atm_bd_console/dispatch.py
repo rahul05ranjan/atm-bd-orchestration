@@ -82,11 +82,14 @@ def _gate_reasons(
     if remote_error is not None:
         reasons.append(f"origin verification unavailable: {verification_reason(remote_error)}")
     elif not step.branch or step.branch not in remote_by_branch:
-        reasons.append(f"branch not on origin: {step.branch or '<missing>'}")
+        where = step.worktree or "<worktree>"
+        reasons.append(f"branch not on origin: {step.branch or '<missing>'}"
+                       + (f"; push it: `git -C {where} push -u origin {step.branch}`" if step.branch else ""))
     if not step.worktree or not any(
         worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
     ):
-        reasons.append(f"no worktree for {step.branch or '<missing>'}")
+        reasons.append(f"no worktree for {step.branch or '<missing>'} at {step.worktree or '<unset>'}; "
+                       "create it with the sc-git-worktree skill (not `git worktree add`)")
     merge = merge_by_pair.get((step.branch, target)) if step.branch and target else None
     if merge is not None and merge.state == MergeState.CONFLICT:
         reasons.append(f"merge conflict with {target}: {', '.join(merge.files)}")
@@ -95,6 +98,9 @@ def _gate_reasons(
             reasons.append("merge verification unavailable: set the step or sprint PR target")
         elif merge is None:
             reasons.append(f"merge verification unavailable for {target}: no current result; retry the merge check")
+        elif merge.state == MergeState.BASE_DELETED:
+            reasons.append(f"base branch {target} is not on origin: push it (`git push -u origin {target}`) "
+                           "or set the step or sprint PR target to a branch that exists")
         elif merge.state != MergeState.CLEAN:
             detail = "; ".join(merge.messages) or "retry the merge check"
             reasons.append(f"merge verification unavailable for {target}: {detail}")

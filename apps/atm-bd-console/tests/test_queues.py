@@ -303,8 +303,6 @@ def test_phase_stack_check_uses_valid_sibling_checkout(monkeypatch, tmp_path: Pa
             return Ok(Output(0, f"{code_root}\n"))
         if tuple(argv) == ("git", "remote", "get-url", "origin"):
             return Ok(Output(0, "https://github.com/owner/repo.git\n"))
-        if tuple(argv[:2]) == ("gh", "api"):
-            return Ok(Output(0, "[]"))
         if tuple(argv) == ("git", "worktree", "list", "--porcelain"):
             return Ok(Output(0, f"worktree {code_root / 'integrate'}\nbranch refs/heads/integrate/phase-bj\n"))
         if tuple(argv) == ("gh", "stack", "view", "--json"):
@@ -318,39 +316,111 @@ def test_phase_stack_check_uses_valid_sibling_checkout(monkeypatch, tmp_path: Pa
     report = queues.build(args, tmp_path, now=NOW, runner=run)
 
     assert report["integration_branch"] == "integrate/phase-bj"
-    assert (["gh", "api", "--paginate", "--slurp", "repos/owner/repo/stacks?per_page=100"], code_root) in validation_calls
+    assert not any(argv[:2] == ["gh", "api"] for argv, _ in validation_calls)
     assert (["git", "worktree", "list", "--porcelain"], code_root) in validation_calls
     assert ("git", "rev-parse", "--show-toplevel") in [tuple(argv) for argv, _ in validation_calls]
 
 
-def test_stack_queues_use_the_code_checkout_and_report_stack_problems():
+TRUNK = "integrate/phase-bj"
+CODE = Path("/fixture/code")
+WORKTREES = {TRUNK: "/fixture/code/integrate", "layer-a": "/fixture/code/a", "layer-b": "/fixture/code/b"}
+
+
+def stack_runner(view=None, *, view_error=False, ancestors=None):
+    """Fake the code checkout: `git worktree list`, one `gh stack view --json`, and `git merge-base --is-ancestor`."""
     calls = []
     def run(argv, fix, *, cwd=None, **kwargs):
-        calls.append((list(argv), cwd))
-        import json
+        calls.append((list(argv), str(cwd)))
         if argv == ["git", "worktree", "list", "--porcelain"]:
-            output = "worktree /fixture/code/integrate\nbranch refs/heads/integrate/phase-bj\n"
-        elif argv[:2] == ["gh", "api"]:
-            output = json.dumps([[{"number": 353, "open": True, "base": {"ref": "integrate/phase-bj"},
-                                  "pull_requests": [{"number": 100, "state": "open", "head": {"ref": "layer-a"}}]}]])
-        elif argv == ["gh", "stack", "view", "--json"]:
-            output = json.dumps({"trunk": "integrate/phase-bj", "branches": [
-                {"name": "integrate/phase-bj", "isMerged": False},
-                {"name": "layer-b", "isMerged": False, "needsRebase": True,
-                 "pr": {"number": 101}},
-            ]})
-        else:
-            raise AssertionError(f"unexpected command {argv}")
-        return Ok(Output(0, output))
-    queues_by_key = {key: [] for key, _, _ in queues.QUEUES}
+            return Ok(Output(0, "".join(f"worktree {path}\nbranch refs/heads/{name}\n" for name, path in WORKTREES.items())))
+        if argv == ["gh", "stack", "view", "--json"]:
+            if view_error:
+                return Err(CommandFailed("command_failed", tuple(argv), 1, "current branch is not part of a stack", fix))
+            return Ok(Output(0, json.dumps(view)))
+        if argv[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return Ok(Output(0 if (argv[3], argv[4]) in (ancestors or set()) else 1, ""))
+        raise AssertionError(f"unexpected command {argv}")
+    return run, calls
 
-    note = queues.stacks("integrate/phase-bj", queues_by_key, NOW, Path("/fixture/code"), "code-owner/code-repo", runner=run)
 
-    assert note == "1 open stack(s) on integrate/phase-bj, 1 unmerged layer(s) in the local stack"
-    assert [row["id"] for row in queues_by_key["stack_incoherent"]] == ["stack#353"]
-    assert [row["id"] for row in queues_by_key["pr_unlinked"]] == ["pr#101"]
-    assert calls[0][0] == ["gh", "api", "--paginate", "--slurp", "repos/code-owner/code-repo/stacks?per_page=100"]
-    assert calls[0][0][:2] == ["gh", "api"] and calls[0][1] == Path("/fixture/code")
-    assert calls[1] == (["git", "worktree", "list", "--porcelain"], Path("/fixture/code"))
-    assert calls[2] == (["gh", "stack", "view", "--json"], "/fixture/code/integrate")
+def stack_view(*layers):
+    return {"trunk": TRUNK, "currentBranch": TRUNK, "branches": [
+        {"name": TRUNK, "head": "t" * 40, "base": "0" * 40, "isMerged": False, "isQueued": False, "needsRebase": False},
+        *layers]}
 
+
+def layer(name, number, head, base, **extra):
+    return {"name": name, "head": head, "base": base, "isMerged": False, "isQueued": False, "needsRebase": False,
+            "pr": {"number": number, "url": f"https://example.test/pull/{number}", "state": "OPEN"}, **extra}
+
+
+def check(run, layers=("layer-a", "layer-b")):
+    rows = {key: [] for key, _, _ in queues.QUEUES}
+    note = queues.stacks(TRUNK, rows, NOW, CODE, run, layers)
+    return note, rows
+
+
+def test_properly_stacked_layers_produce_no_row_and_one_stack_view():
+    view = stack_view(layer("layer-a", 1, "a" * 40, "t" * 40), layer("layer-b", 2, "b" * 40, "a" * 40))
+    run, calls = stack_runner(view)
+
+    note, rows = check(run)
+
+    assert all(not value for value in rows.values())
+    assert note == f"0 stack issue(s) on {TRUNK} (gh stack view)"
+    assert [argv for argv, _ in calls].count(["gh", "stack", "view", "--json"]) == 1
+    assert calls[1] == (["gh", "stack", "view", "--json"], WORKTREES[TRUNK])
+    assert not any(argv[:2] in (["gh", "api"], ["gh", "stack"]) and argv[2] in ("rebase", "sync", "push") for argv, _ in calls)
+
+
+def test_needs_rebase_layers_and_missing_pr_are_one_row_with_exact_details():
+    stale = layer("layer-a", 1, "a" * 40, "9" * 40, needsRebase=True)
+    nopr = {"name": "layer-b", "head": "b" * 40, "base": "a" * 40, "isMerged": False, "isQueued": False, "needsRebase": False}
+    run, calls = stack_runner(stack_view(stale, nopr))
+
+    _, rows = check(run)
+
+    assert [row["id"] for row in rows["stack_incoherent"]] == [f"stack:{TRUNK}"]
+    detail = rows["stack_incoherent"][0]["detail"]
+    assert detail == (
+        "layer-a (PR #1) needs rebase: its base 999999999 is not the head ttttttttt of integrate/phase-bj; "
+        "the stack writer runs `gh stack rebase` in /fixture/code/a; "
+        "layer-b has no PR; the stack writer runs `gh stack submit` in /fixture/code/b")
+    assert sum(len(value) for value in rows.values()) == 1
+    assert [argv for argv, _ in calls if argv[:2] == ["gh", "stack"]] == [["gh", "stack", "view", "--json"]]
+
+
+def test_merged_layers_are_skipped_and_the_next_layer_is_checked_against_them():
+    merged = layer("layer-a", 1, "a" * 40, "t" * 40, isMerged=True)
+    run, _ = stack_runner(stack_view(merged, layer("layer-b", 2, "b" * 40, "a" * 40)))
+    _, rows = check(run)
+    assert rows["stack_incoherent"] == []
+
+
+def test_local_fallback_is_silent_when_gh_is_unavailable_and_the_chain_is_coherent():
+    run, calls = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
+
+    note, rows = check(run)
+
+    assert all(not value for value in rows.values())
+    assert note == f"0 stack issue(s) on {TRUNK} (local git)"
+    assert [argv for argv, _ in calls if argv[:2] == ["git", "merge-base"]] == [
+        ["git", "merge-base", "--is-ancestor", TRUNK, "layer-a"], ["git", "merge-base", "--is-ancestor", "layer-a", "layer-b"]]
+
+
+def test_local_fallback_reports_a_broken_chain_read_only_without_calling_gh_for_it():
+    run, calls = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a")})
+
+    _, rows = check(run)
+
+    assert rows["stack_incoherent"][0]["detail"] == (
+        "layer-b does not contain the head of layer-a (`git merge-base --is-ancestor layer-a layer-b` exited 1); "
+        "the stack writer rebases it onto layer-a in /fixture/code/b")
+    assert not any(argv[0] == "git" and argv[1] in ("rebase", "merge", "reset", "push") for argv, _ in calls)
+    assert not any(row for key, value in rows.items() if key != "stack_incoherent" for row in value)
+
+
+def test_gh_failure_is_never_reported_as_a_stack_fault():
+    run, _ = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
+    _, rows = check(run)
+    assert not any("gh" in row["detail"] for value in rows.values() for row in value)

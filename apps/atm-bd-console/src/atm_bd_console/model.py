@@ -137,23 +137,6 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     pr_rows, top_pr = _pr_rows(phase, prs, merges)
     top_ci = top_pr.ci if top_pr else None
     proposed = _problems(phase, held, merges, prs, top_pr, inputs, state, now) if stopped is None else ()
-    problems, notices, batch_due, first_send, last_batch = _reconcile_problems(
-        proposed, state, now, stopped is not None
-    )
-    actions = assigned + notices if stopped is None else ()
-    sent = (state.sent + actions)[-5:]
-    cycle_due = _cycle_due(state, now)
-    new_state = replace(
-        state,
-        problems=problems,
-        cycle_first_send=first_send,
-        last_batch=last_batch,
-        last_cycle=now if cycle_due else state.last_cycle,
-        idle_since=idle_since,
-        sent=sent,
-        remotes=remotes,
-        batch_due=batch_due,
-    )
     agents = _agent_views(members, tasks, phase, inputs.task_beads, now, inputs.repo.bead_prefix)
     sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix, agents)
     sections = (Section("Held", held),) if held else ()
@@ -165,7 +148,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         stopped=stopped,
         agents=agents,
         sections=sections,
-        problems=problems,
+        problems=(),
         errors=tuple(errors),
         metrics=_metrics(phase, now),
         gh=inputs.gh,
@@ -176,7 +159,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         interval_s=inputs.interval_s,
         lead=inputs.lead,
         bead_prefix=inputs.repo.bead_prefix,
-        sent=sent,
+        sent=(),
         prs=pr_rows,
         files={},
         phase_data=phase,
@@ -188,6 +171,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     from .collision import collisions
 
     collision_rows = collisions(snapshot) if stopped is None else ()
+    # Every problem for a recipient, collision and unknown-state ones included, goes out in that recipient's one batch per cycle.
     collision_problems = tuple(Problem(f"collision:{key}", sprint_id, inputs.lead, message, now)
                                for key, sprint_id, message in collision_rows)
     unknown_problems = tuple(Problem(f"unknown_sprint_state:{sprint.id}", sprint.id, inputs.lead,
@@ -199,18 +183,30 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     unknown_problems += tuple(Problem(f"unknown_ci_state:{pr.number}", None, inputs.lead,
                                       f"unknown CI state {pr.raw_ci!r} for #{pr.number}", now)
                               for pr in prs if pr.ci == CiState.UNKNOWN)
+    problems, notices, batch_due, first_send, last_batch = _reconcile_problems(
+        (*proposed, *collision_problems, *unknown_problems), state, now, stopped is not None
+    )
     github_problems = ()
     if not inputs.gh.paused and (inputs.gh.mode == "off" or inputs.gh.ok is not True or inputs.gh.truncated):
         cause = "off" if inputs.gh.mode == "off" else "truncated" if inputs.gh.truncated else (
             inputs.gh.error.kind if inputs.gh.error else "unavailable"
         )
         github_problems = (Problem("github_unavailable", None, inputs.lead, f"GitHub data {cause}", now),)
-    collision_actions = tuple(Action(now, "send", inputs.lead, (sprint_id,), message, None)
-                              for key, sprint_id, message in collision_rows if key not in state.collision_notices)
-    snapshot = replace(snapshot, problems=(*snapshot.problems, *collision_problems, *unknown_problems, *github_problems))
-    actions = (*actions, *collision_actions)
-    new_state = replace(new_state, collision_notices=(*state.collision_notices,
-                        *(key for key, _, _ in collision_rows if key not in state.collision_notices)))
+    snapshot = replace(snapshot, problems=(*problems, *github_problems))
+    actions = (assigned + notices) if stopped is None else ()
+    cycle_due = _cycle_due(state, now)
+    new_state = replace(
+        state,
+        problems=problems,
+        cycle_first_send=first_send,
+        last_batch=last_batch,
+        last_cycle=now if cycle_due else state.last_cycle,
+        idle_since=idle_since,
+        sent=(state.sent + actions)[-5:],
+        remotes=remotes,
+        batch_due=batch_due,
+    )
+    snapshot = replace(snapshot, sent=new_state.sent)
     return snapshot, actions, new_state
 
 
@@ -471,7 +467,12 @@ def _problems(
     conflicts = {
         f"conflict:{merge.branch}": Problem(
             f"conflict:{merge.branch}", step.bead_id, step.assignee or inputs.lead,
-            f"merge conflict with {merge.target}: {', '.join(merge.files)}", now,
+            f"{step.bead_id} ({step.kind}): merge check failed for {merge.branch} against {merge.target}: "
+            f"`git merge-tree --write-tree origin/{merge.target} origin/{merge.branch}` reported a conflict in "
+            f"{', '.join(merge.files) or 'unlisted files'}"
+            + (f" ({'; '.join(merge.messages)})" if merge.messages else "")
+            + f". Fix: `git -C {step.worktree or '<worktree>'} merge origin/{merge.target}`, resolve the conflicts, "
+            f"commit and push {merge.branch}.", now,
         )
         for merge in merges
         if merge.state == MergeState.CONFLICT and (step := by_branch.get(merge.branch)) is not None
@@ -486,21 +487,17 @@ def _problems(
             if not any(problem.key == f"hold:{step.bead_id}" for problem in problems):
                 problems.append(Problem(
                     f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
-                    "missing branch configuration", now,
+                    f"{step.bead_id} ({step.kind}) cannot be dispatched: missing branch configuration; "
+                    f"set the branch (and worktree) of bead {step.bead_id}", now,
                 ))
             continue
-        conflict = conflicts.get(f"conflict:{step.branch}")
-        if conflict is not None and row.reason == conflict.text:
+        if f"conflict:{step.branch}" in conflicts and row.reason.startswith("merge conflict with"):
             continue
-        problems.append(Problem(f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead, row.reason, now))
+        problems.append(Problem(
+            f"hold:{step.bead_id}", step.bead_id, step.assignee or inputs.lead,
+            f"{step.bead_id} ({step.kind}) cannot be dispatched: {row.reason}", now,
+        ))
     problems.extend(conflicts.values())
-    open_pairs = {(pr.head, pr.base) for pr in prs if pr.state in (PrState.OPEN, PrState.DRAFT)}
-    ended_pairs = {(pr.head, pr.base) for pr in prs if pr.state in (PrState.MERGED, PrState.CLOSED)} - open_pairs
-    problems.extend(
-        Problem(f"merge_error:{merge.branch}:{merge.target}", None, inputs.lead,
-                f"merge check failed for {merge.branch} against {merge.target}", now)
-        for merge in merges if merge.state == MergeState.ERROR and (merge.branch, merge.target) not in ended_pairs
-    )
     fresh_github = isinstance(inputs.prs, Ok) and inputs.gh.mode != "off" and inputs.gh.ok is True and (
         inputs.gh.at is not None and (state.last_cycle is None or inputs.gh.at > state.last_cycle)
     )
@@ -516,13 +513,15 @@ def _problems(
             if branch in open_branches and branch in pushed and branch not in heads:
                 problems.append(Problem(
                     f"missing_pr:{branch}", step.bead_id, step.assignee or inputs.lead,
-                    f"pushed branch {branch} has no open PR", now,
+                    f"{step.bead_id} ({step.kind}): pushed branch {branch} has no open PR; open a PR with "
+                    f"head {branch} against its pr_target (a stacked layer is submitted by the stack writer)", now,
                 ))
     if fresh_github and top_pr is not None and top_pr.ci in FAILING_CI:
         checks = ", ".join(top_pr.failed_checks)
         problems.append(Problem(
             f"top_ci:{top_pr.head_sha}", owner.bead_id if (owner := by_branch.get(top_pr.head)) else None,
-            inputs.lead, f"top PR #{top_pr.number} CI failed: {checks}", now,
+            inputs.lead, f"top PR #{top_pr.number} ({top_pr.head}) CI failed: {checks}; "
+            f"open the failing checks on PR #{top_pr.number} and fix them on {top_pr.head}", now,
         ))
     current_keys = {problem.key for problem in problems}
     refreshed_merges = {merge.branch for merge in merges if merge.state != MergeState.ERROR}
@@ -548,24 +547,30 @@ def _reconcile_problems(
         if problem.key in previous and previous[problem.key].to == problem.to else problem
         for problem in proposed
     )
-    new = tuple(problem for problem in problems if problem.key not in previous or previous[problem.key].to != problem.to)
-    actions = [Action(now, "send", problem.to, (problem.bead_id,) if problem.bead_id else (), problem.text, None) for problem in new]
     by_recipient: dict[str, list[Problem]] = {}
     for problem in problems:
         by_recipient.setdefault(problem.to, []).append(problem)
-    batch_due = {recipient: due_at for recipient, due_at in state.batch_due.items() if recipient in by_recipient}
-    for problem in new:
-        batch_due.setdefault(problem.to, now + CYCLE)
+    # One message per recipient per cycle, never one per problem. A recipient's due time is kept while its problems
+    # come and go, so a problem that clears and returns waits for the next cycle instead of being sent again at once.
+    batch_due = dict(state.batch_due)
+    for recipient in by_recipient:
+        batch_due.setdefault(recipient, now)
+    actions = []
     last_batch = state.last_batch
     for recipient, due_at in tuple(batch_due.items()):
-        if now >= due_at:
-            current = by_recipient[recipient]
-            bead_ids = tuple(problem.bead_id for problem in current if problem.bead_id)
-            text = "\n".join(problem.text for problem in current)
-            actions.append(Action(now, "batch", recipient, bead_ids, text, None))
-            while due_at <= now:
-                due_at += CYCLE
-            batch_due[recipient] = due_at
-            last_batch = now
+        if now < due_at:
+            continue
+        current = by_recipient.get(recipient)
+        if not current:
+            del batch_due[recipient]
+            continue
+        lines = [f"{index}. {problem.text}" for index, problem in enumerate(current, 1)]
+        text = f"atm-bd: {len(current)} problem(s) need action\n" + "\n".join(lines)
+        bead_ids = tuple(dict.fromkeys(problem.bead_id for problem in current if problem.bead_id))
+        actions.append(Action(now, "batch", recipient, bead_ids, text, None))
+        while due_at <= now:
+            due_at += CYCLE
+        batch_due[recipient] = due_at
+        last_batch = now
     first_send = (state.cycle_first_send or min(problem.first_seen for problem in problems)) if problems else None
     return problems, tuple(actions), batch_due, first_send, last_batch
