@@ -226,6 +226,12 @@ class Run:
                 lacking = [k for k in FINDING_FIELDS if finding.get(k) in (None, "")]
                 if lacking:
                     raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"finding {ref} lacks {', '.join(lacking)}")
+                # Deleted when a released sc-compose pours a string layer (preview-attach passes).
+                layer = finding.get("found_on_layer")
+                if layer not in (None, "") and (not isinstance(layer, int) or isinstance(layer, bool)):
+                    raise TargetError("BEAD_GROUPS_FOUND_ON_LAYER_NOT_INTEGER",
+                                      f"finding {ref}: found_on_layer {layer!r} is not an integer; pass the integer stack layer, "
+                                      "or omit found_on_layer and put free text in the finding description")
                 branch = f"fix/{meta['sprint']}-{slug}"
                 # Layer records carry no difficulty, so the cut takes it from the finding or the sprint and the fix group carries all four keys together.
                 cut = {"branch": branch, "worktree": str(Path(self.config["worktree_base"]) / branch), "pr_target": pr_target,
