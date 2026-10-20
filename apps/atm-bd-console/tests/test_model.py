@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len
 
+from atm_bd_console.agent_roles import agent_group
 from atm_bd_console.codec import from_json, to_json
 from atm_bd_console.dispatch import sprint_of
 from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
@@ -200,8 +201,10 @@ def test_qa_state_uses_active_qa_row_then_latest_closed_planned_qa_reason() -> N
         ("  FAIL: 3 findings filed", None, None),
     ),
 )
-def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color) -> None:
-    qa = Member("quality-mgr", "active", NOW, agent_type="qa")
+@pytest.mark.parametrize("agent_type", ["qa", "QA", "sprint_qa"])
+def test_qa_member_steps_from_running_to_closed_result(reason, expected_state, expected_color, agent_type) -> None:
+    qa = Member("quality-mgr", "active", NOW, agent_type=agent_type)
+    assert agent_group(qa.agent_type) == "qa"
     active = step("atm-bi-5.group-qa", "atm-bi-5", kind="qa", status=SprintState.IN_PROGRESS, assignee=qa.name)
     task = Task(active.bead_id, qa.name, "active", 0, NOW, NOW, "QA review")
 

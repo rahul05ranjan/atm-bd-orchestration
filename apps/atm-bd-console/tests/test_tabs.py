@@ -223,14 +223,17 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
     ("closed", "PASS", QaState.PASS, "#2EA043"),
     ("closed", "FAIL", QaState.FAIL, "#F85149"),
 ])
-def test_quality_finding_reviewer_retains_roster_icon_color(monkeypatch, tmp_path, status, reason, qa_state, color) -> None:
+@pytest.mark.parametrize("agent_type", ["qa", "QA", "sprint_qa"])
+def test_quality_finding_reviewer_retains_roster_icon_color(
+    monkeypatch, tmp_path, status, reason, qa_state, color, agent_type,
+) -> None:
     qa = {"id": "qa-1", "status": status, "closed_at": "2026-10-02T13:14:00Z", "close_reason": reason,
           "metadata": {"sprint": "bj-4", "round": 1}}
     finding = {"id": "f1", "description": "issue", "design": "correction", "severity": "important",
                "reviewer": "req-qa", "issue": "issue", "required_correction": "correction",
                "metadata": {"severity": "important", "reviewer": "req-qa"},
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
-    reviewer = replace(RUNNING.agents[0], name="req-qa", agent_type="qa")
+    reviewer = replace(RUNNING.agents[0], name="req-qa", agent_type=agent_type)
     assert icon_for(replace(reviewer, qa_state=qa_state)) == ("\U000f029b", color)
     snapshot = replace(SNAPSHOT, agents=(reviewer,))
     monkeypatch.setattr(runs, "run_findings", lambda *_args: [finding])

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from rich.cells import cell_len
 
+from .agent_roles import agent_group
 from .dispatch import candidates, dispatch, sprint_of, verification_reason
 from .enums import FAILING_CI, CiState, MergeState, PrState, QaState, SprintState
 from .icons import SPRINT_ICONS
@@ -277,7 +278,7 @@ def _agent_views(
             ))
         active = next((task for task in mine if task.state == "active"), None)
         qa_state = None
-        if (member.agent_type or "").lower() == "qa":
+        if agent_group(member.agent_type) == "qa":
             if any(row.kind in ("sprint_qa", "fix_qa") and row.state == "running" for row in rows):
                 qa_state = QaState.RUNNING
             else:
