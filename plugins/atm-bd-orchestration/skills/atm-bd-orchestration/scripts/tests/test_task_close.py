@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 
-from task_close_world import DERIVED, EXAMPLES, SCRIPTS, World, hook
+from task_close_world import DERIVED, EXAMPLES, SCRIPTS, World, example_values, hook
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
@@ -168,12 +168,12 @@ def test_argument_errors_use_typed_json(argv):
 
 @pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
 def test_every_role_required_field_is_validated_before_commands(world, role):
-    original = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    original = example_values(role)
     original.update(primary_checkout=str(world.root), worktree_path=str(world.root))
     contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
     required = contract["required_variables_by_role"][role]
     results = contract.get("result_variables_by_role", {}).get(role, [])
-    assert set(original) >= set(required) | set(results)
+    assert set(original) == set(required) | set(results)
     for field in [*required, *results]:
         world.values = dict(original)
         del world.values[field]
@@ -713,6 +713,9 @@ def test_not_reproducible_retry_uses_current_stack_top(world, boundary):
 def test_shared_contract_covers_all_role_templates_and_ids(world):
     contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
     declared = set(contract["required_variables"])
+    assert declared == set(contract["derived_variables"]).union(
+        *map(set, contract["required_variables_by_role"].values()),
+        *map(set, contract["result_variables_by_role"].values()))
     names = ("dev-complete.md.j2", "fix-complete.md.j2", "dev-sanity-template.xml.j2", "sanity-fail.xml.j2",
              "dev-sanity-complete.md.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     for name in names:
@@ -731,9 +734,11 @@ def test_shared_contract_covers_all_role_templates_and_ids(world):
 
 
 @pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
-def test_each_role_example_renders_every_shared_template(role):
-    values = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+def test_each_role_example_renders_every_shared_template(world, role):
+    values = example_values(role)
     hook.validate(values, role)
+    if role in ("dev", "fix"):
+        values = {**world.values, **values}
     common = ("dev-sanity-complete.md.j2", "sanity-fail.xml.j2", "qa-template.xml.j2", "qa-complete.md.j2")
     names = {
         "dev": ("dev-complete.md.j2", "dev-sanity-template.xml.j2", *common, "rebase-required.xml.j2"),
@@ -747,7 +752,7 @@ def test_each_role_example_renders_every_shared_template(role):
 
 @pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
 def test_each_role_example_executes_its_close_path(world, role):
-    world.values = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    world.values = example_values(role)
     world.values.update(primary_checkout=str(world.root), worktree_path=str(world.root))
     assert "ok" in world.run(role)
 
@@ -929,24 +934,36 @@ def close_from_files(world, role, dispatch, result=None):
     return output
 
 
-def test_fix_close_from_dispatch_and_result_files_derives_commit_and_pr(world):
-    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
-    example = json.loads((EXAMPLES / "task-close-vars-fix.json").read_text())
-    example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
-    dispatch = {name: example[name] for name in contract["required_variables_by_role"]["fix"]}
+@pytest.mark.parametrize("role", ["dev", "fix"])
+def test_close_from_documented_dispatch_and_result_files_derives_handoff(world, role):
+    dispatch = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
     dispatch.update(primary_checkout=str(world.root), worktree_path=str(world.root))
-    result = {name: example[name] for name in contract["result_variables_by_role"]["fix"]}
-    output = close_from_files(world, "fix", dispatch, result)
+    result = json.loads((EXAMPLES / f"task-close-result-{role}.json").read_text())
+    metadata = world.beads[dispatch["checked_bead"]]["metadata"]
+    metadata.pop("pr_number")
+    metadata.pop("pr_url")
+    output = close_from_files(world, role, dispatch, result)
     assert "ok" in output, output
-    assert output["ok"]["commit"] == example["commit"]
-    assert output["ok"]["pr_number"] == str(example["pr_number"])
-    assert not set(dispatch) & set(contract["derived_variables"])
+    assert output["ok"]["commit"] == world.head
+    assert output["ok"]["pr_number"] == str(world.pr_number)
+    assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
+    derived = {"commit": world.head, "pr_number": str(world.pr_number),
+               "pr_url": f"https://github.com/example/repo/pull/{world.pr_number}",
+               "rebased_onto": "b" * 40}
+    assert set(assignment["values"]) == set(dispatch) | set(result) | set(DERIVED)
+    assert {name: assignment["values"][name] for name in derived} == derived
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", assignment["values"]["generated_at"])
+    update = next(argv for argv, _ in world.writes if argv[:3] == ["bd", "update", dispatch["checked_bead"]])
+    written = dict(update[index + 1].split("=", 1) for index, flag in enumerate(update) if flag == "--set-metadata")
+    assert written == {"branch": dispatch["branch"], **{name: derived[name] for name in ("commit", "pr_number", "pr_url")}}
+    assert json.loads(world.path.read_text()) == dispatch
+    assert json.loads(world.result_path.read_text()) == result
 
 
 @pytest.mark.parametrize("role", ["dev", "fix"])
 def test_fixer_fields_in_the_dispatch_file_are_refused_before_commands(world, role):
     contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
-    example = json.loads((EXAMPLES / f"task-close-vars-{role}.json").read_text())
+    example = example_values(role)
     example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
     dispatch = {name: example[name] for name in contract["required_variables_by_role"][role]}
     dispatch.update(primary_checkout=str(world.root), worktree_path=str(world.root), outcome="fixed")
@@ -958,7 +975,7 @@ def test_fixer_fields_in_the_dispatch_file_are_refused_before_commands(world, ro
 
 def test_result_file_rejects_fields_that_are_not_its_role_fields(world):
     contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
-    example = json.loads((EXAMPLES / "task-close-vars-dev.json").read_text())
+    example = example_values("dev")
     example.update(primary_checkout=str(world.root), worktree_path=str(world.root))
     dispatch = {name: example[name] for name in contract["required_variables_by_role"]["dev"]}
     dispatch.update(primary_checkout=str(world.root), worktree_path=str(world.root))
@@ -975,3 +992,91 @@ def test_dev_and_fix_close_require_a_result_file(world):
     output = close_from_files(world, "fix", example, None)
     assert output["err"]["code"] == "ARGS.INVALID"
     assert world.calls == []
+
+
+@pytest.mark.parametrize("role", ["dev", "fix"])
+@pytest.mark.parametrize("skip", [False, True])
+def test_empty_derived_commit_never_writes_even_when_checks_are_skipped(world, role, skip):
+    world.overrides[("git", "rev-parse", "HEAD")] = (0, "")
+    output = world.run(role, skip_checks=skip)
+    assert output["err"]["code"] == "VARS.EMPTY"
+    assert "commit" in output["err"]["message"]
+    assert world.writes == []
+
+
+@pytest.mark.parametrize("role", ["dev", "fix"])
+@pytest.mark.parametrize("skip", [False, True])
+@pytest.mark.parametrize("missing", ["pr_number", "pr_url"])
+def test_offline_or_skipped_checks_require_recorded_pr_identity(world, role, skip, missing):
+    world.github_failure = True
+    world.beads[world.values["checked_bead"]]["metadata"][missing] = None
+    output = world.run(role, skip_checks=skip)
+    assert output["err"]["code"] == "VARS.EMPTY"
+    assert missing in output["err"]["message"]
+    assert "record" in output["err"]["fix"]
+    assert world.writes == []
+
+
+@pytest.mark.parametrize("role", ["dev", "fix"])
+def test_skipped_checks_preserve_recorded_pr_identity(world, role):
+    output = world.run(role, skip_checks=True)
+    assert "ok" in output, output
+    assert output["ok"]["pr_number"] == str(world.pr_number)
+    assert not any(argv[0] == "gh" for argv, _ in world.calls)
+    assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
+    assert assignment["values"]["pr_url"] == world.values["pr_url"]
+    assert assignment["values"]["rebased_onto"] == "b" * 40
+
+
+def test_multiple_open_prs_at_head_are_refused_before_writes(world):
+    prs = [{"number": number, "head": {"sha": world.head}} for number in (351, 352)]
+    command = ("gh", "api", f"repos/example/repo/pulls?head=example:{world.values['branch']}&state=open")
+    world.overrides[command] = (0, json.dumps(prs))
+    output = world.run()
+    assert output["err"]["code"] == "PR.AMBIGUOUS"
+    assert "duplicate" in output["err"]["fix"]
+    assert world.writes == []
+
+
+@pytest.mark.parametrize("number", [None, "", 0])
+def test_empty_discovered_pr_identity_is_refused_before_writes(world, number):
+    command = ("gh", "api", f"repos/example/repo/pulls?head=example:{world.values['branch']}&state=open")
+    world.overrides[command] = (0, json.dumps([{"number": number, "head": {"sha": world.head}}]))
+    output = world.run()
+    assert output["err"]["code"] == "VARS.EMPTY"
+    assert "pr_number" in output["err"]["message"]
+    assert world.writes == []
+
+
+@pytest.mark.parametrize("role", ["dev", "fix", "sanity", "qa"])
+def test_shared_render_uses_exact_role_fields_without_union_placeholders(world, monkeypatch, role):
+    contract = hook.header(hook.TEMPLATES / "task-close-vars.j2")
+    expected = set(contract["required_variables_by_role"][role]) | set(contract["result_variables_by_role"].get(role, []))
+    assert set(contract["render_variables_by_role"][role]) == expected
+    original = hook.sc_render.render
+    rendered = []
+
+    def render(template, values):
+        if Path(template).name == "task-close-vars.j2":
+            assert set(hook.header(Path(template))["required_variables"]) == expected
+            assert set(values) == expected
+            assert values == {name: world.values[name] for name in expected}
+            rendered.append(True)
+        return original(template, values)
+
+    monkeypatch.setattr(hook.sc_render, "render", render)
+    assert "ok" in world.run(role)
+    assert rendered == [True]
+
+
+@pytest.mark.parametrize("role", ["dev", "fix"])
+def test_assignment_consumes_completion_vars_before_the_temporary_file_is_removed(world, role):
+    assert "ok" in world.run(role)
+    command = next(argv for argv, _ in world.calls if argv[:3] == ["atm", "task", "assign"])
+    consumed = Path(command[command.index("--vars") + 1])
+    assert consumed.name == "completion-vars.json"
+    assert not consumed.exists()
+    assignment = next(message for message in world.messages if message["type"] == "dev-sanity-task")
+    assert assignment["values"]["commit"] == world.head
+    assert world.values["checked_bead"] in assignment["body"]
+    assert json.loads(world.path.read_text())

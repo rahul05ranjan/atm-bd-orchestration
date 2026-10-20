@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.18.1] - Unreleased
+
+### Changed
+- Close-hook dev/fix completion uses immutable dispatch vars plus a separate result file, deriving commit and PR identity at close (#485). The role-specific contract rejects missing derived identity even with skipped checks or unavailable GitHub, refuses ambiguous PRs, and renders only that role's required/result fields. Matching split examples and end-to-end handoff tests document assignment-time vars consumption.
+
 ## [0.18.0] - 2026-10-19
 
 ### Changed

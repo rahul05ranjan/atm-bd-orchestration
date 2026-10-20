@@ -83,14 +83,17 @@ def merge_result(values, result, role):
 def validate_shared_vars(values, role):
     """Strictly render the shared dispatch contract before inspecting live state."""
     validate(values, role)
-    render_values = values
-    if role in ("dev", "fix"):
-        # validate() already requires this role's own fields; the strict render only needs the union
-        # declared by the contract, so the other roles' fields are placeholders for dev and fix.
-        union = header(TEMPLATES / "task-close-vars.j2")["required_variables"]
-        render_values = {**dict.fromkeys(union, ""), **values}
+    contract = header(TEMPLATES / "task-close-vars.j2")
+    fields = contract["render_variables_by_role"][role]
+    if role == "fix" and values["outcome"] == "not_reproducible":
+        fields = [name for name in fields if name != "branch"]
+    render_values = {name: values[name] for name in fields if name in values}
+    contract.update(required_variables=fields, defaults={})
     try:
-        sc_render.render(TEMPLATES / "task-close-vars.j2", render_values)
+        with tempfile.TemporaryDirectory(prefix="atm-task-close-contract-") as directory:
+            template = Path(directory) / "task-close-vars.j2"
+            template.write_text("---\n" + yaml.safe_dump(contract) + "---\n{{ '' }}\n", encoding="utf-8")
+            sc_render.render(template, render_values)
     except sc_render.RenderError as error:
         raise CloseError("VARS.INVALID", str(error),
                          "Supply every field required by the shared task-close vars contract.") from error
@@ -230,7 +233,6 @@ def validate(values, role):
     if role in ("dev", "fix", "sanity"):
         names.append("stack_bead")
     if values["outcome"] != "not_reproducible":
-        # dev and fix derive commit and pr_number at close, so they are checked after derivation.
         names += ["branch"] if role in ("dev", "fix") else ["branch", "commit", "pr_number"]
     elif not re.search(r"\S+:\d+", str(values["evidence"])):
         raise CloseError("VARS.INVALID", "not_reproducible requires evidence file:line", "Supply the authoritative absence location.")
@@ -465,8 +467,11 @@ class Hook:
             matches = [pr for pr in prs if pr["head"]["sha"] == head]
             if not matches:
                 raise CloseError("PR.NOT_FOUND", "no open PR for this branch at HEAD", "Open the PR at the pushed head, then rerun the hook.")
-            values["pr_number"] = str(matches[0]["number"])
-            values["pr_url"] = f"https://github.com/{owner}/{repo}/pull/{values['pr_number']}"
+            if len(matches) != 1:
+                raise CloseError("PR.AMBIGUOUS", "several open PRs match this branch at HEAD",
+                                 "Close the duplicate PRs so exactly one open PR names this branch and pushed head, then rerun the hook.")
+            values["pr_number"] = str(matches[0]["number"] or "")
+            values["pr_url"] = f"https://github.com/{owner}/{repo}/pull/{values['pr_number']}" if values["pr_number"] else ""
             return
         self.github = "unavailable"
         self.keep_recorded_pr()
@@ -474,8 +479,8 @@ class Hook:
     def keep_recorded_pr(self):
         # Without GitHub the PR identity is the one the bead already records.
         metadata = self.bead(self.task).get("metadata") or {}
-        self.values["pr_number"] = str(metadata.get("pr_number", ""))
-        self.values["pr_url"] = str(metadata.get("pr_url", ""))
+        self.values["pr_number"] = str(metadata.get("pr_number") or "")
+        self.values["pr_url"] = str(metadata.get("pr_url") or "")
 
     def render(self, template, values=None):
         try:
@@ -518,7 +523,16 @@ class Hook:
         head = self.run(["git", "rev-parse", "HEAD"], git=True).stdout.strip()
         self.values.update(commit=head, generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                            pr_number="", pr_url="", rebased_onto="")
+        self.require_completion_identity(("commit",))
         self.key = [self.task, self.values.get("verdict", ""), head]
+
+    def require_completion_identity(self, fields=("commit", "pr_number", "pr_url")):
+        if self.values["outcome"] == "not_reproducible":
+            return
+        for name in fields:
+            if not str(self.values.get(name) or "").strip():
+                raise CloseError("VARS.EMPTY", f"derived {name} is empty",
+                                 "Push a non-empty HEAD and open exactly one PR; when GitHub is unavailable or checks are skipped, record its pr_number and pr_url on the checked bead before retrying.")
 
     def dev(self, skip):
         values = self.values
@@ -549,6 +563,10 @@ class Hook:
                 return
             if not skip:
                 self.checks()
+            else:
+                self.keep_recorded_pr()
+                values["rebased_onto"] = self.run(["git", "rev-parse", f"origin/{values['pr_target']}"], git=True).stdout.strip()
+            self.require_completion_identity()
             self.render("dev-sanity-template.xml.j2")
             self.render(template)
             completion.write_text(json.dumps(values), encoding="utf-8")
@@ -557,6 +575,7 @@ class Hook:
 
     def finish_dev(self, sanity, template, *, path=None):
         values = self.values
+        self.require_completion_identity()
         assignment_values = json.loads(Path(path).read_text()) if path else values
         sanity_events = self.task_history[sanity]
         terminal = is_terminal(sanity_events)

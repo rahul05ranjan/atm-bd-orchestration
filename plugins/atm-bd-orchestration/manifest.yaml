@@ -47,6 +47,8 @@ artifacts:
     - skills/atm-bd-orchestration/examples/ruthless-boundary-qa-assignment-vars.json
     - skills/atm-bd-orchestration/examples/sanity-run-record-vars.json
     - skills/atm-bd-orchestration/examples/schema-reviewer-assignment-vars.json
+    - skills/atm-bd-orchestration/examples/task-close-result-dev.json
+    - skills/atm-bd-orchestration/examples/task-close-result-fix.json
     - skills/atm-bd-orchestration/examples/task-close-vars-dev.json
     - skills/atm-bd-orchestration/examples/task-close-vars-fix.json
     - skills/atm-bd-orchestration/examples/task-close-vars-qa.json
