@@ -12,6 +12,7 @@ from textual.widgets import OptionList
 from atm_bd_console.app import ConsoleApp
 from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.result import IoFailed
+from atm_bd_console.timefmt import clock
 from atm_bd_console.types import Metrics, StepResult
 
 LATER = RUNNING.generated_at + timedelta(seconds=60)
@@ -39,7 +40,7 @@ def test_phase_failure_keeps_every_phase_part_and_shows_one_indicator() -> None:
     assert health.carried_since(TIMEOUT) == LATER
     assert health.phase_error() == TIMEOUT
     assert health.indicator(LATER) == (
-        f"! beads.open failed since {LATER:%H:%M:%S} · showing data from {RUNNING.generated_at:%H:%M:%S} (1m old)")
+        f"! beads.open failed since {clock(LATER, seconds=True)} · showing data from {clock(RUNNING.generated_at, seconds=True)} (1m old)")
 
 
 def test_failure_since_is_kept_while_it_persists_and_clears_on_success() -> None:
@@ -47,7 +48,7 @@ def test_failure_since_is_kept_while_it_persists_and_clears_on_success() -> None
     health.apply(RUNNING, {})
     health.apply(blanked(), {"beads.open": TIMEOUT})
     health.apply(replace(blanked(), generated_at=LATEST), {"beads.open": TIMEOUT})
-    assert f"since {LATER:%H:%M:%S}" in (health.indicator(LATEST) or "")
+    assert f"since {clock(LATER, seconds=True)}" in (health.indicator(LATEST) or "")
     recovered = replace(RUNNING, generated_at=LATEST + timedelta(seconds=60))
     assert health.apply(recovered, {}) is recovered
     assert health.indicator(LATEST) is None
@@ -100,7 +101,7 @@ def test_tick_failure_leaves_data_and_clears_on_next_success() -> None:
     health.tick_failed(IoFailed("io_failed", "console tick", "boom", "retry"), LATEST)
     assert health.last_good is RUNNING
     assert health.indicator(LATER) == (
-        f"! tick failed since {LATER:%H:%M:%S} · showing data from {RUNNING.generated_at:%H:%M:%S} (1m old)")
+        f"! tick failed since {clock(LATER, seconds=True)} · showing data from {clock(RUNNING.generated_at, seconds=True)} (1m old)")
     health.apply(replace(RUNNING, generated_at=LATEST), {})
     assert health.indicator(LATEST) is None
 

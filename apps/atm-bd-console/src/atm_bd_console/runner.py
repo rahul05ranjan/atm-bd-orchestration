@@ -176,12 +176,14 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     gh = cached_prs.value.gh if config.github != "off" and isinstance(cached_prs, Ok) else _gh(config.github)
     gh = replace(gh, poll_interval_s=config.github_poll_interval_s, quota_threshold=config.github_quota_threshold)
     cache_errors = ()
+    prs_read_at = cached_prs.value.read_at if isinstance(cached_prs, Ok) else None
     if force_github and config.github != "off":
         groups = _branch_groups(phase.value, repo) if config.github == "rest" and isinstance(phase, Ok) else ()
         refreshed, gh = _refresh_github(config, now, gh, groups)
         if isinstance(refreshed, Ok):
             prs = refreshed
         previous_read = cached_prs.value.read_at if isinstance(cached_prs, Ok) else now
+        prs_read_at = now if isinstance(refreshed, Ok) else prs_read_at
         saved = store.write_prs(PrsFile(now if isinstance(refreshed, Ok) else previous_read, gh, prs.value, attempted_at=now))
         if isinstance(saved, Err):
             cache_errors = (saved.error,)
@@ -215,7 +217,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     persisted = replace(snapshot, errors=_unique((*errors, *logger.errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
     # The open QA rows were not read on a stopped tick: no quality result, so the held rows stay.
-    return StepResult(snapshot, next_state, sanity=sanity, failed_reads=logger.failed_reads)
+    return StepResult(snapshot, next_state, sanity=sanity, failed_reads=logger.failed_reads, prs_read_at=prs_read_at)
 
 
 def _closed_tasks(
@@ -409,5 +411,6 @@ def step(config: Config, state: State, force_github: bool, store: StateStore,
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=_unique((*snapshot.errors, *errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return StepResult(persisted, durable, reported, sanity, quality, logger.failed_reads)
+            return StepResult(persisted, durable, reported, sanity, quality, logger.failed_reads,
+                              prs_read_at=prs_read_at if prs_input is not None else None)
     return persist(store)

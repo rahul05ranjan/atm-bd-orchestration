@@ -30,6 +30,7 @@ from atm_bd_console.result import (
     Timeout,
     Unreachable,
 )
+from atm_bd_console.timefmt import clock
 from atm_bd_console.types import (
     Action,
     AgentView,
@@ -484,8 +485,8 @@ def test_dashboard_header_carries_the_stale_indicator_and_age_not_a_fresh_lookin
     health.apply(RUNNING, {})
     shown = health.apply(replace(RUNNING, generated_at=later, errors=(TIMEOUT,)), {"beads.open": TIMEOUT})
     lines = dashboard(shown, 600, 40, health).plain.splitlines()
-    assert lines[1] == f"! beads.open failed since {later:%H:%M:%S} · showing data from {good_at:%H:%M:%S} (2m old)"
-    assert any(line.endswith(f"(carried since {later:%H:%M:%S})") and "timeout" in line for line in lines)
+    assert lines[1] == f"! beads.open failed since {clock(later, seconds=True)} · showing data from {clock(good_at, seconds=True)} (2m old)"
+    assert any(line.endswith(f"(carried since {clock(later, seconds=True)})") and "timeout" in line for line in lines)
     assert "! " not in dashboard(RUNNING, 200, 40, PollHealth()).plain
 
 

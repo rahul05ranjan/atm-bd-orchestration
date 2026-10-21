@@ -768,7 +768,9 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
         return model_tick(value, state, now, spec)
 
     monkeypatch.setattr(runner.model, "tick", tick)
-    snapshot, _ = runner.step(CONFIG, RUNNING_STATE, True, store)
+    result = runner.step(CONFIG, RUNNING_STATE, True, store)
+    snapshot = result[0]
+    assert result.prs_read_at == EARLIER  # the rows on screen are the cached ones, last read EARLIER
 
     assert inputs[0].prs == Ok(cached.prs)
     assert tuple(row.pr for row in snapshot.prs) == cached.prs

@@ -186,7 +186,7 @@ def dashboard(snapshot: Snapshot, width: int, height: int, health: PollHealth | 
         # Error carries no time of its own, so each row shows the tick that surfaced it (generated_at), not the mock's per-error time.
         for error in snapshot.errors:
             since = health.carried_since(error) if health is not None else None
-            tag = f" (carried since {since:%H:%M:%S})" if since is not None else ""
+            tag = f" (carried since {clock(since, seconds=True)})" if since is not None else ""
             lines.append(Text(f" {clock(snapshot.generated_at)} {_error_text(error)}{tag}"))
     held_failures = [failure for failure in health.failures.values() if failure.source in DISPATCH] if health else []
     if held_failures and snapshot.phase_data is not None and snapshot.stopped is None:

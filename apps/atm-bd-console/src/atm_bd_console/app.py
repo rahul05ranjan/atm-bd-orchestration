@@ -120,7 +120,11 @@ def status_header(snapshot: Snapshot, health: PollHealth | None = None) -> Text:
 
 def _diagnostic_line(event: _DiagnosticEvent) -> str:
     """Add local display time and level to a stored message without interpreting it."""
-    return f"{render.clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
+    try:
+        stamp = render.clock(datetime.fromisoformat(event.timestamp), seconds=True)
+    except ValueError:
+        stamp = event.timestamp  # a malformed stored timestamp is shown as stored, never raised into the tab
+    return f"{stamp} {event.level}: {event.message or ''}"
 
 
 def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text:
@@ -380,6 +384,7 @@ class ConsoleApp(App[int]):
         self.health = PollHealth()
         self.status_text = ""
         self.status_error: Error | None = None
+        self.prs_read_at: datetime | None = None
         self.dag = status.DagPane(log=self._log_render_error)
         self.tick_error: Error | None = None
         self._step_lock = threading.Lock()
@@ -558,12 +563,14 @@ class ConsoleApp(App[int]):
         sanity: Result[list[runs.SanityRun]] | None = None
         quality: Result[tuple[list[runs.QaRun], list[dict]]] | None = None
         failed: dict[str, Error] = {}
+        prs_read_at: datetime | None = None
         self._step_lock.acquire()
         try:
             step_result = self.step(self.config, self.state, force_github)
             snapshot, state = step_result
             self.state = state
             sanity, quality = step_result.sanity, step_result.quality
+            prs_read_at = step_result.prs_read_at
             failed = dict(getattr(step_result, "failed_reads", {}))
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
@@ -574,12 +581,13 @@ class ConsoleApp(App[int]):
                 text, error = self.dag.show(snapshot, datetime.now(UTC))
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
-        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, sanity, quality, failed)
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, sanity, quality, failed,
+                                prs_read_at)
 
     def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None,
                      sanity: Result[list[runs.SanityRun]] | None,
                      quality: Result[tuple[list[runs.QaRun], list[dict]]] | None,
-                     failed: dict[str, Error] | None = None) -> None:
+                     failed: dict[str, Error] | None = None, prs_read_at: datetime | None = None) -> None:
         # A read that did not happen this tick (None) leaves what is held; a failed one keeps it and marks it stale.
         now = datetime.now(UTC)
         self.sanity_held = self.sanity_held.apply(sanity, now)
@@ -588,6 +596,7 @@ class ConsoleApp(App[int]):
         if tick_error is not None:
             self._show_tick_error(tick_error)
         elif snapshot is not None:
+            self.prs_read_at = prs_read_at
             self._show(self.health.apply(snapshot, failed or {}), text, error)
         self._tick_running = False
         if self._pending_forced_refresh:
@@ -743,7 +752,7 @@ class ConsoleApp(App[int]):
             else:
                 table.update(Text(f"Sprint status: {unavailable}", style="red"))
             self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height, self.health))
-            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
+            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history, self.prs_read_at))
             self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width, self.health))
             header = status_header(snapshot, self.health)
             header.no_wrap = True
@@ -789,9 +798,13 @@ class ConsoleApp(App[int]):
         details = "No errors recorded."
         if self.query_one(TabbedContent).active == "diagnostics":
             logger = create_console_logger(self.config.repo_root)
-            if isinstance(logger, Ok):
+            if isinstance(logger, Err):
+                details = f"Unable to open the console log: {error_text(logger.error)}"
+            else:
                 queried = logger.value.query(levels=("warn", "error"), limit=20, order="newest_first")
-                if isinstance(queried, Ok):
+                if isinstance(queried, Err):
+                    details = f"Unable to read the console log: {error_text(queried.error)}"
+                else:
                     lines = [_diagnostic_line(event) for event in queried.value]
                     details = "\n".join(lines) or details
         agent_details = []

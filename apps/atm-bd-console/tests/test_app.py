@@ -68,7 +68,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_held=Held(), open_quality_held=Held(), closed_quality_held=Held(), quality_runs=[], health=PollHealth(),
+                            config=replace(CONFIG, repo_root=str(tmp_path)), prs_read_at=None, sanity_held=Held(), open_quality_held=Held(), closed_quality_held=Held(), quality_runs=[], health=PollHealth(),
                             show_pr_history=False, status_error=None, status_text="",
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
@@ -780,3 +780,52 @@ def test_startup_atm_members_error_is_not_repeated_by_the_tick_that_reads_the_sa
             assert app.snapshot.errors == (tick_error,)
 
     run_scenario(scenario())
+
+
+class _QueryLogger:
+    """A logger whose query result is scripted; the other calls a tick makes are accepted and ignored."""
+
+    def __init__(self, queried) -> None:
+        self.queried = queried
+
+    def query(self, **_kwargs):
+        return self.queried
+
+    def event(self, *_args, **_kwargs):
+        return Ok(None)
+
+    def flush(self):
+        return Ok(None)
+
+
+def _diagnostics_text(monkeypatch, tmp_path, logger_result) -> str:
+    monkeypatch.setattr(console, "create_console_logger", lambda *_: logger_result)
+    shown = []
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path / "state")), FakeStep(RUNNING), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "diagnostics"
+            app.refresh_views()
+            await settle(pilot)
+            shown.append(app.query_one("#diagnostics-text").render().plain)
+
+    run_scenario(scenario())
+    return shown[0]
+
+
+def test_diagnostics_shows_the_typed_error_of_a_failed_log_query_not_no_errors(monkeypatch, tmp_path) -> None:
+    from atm_bd_console.result import IoFailed
+
+    failure = IoFailed("io_failed", "logs", "disk unreadable", "inspect the console log directory")
+    text = _diagnostics_text(monkeypatch, tmp_path, Ok(_QueryLogger(Err(failure))))
+    assert f"Unable to read the console log: {error_text(failure)}" in text and "No errors recorded." not in text
+    text = _diagnostics_text(monkeypatch, tmp_path, Err(failure))
+    assert f"Unable to open the console log: {error_text(failure)}" in text and "No errors recorded." not in text
+    assert "No errors recorded." in _diagnostics_text(monkeypatch, tmp_path, Ok(_QueryLogger(Ok(()))))
+
+
+def test_diagnostics_line_survives_a_malformed_stored_timestamp() -> None:
+    event = SimpleNamespace(timestamp="not-a-time", level="error", message="boom")
+    assert console._diagnostic_line(event) == "not-a-time error: boom"

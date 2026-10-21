@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from .result import Error
-from .timefmt import _age
+from .timefmt import _age, clock
 from .types import Snapshot
 
 TICK = "tick"
@@ -58,12 +58,12 @@ class PollHealth:
             return None
         ordered = sorted(self.failures.values(), key=lambda failure: (failure.since, failure.source))
         names = ", ".join(failure.source for failure in ordered)
-        text = f"! {names} failed since {ordered[0].since:%H:%M:%S}"
+        text = f"! {names} failed since {clock(ordered[0].since, seconds=True)}"
         good = [failure.good_at for failure in ordered if failure.good_at is not None]
         if not good:
             return f"{text} · nothing read yet"
         oldest = min(good)
-        return f"{text} · showing data from {oldest:%H:%M:%S} ({_age(int((now - oldest).total_seconds()))} old)"
+        return f"{text} · showing data from {clock(oldest, seconds=True)} ({_age(int((now - oldest).total_seconds()))} old)"
 
     def carried_since(self, error: Error) -> datetime | None:
         """When this error's source started failing, if its last good content is what is on screen."""
