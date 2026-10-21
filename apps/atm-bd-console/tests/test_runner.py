@@ -151,10 +151,12 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def test_tick_reports_open_read_failure_without_collecting_runs(monkeypatch, github_runtime):
     store, _, _, _ = github_runtime
     monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Err(TIMEOUT))
-    monkeypatch.setattr(runner.ledger_source, "collect", lambda *_: pytest.fail("must not collect incomplete rows"))
+    monkeypatch.setattr(runner.ledger_source, "open_quality", lambda *_: pytest.fail("must not collect incomplete rows"))
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
-    assert result.run_data is None
-    assert result.runs_error == str(TIMEOUT)
+    assert result.quality == Err(TIMEOUT)
+    # The sanity ledger is a file: a failed bd read does not block it.
+    assert result.sanity == Ok([])
 
 
 @pytest.mark.parametrize("open_failed", [False, True])
@@ -171,21 +173,20 @@ def test_tick_owns_exactly_one_open_and_never_reads_closed(monkeypatch, github_r
     monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
     monkeypatch.setattr(runner.beads_source.command, "run", run)
 
-    def collect(*_args):
+    def open_quality(*_args):
         assert not open_failed, "must not collect incomplete rows"
-        return [], [], []
+        return [], []
 
-    monkeypatch.setattr(runner.ledger_source, "collect", collect)
+    monkeypatch.setattr(runner.ledger_source, "open_quality", open_quality)
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
     if open_failed:
-        assert result.runs_error is not None and "timeout" in result.runs_error
-        assert "waited 20s" in result.runs_error and "bd list -l phase:bh -n 0 --json" in result.runs_error
+        assert isinstance(result.quality, Err) and result.quality.error.kind == "timeout"
+        assert "waited 20s" in result.quality.error.fix and "bd list -l phase:bh -n 0 --json" in result.quality.error.fix
     else:
-        assert result.runs_error is None
+        assert result.quality == Ok(([], []))
     expected = [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"]]
     assert calls == expected
-    if open_failed:
-        assert result.run_data is None
     assert all("--all" not in argv for argv in calls)
 
 
@@ -205,6 +206,7 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: initial_read(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", show)
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(PHASE))
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("stopped history must not dispatch or fetch")
@@ -221,7 +223,10 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
         (store, "append_action"), (store, "write_merges"), (store, "write_prs"),
     ):
         monkeypatch.setattr(source, name, forbidden)
-    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    result = runner.step(CONFIG, STATE, False, store)
+    snapshot = result[0]
+    # No open rows were read, so no quality result that could overwrite the held rows with empty ones.
+    assert result.quality is None and result.sanity == Ok([])
     assert shown == [(PHASE_FILE.root_id,), (
         "atm-bh-1", "atm-bh-1.group-dev", "atm-bh-1.group-sanity", "atm-bh-1.group-qa",
         "atm-bh-6", "atm-bh-6.group-dev", "atm-bh-6.group-sanity", "atm-bh-6.group-qa",

@@ -32,15 +32,17 @@ from .agent_roles import agent_group
 from .build import display_identity
 from .closed_cache import ClosedBeads
 from .enums import QaState, SprintState
+from .held import Held, held_view
 from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
 from .log import create_console_logger, error_message
 from .poll_health import PollHealth
-from .result import Err, Error, IoFailed, Ok
+from .result import Err, Error, IoFailed, Ok, Result
 from .state import acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn, StepResult
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
+FINDINGS_PLACEHOLDER = "*Select a run to see its findings.*"
 
 
 class FindingsMarkdown(Markdown):
@@ -172,6 +174,27 @@ def sanity_text(
         line.extend((Text(run.final_verdict or "—"), Text(str(run.iteration or "—"))))
         lines.append(line)
     return _aligned(lines), _aligned(errors)
+
+
+def sanity_pane(held: Held[list[runs.SanityRun]], agents: tuple[AgentView, ...], now: datetime,
+                *, local_zone: tzinfo | None = None) -> tuple[Text, Text]:
+    """Every sanity run, newest first, or the labelled reason there is none; a failed read keeps the last rows, marked stale."""
+    items, note = held_view(held, "Sanity runs", now)
+    if items is None:
+        return Text(note, style="red"), Text()
+    main, errors = sanity_text(items, agents, local_zone=local_zone)
+    if note:
+        main.append(f"\n{note}", style="red")
+    elif not items:
+        main.append("\nNo sanity runs recorded for this phase.", style="dim")
+    return main, errors
+
+
+def quality_notes(open_held: Held[tuple[list[runs.QaRun], list[dict]]],
+                  closed_held: Held[tuple[list[runs.QaRun], list[dict]]], now: datetime) -> str:
+    """One line per stale or never-loaded part of the Quality tab; empty when both parts are fresh."""
+    notes = [held_view(open_held, "Open QA runs", now)[1], held_view(closed_held, "Closed QA runs", now)[1]]
+    return "\n".join(note for note in notes if note)
 
 
 _QUALITY_HEADERS = ("Completed", "QA", "Sprint", "QA bead", "PR", "Round", "B", "I", "M", "Elapsed")
@@ -307,8 +330,7 @@ class ConsoleApp(App[int]):
     Screen { layers: base overlay; }
     #build { layer: overlay; position: absolute; width: auto; height: 1; }
     #diagnostics { height: 1fr; overflow: auto; }
-    #sanity-list { height: 3fr; overflow: auto; }
-    #sanity-errors { height: 2fr; overflow: auto; }
+    #sanity-list, #sanity-errors { height: auto; }
     #quality-runs { height: 3fr; }
     #quality-runs-header { height: 1; margin-left: 2; }
     #quality-findings { height: 2fr; overflow: auto; }
@@ -341,15 +363,11 @@ class ConsoleApp(App[int]):
         self._pending_forced_refresh = False
         self._status_view_initialized = False
         self.show_pr_history = False
-        self.sanity_runs: list[runs.SanityRun] = []
         self.quality_runs: list[runs.QaRun] = []
         self.finding_beads: list[dict] = []
-        self.runs_error: str | None = None
-        self._open_quality_runs: list[runs.QaRun] = []
-        self._open_findings: list[dict] = []
-        self._closed_quality_runs: list[runs.QaRun] = []
-        self._closed_findings: list[dict] = []
-        self._quality_error: str | None = None
+        self.sanity_held: Held[list[runs.SanityRun]] = Held()
+        self.open_quality_held: Held[tuple[list[runs.QaRun], list[dict]]] = Held()
+        self.closed_quality_held: Held[tuple[list[runs.QaRun], list[dict]]] = Held()
         # Every mouse press, click, key and tab change with the widget it landed on (#241 evidence).
         self.input_log_path = Path(config.state_dir) / "input.log"
 
@@ -369,14 +387,14 @@ class ConsoleApp(App[int]):
                         yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
-            with TabPane("Sanity", id="sanity"):
+            with TabPane("Sanity", id="sanity"), VerticalScroll():
                 yield Static(id="sanity-list")
                 yield Static(id="sanity-errors")
             with TabPane("Quality", id="quality"):
                 yield Static(id="quality-error")
                 yield Static(id="quality-runs-header")
                 yield OptionList(id="quality-runs")
-                yield FindingsMarkdown(id="quality-findings")
+                yield FindingsMarkdown(FINDINGS_PLACEHOLDER, id="quality-findings")
             with TabPane("Diagnostics", id="diagnostics"):
                 yield Static(id="diagnostics-text")
         yield Static(id="status-bar")
@@ -483,19 +501,18 @@ class ConsoleApp(App[int]):
     def _finish_quality(self, result) -> None:
         if not self.is_running:
             return
-        previous = (self._quality_error, self._closed_quality_runs, self._closed_findings)
-        if isinstance(result, Err):
-            self._quality_error = str(result.error)
-        else:
-            self._quality_error = None
-            self._closed_quality_runs, self._closed_findings = result.value
-            self._combine_quality()
-        if previous != (self._quality_error, self._closed_quality_runs, self._closed_findings):
+        previous = self.closed_quality_held
+        self.closed_quality_held = previous.apply(result, datetime.now(UTC))
+        self._combine_quality()
+        # A good read's time always changes the held value, so a good read always redraws; a repeated failure does not.
+        if previous != self.closed_quality_held:
             self.refresh_views()
 
     def _combine_quality(self) -> None:
-        qa = {run.bead.get("id"): run.bead for run in (*self._closed_quality_runs, *self._open_quality_runs)}
-        findings = {row.get("id"): row for row in (*self._closed_findings, *self._open_findings)}
+        closed_runs, closed_findings = self.closed_quality_held.value or ([], [])
+        open_runs, open_findings = self.open_quality_held.value or ([], [])
+        qa = {run.bead.get("id"): run.bead for run in (*closed_runs, *open_runs)}
+        findings = {row.get("id"): row for row in (*closed_findings, *open_findings)}
         self.quality_runs = runs.qa_runs(list(qa.values()))
         self.finding_beads = list(findings.values())
 
@@ -514,16 +531,15 @@ class ConsoleApp(App[int]):
         text = ""
         error: Error | None = None
         tick_error: Error | None = None
-        run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None = None
-        runs_error = None
+        sanity: Result[list[runs.SanityRun]] | None = None
+        quality: Result[tuple[list[runs.QaRun], list[dict]]] | None = None
         failed: dict[str, Error] = {}
         self._step_lock.acquire()
         try:
             step_result = self.step(self.config, self.state, force_github)
             snapshot, state = step_result
             self.state = state
-            run_data = step_result.run_data
-            runs_error = step_result.runs_error
+            sanity, quality = step_result.sanity, step_result.quality
             failed = dict(getattr(step_result, "failed_reads", {}))
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
@@ -534,15 +550,17 @@ class ConsoleApp(App[int]):
                 text, error = self.dag.show(snapshot, datetime.now(UTC))
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
-        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error, failed)
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, sanity, quality, failed)
 
     def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None,
-                     run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None,
-                     runs_error: str | None, failed: dict[str, Error] | None = None) -> None:
-        if run_data is not None:
-            self.sanity_runs, self._open_quality_runs, self._open_findings = run_data
-            self._combine_quality()
-        self.runs_error = runs_error
+                     sanity: Result[list[runs.SanityRun]] | None,
+                     quality: Result[tuple[list[runs.QaRun], list[dict]]] | None,
+                     failed: dict[str, Error] | None = None) -> None:
+        # A read that did not happen this tick (None) leaves what is held; a failed one keeps it and marks it stale.
+        now = datetime.now(UTC)
+        self.sanity_held = self.sanity_held.apply(sanity, now)
+        self.open_quality_held = self.open_quality_held.apply(quality, now)
+        self._combine_quality()
         if tick_error is not None:
             self._show_tick_error(tick_error)
         elif snapshot is not None:
@@ -613,6 +631,7 @@ class ConsoleApp(App[int]):
     def _show_findings(self, bead_id: str | None) -> None:
         run = next((r for r in self.quality_runs if r.bead.get("id") == bead_id), None)
         if run is None:
+            self._update_findings(FINDINGS_PLACEHOLDER, {})
             return
         try:
             findings = runs.run_findings(run.bead, self.finding_beads)
@@ -635,6 +654,9 @@ class ConsoleApp(App[int]):
         except Exception as error:  # noqa: BLE001
             colors = {}
             content = f"Unable to render findings: {error}"
+        self._update_findings(content, colors)
+
+    def _update_findings(self, content: str, colors: dict[str, str]) -> None:
         try:
             widget = self.query_one("#quality-findings", FindingsMarkdown)
         except NoMatches:
@@ -703,15 +725,14 @@ class ConsoleApp(App[int]):
             header.truncate(width, overflow="ellipsis")
             self.query_one("#status-header", Static).update(header)
             self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
-            sanity, errors = sanity_text(self.sanity_runs, snapshot.agents)
-            if self.runs_error:
-                sanity.append(f"\nUnable to load runs: {self.runs_error}", style="red")
+            now = datetime.now(UTC)
+            sanity, errors = sanity_pane(self.sanity_held, snapshot.agents, now)
             self.query_one("#sanity-list", Static).update(sanity)
             self.query_one("#sanity-errors", Static).update(errors)
+            quality_note = quality_notes(self.open_quality_held, self.closed_quality_held, now)
             quality_error = self.query_one("#quality-error", Static)
-            quality_message = self._quality_error or self.runs_error
-            quality_error.update(Text(f"Unable to load runs: {quality_message}", style="red") if quality_message else "")
-            quality_error.display = bool(quality_message)
+            quality_error.update(Text(quality_note, style="red") if quality_note else "")
+            quality_error.display = bool(quality_note)
             quality = self.query_one("#quality-runs", OptionList)
             quality_header = self.query_one("#quality-runs-header", Static)
             highlighted = quality.highlighted

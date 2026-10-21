@@ -6,8 +6,28 @@ from typing import Any
 
 from . import beads_source, command, runs
 from .closed_cache import ClosedBeads
-from .result import Err, Ok, Result
+from .result import Err, Error, IoFailed, Ok, ParseFailed, Result
 from .skill_loader import load_skill
+
+
+class LedgerUnavailable(RuntimeError):
+    """The ledger could not be located; carries the typed error of the command that failed."""
+
+    def __init__(self, error: Error) -> None:
+        super().__init__(error.kind)
+        self.error = error
+
+
+def ledger_error(failure: Exception, repo_root: str) -> Error:
+    """The typed Error for any way reading the sanity ledger can fail."""
+    if isinstance(failure, LedgerUnavailable):
+        return failure.error
+    fix = "repair the sanity ledger file under .sc/sanity-log, then press r"
+    if isinstance(failure, OSError):
+        return IoFailed("io_failed", str(failure.filename or repo_root), failure.strerror or str(failure), fix)
+    if isinstance(failure, ValueError):
+        return ParseFailed("parse_failed", "sanity ledger", str(failure), fix)
+    return IoFailed("io_failed", repo_root, str(failure), fix)
 
 
 def read_ledger(repo_root: str, phase: str) -> list[dict[str, Any]]:
@@ -16,7 +36,7 @@ def read_ledger(repo_root: str, phase: str) -> list[dict[str, Any]]:
     def run_git(argv, **kwargs):
         result = command.run(argv, "run the git command by hand in the repo root and repair what it reports, then re-read the ledger", cwd=kwargs.get("cwd"))
         if isinstance(result, Err):
-            raise RuntimeError(f"cannot locate sanity ledger: {result.error}")  # noqa: TRY004
+            raise LedgerUnavailable(result.error)
         return result.value
 
     root = shared.primary_root(repo_root, run=run_git)
@@ -32,12 +52,20 @@ def read_ledger(repo_root: str, phase: str) -> list[dict[str, Any]]:
     return rows
 
 
-def collect(repo_root: str, phase: str, open_rows: tuple[dict[str, Any], ...], closed_rows: list[dict[str, Any]]) -> tuple[list[runs.SanityRun], list[runs.QaRun], list[dict[str, Any]]]:
-    all_rows = [*open_rows, *closed_rows]
-    by_id = {row.get("id"): row for row in all_rows}
+def sanity_runs(repo_root: str, phase: str) -> Result[list[runs.SanityRun]]:
+    """The sanity ledger is a file: it never depends on a bd read."""
+    try:
+        return Ok(runs.sanity_runs(read_ledger(repo_root, phase)))
+    except (OSError, ValueError, RuntimeError) as failure:
+        return Err(ledger_error(failure, repo_root))
+
+
+def open_quality(phase: str, open_rows: tuple[dict[str, Any], ...]) -> tuple[list[runs.QaRun], list[dict[str, Any]]]:
+    """The QA runs and finding rows among the open beads of one complete bd read."""
+    by_id = {row.get("id"): row for row in open_rows}
     qa_rows = []
     findings = []
-    for row in all_rows:
+    for row in open_rows:
         labels = row.get("labels") or []
         if f"phase-{phase}" not in labels:
             continue
@@ -47,7 +75,7 @@ def collect(repo_root: str, phase: str, open_rows: tuple[dict[str, Any], ...], c
             qa_rows.append({**row, "checked_bead_data": by_id.get(checked_id, {})})
         elif "stage:finding" in labels:
             findings.append(row)
-    return runs.sanity_runs(read_ledger(repo_root, phase)), runs.qa_runs(qa_rows), findings
+    return runs.qa_runs(qa_rows), findings
 
 
 def _closed_stage(repo_root: str, phase: str, stage: str, closed: ClosedBeads) -> Result[list[dict[str, Any]]]:

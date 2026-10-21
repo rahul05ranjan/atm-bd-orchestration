@@ -203,17 +203,14 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     written = store.write_state(next_state)
     history_errors = () if isinstance(history, Ok) or isinstance(history.error, NotFound) else (history.error,)
     errors = (*snapshot.errors, *history_errors, *closed_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
+    sanity = logger.result("sanity.ledger", ledger_source.sanity_runs(config.repo_root, config.phase))
     for error in errors:
         logger.error(error)
     logger.finish(actions=0)
     persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
-    try:
-        run_data = ledger_source.collect(config.repo_root, config.phase, (), [])
-        runs_error = None
-    except (OSError, ValueError, RuntimeError) as error:
-        run_data, runs_error = None, str(error)
-    return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error, failed_reads=logger.failed_reads)
+    # The open QA rows were not read on a stopped tick: no quality result, so the held rows stay.
+    return StepResult(snapshot, next_state, sanity=sanity, failed_reads=logger.failed_reads)
 
 
 def _closed_tasks(
@@ -284,15 +281,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore,
     else:
         phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
     logger.result("phase", phase)
-    run_data = None
-    runs_error = None
-    if isinstance(opened, Err):
-        runs_error = str(opened.error)
-    else:
-        try:
-            run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, [])
-        except (OSError, ValueError, RuntimeError) as run_error:
-            runs_error = str(run_error)
+    sanity = logger.result("sanity.ledger", ledger_source.sanity_runs(config.repo_root, config.phase))
+    quality = opened if isinstance(opened, Err) else Ok(ledger_source.open_quality(config.phase, opened.value.rows))
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
     closed_tasks = _closed_tasks(config, phase, tasks, logger)
@@ -414,5 +404,5 @@ def step(config: Config, state: State, force_github: bool, store: StateStore,
             errors.extend(logger.errors)
             persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return StepResult(persisted, durable, reported, run_data, runs_error, logger.failed_reads)
+            return StepResult(persisted, durable, reported, sanity, quality, logger.failed_reads)
     return persist(store)

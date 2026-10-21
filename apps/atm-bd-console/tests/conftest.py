@@ -11,6 +11,7 @@ from contract_fixtures import RUNNING
 from textual.worker import WorkerCancelled
 
 from atm_bd_console import app as console
+from atm_bd_console.result import Ok
 from atm_bd_console.types import Config, Snapshot, State, StepResult
 
 
@@ -38,7 +39,10 @@ class FakeStep:
 
     def __call__(self, config: Config, state: State, force_github: bool) -> StepResult:
         self.calls.append(force_github)
-        return StepResult(self.snapshot, state, run_data=self.run_data)
+        if self.run_data is None:
+            return StepResult(self.snapshot, state)
+        sanity, quality_runs, findings = self.run_data
+        return StepResult(self.snapshot, state, sanity=Ok(sanity), quality=Ok((quality_runs, findings)))
 
 
 @pytest.fixture(autouse=True)

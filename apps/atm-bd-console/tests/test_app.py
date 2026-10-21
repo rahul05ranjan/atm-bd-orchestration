@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,9 +29,10 @@ from atm_bd_console.app import (
 from atm_bd_console.build import display_identity
 from atm_bd_console.enums import SprintState
 from atm_bd_console.error_text import error_text
+from atm_bd_console.held import Held
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.poll_health import PollHealth
-from atm_bd_console.result import Ok
+from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepResult, StepView
 
@@ -67,7 +68,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_runs=[], quality_runs=[], runs_error=None, _quality_error=None, health=PollHealth(),
+                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_held=Held(), open_quality_held=Held(), closed_quality_held=Held(), quality_runs=[], health=PollHealth(),
                             show_pr_history=False, status_error=None, status_text="",
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
@@ -86,11 +87,14 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     ConsoleApp.refresh_views(dummy)
     assert nodes["#status-table"].display is True
     assert seen == [RUNNING, RUNNING]
-    dummy.runs_error = "open bead read failed"
+    dummy.sanity_held = Held().apply(Err(TIMEOUT), datetime.now(UTC))
+    dummy.open_quality_held = Held().apply(Err(TIMEOUT), datetime.now(UTC))
     ConsoleApp.refresh_views(dummy)
     assert nodes["#quality-error"].display is True
-    assert "open bead read failed" in nodes["#quality-error"].value.plain
-    assert "open bead read failed" in nodes["#sanity-list"].value.plain
+    assert error_text(TIMEOUT) in nodes["#quality-error"].value.plain
+    assert "Sanity runs: not loaded" in nodes["#sanity-list"].value.plain
+    assert error_text(TIMEOUT) in nodes["#sanity-list"].value.plain
+    assert "Timeout(" not in nodes["#sanity-list"].value.plain
 
 
 def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
