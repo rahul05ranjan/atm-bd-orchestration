@@ -22,13 +22,14 @@ comment count or how easy the fix is.
 
 | Label | Test | Typical |
 |---|---|---|
-| `P1` | A phase cannot be run or finished, or a result is silently wrong, or data is lost, with no practical workaround. | Gate refuses all dispatch; console shows wrong data as current; corrupted close. |
+| `P1` | Any one of Rand's three triggers (2026-10-21), or a phase that cannot run, a silently wrong result, or data loss with no practical workaround. **(a)** The system sends an erroneous message, or spams ATM with redundant or misleading information. **(b)** A Jev call returns an improper error, or Jev is used misaligned with its contract: Jev is a critical failure point in the skill. **(c)** An error makes the TUI show improper information (wrong, stale-as-fresh, blank or misleading content). | Bare or repeated alert per poll; false CI-failed alert; Jev evidence error on a null PR body; console header shows the wrong phase. |
 | `P2` | A core flow (dispatch, dev-sanity, QA, stack handoff, release) or console correctness on live data hurts **regularly** and the workaround is expensive, error-prone or needs a person each time. | Quota burned every poll; every large layer needs a lead ruling. |
 | `P3` | Occasional, or a cheap known workaround exists, or the effect is noise or inefficiency; a doc that still tells the reader to do the wrong thing. | Bare alert without a bead id; a template step that wastes a call. |
 | `P4` | Cosmetic, a doc that is stale but not misleading, or an idea with nothing observed broken. | Icon colours; Azure DevOps support; install profiles. |
 
-**Distribution guard.** Across all open issues aim for roughly P1 0-5%,
-P2 20-30%, P3 35-45%, P4 20-30%. A wave reports its distribution. If one
+**Distribution guard.** P1 is defined by its triggers, not a quota: every issue that
+meets a trigger is P1, so the P1 share follows the backlog. For the other tiers aim for roughly P2 20-30%,
+P3 35-45%, P4 20-30% of the remainder. A wave reports its distribution. If one
 tier holds more than half the issues, the next wave must re-split that tier
 (a tier that does not discriminate has failed its job). The first run of this
 process went 27 of 40 at P2, then 34 of 40 at P3.
