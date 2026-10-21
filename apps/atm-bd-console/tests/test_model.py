@@ -819,3 +819,10 @@ def test_pure_modules_contain_no_source_calls_or_imports() -> None:
         assert "_source import" not in source
         assert "import atm_bd" not in source
 
+
+
+def test_an_error_raised_by_several_reads_is_one_errors_row() -> None:
+    error = Timeout("timeout", ("git", "merge-tree"), 20, "retry")
+    other = NotFound("not_found", "elsewhere", "repair it")
+    snapshot, _, _ = tick(inputs(phase(), merges=(Err(error), Err(other), Err(error))), STATE, NOW, render)
+    assert snapshot.errors == (error, other)

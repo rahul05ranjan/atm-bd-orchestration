@@ -80,6 +80,18 @@ class _DiagnosticEvent(Protocol):
     message: str | None
 
 
+def startup_error_applies(error: Error, snapshot: Snapshot) -> bool:
+    """Whether the startup error still has a row of its own. A failed `atm members` at startup is the same read every live
+    tick repeats: that tick shows the same failure itself or has cleared it, so the startup row would be a duplicate or
+    stale. A stopped tick does not read members, so the startup failure stays unless the tick already lists it."""
+    argv = getattr(error, "argv", None)
+    if argv is None:
+        return True
+    if any(getattr(other, "argv", None) == argv for other in snapshot.errors):
+        return False
+    return snapshot.stopped is not None
+
+
 def phase_unavailable(snapshot: Snapshot, health: PollHealth | None = None) -> str | None:
     """The labelled reason there is no phase data to show (None when there is some)."""
     if snapshot.phase_data is not None:
@@ -606,7 +618,7 @@ class ConsoleApp(App[int]):
         # A tick can finish after q has begun shutdown; its screen is gone, so there is nothing to draw.
         if not self.is_running:
             return
-        if self.startup_error is not None:
+        if self.startup_error is not None and startup_error_applies(self.startup_error, snapshot):
             snapshot = replace(snapshot, errors=(self.startup_error, *snapshot.errors))
         self.snapshot, self.status_text, self.status_error, self.tick_error = snapshot, text, error, None
         sprints = self.query_one("#sprints", OptionList)

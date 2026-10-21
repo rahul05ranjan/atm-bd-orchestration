@@ -1493,3 +1493,19 @@ def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, gith
     assert isinstance(inputs[-1].phase.error, CommandFailed) and "beads.show_root" in failed.failed_reads
     recovered = runner.step(CONFIG, RUNNING_STATE, True, store)
     assert isinstance(inputs[-1].phase, Ok) and "beads.show_root" not in recovered.failed_reads
+
+
+def test_a_failed_merge_check_is_one_errors_row_and_one_error_merge_row(github_runtime, monkeypatch):
+    store, _, _, inputs = github_runtime
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"), ("topic2", "base")), False))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs",
+                        lambda *_: Ok(tuple(RemoteRef(branch, REMOTE_REF.sha) for branch in ("topic", "topic2", "base"))))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Err(COMMAND_FAILED))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
+
+    snapshot, _, _ = model_tick(inputs[0], RUNNING_STATE, NOW, lambda _context: Err(COMMAND_FAILED))
+    assert snapshot.errors.count(COMMAND_FAILED) == 1
+    merges = [result.value for result in inputs[0].merges if isinstance(result, Ok)]
+    assert [merge.state for merge in merges] == [MergeState.ERROR, MergeState.ERROR]

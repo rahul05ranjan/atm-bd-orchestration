@@ -32,6 +32,11 @@ from .types import (
 )
 
 
+def _unique(errors) -> tuple[Error, ...]:
+    """Each distinct error once, in first-seen order."""
+    return tuple(dict.fromkeys(errors))
+
+
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
     return GhStatus(mode, None, None, None, False)
 
@@ -207,7 +212,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     for error in errors:
         logger.error(error)
     logger.finish(actions=0)
-    persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+    persisted = replace(snapshot, errors=_unique((*errors, *logger.errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
     # The open QA rows were not read on a stopped tick: no quality result, so the held rows stay.
     return StepResult(snapshot, next_state, sanity=sanity, failed_reads=logger.failed_reads)
@@ -250,7 +255,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore,
         for error in snapshot.errors:
             logger.error(error)
         logger.finish(actions=0)
-        persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+        persisted = replace(snapshot, errors=_unique((*snapshot.errors, *logger.errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
         return StepResult(persisted, state, failed_reads=logger.failed_reads)
     config = replace(config, lead=file.value.lead)
@@ -402,7 +407,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore,
                 logger.error(error)
             logger.finish(actions=len(actions))
             errors.extend(logger.errors)
-            persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+            persisted = replace(snapshot, sent=reported_sent, errors=_unique((*snapshot.errors, *errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
             return StepResult(persisted, durable, reported, sanity, quality, logger.failed_reads)
     return persist(store)

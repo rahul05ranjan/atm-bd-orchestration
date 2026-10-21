@@ -755,3 +755,28 @@ def test_build_line_for_a_release_install_is_the_package_version(monkeypatch) ->
             assert app.query_one("#build").render().plain == f"atm-bd console {__version__}"
 
     asyncio.run(scenario())
+
+
+def test_startup_atm_members_error_is_not_repeated_by_the_tick_that_reads_the_same_command() -> None:
+    from atm_bd_console.app import startup_error_applies
+    from atm_bd_console.result import CommandFailed, NotFound
+
+    startup = CommandFailed("command_failed", ("atm", "members", "--team", "t", "--json"), 1, "daemon down", "could not verify the sender; start the daemon")
+    tick_error = replace(startup, fix="start the daemon")
+    sender_missing = NotFound("not_found", "atm-bd@tool", "run atm teams add-member")
+    live = RUNNING
+    stopped = replace(RUNNING, stopped="closed")
+    assert not startup_error_applies(startup, replace(live, errors=(tick_error,)))  # same argv: the tick shows it
+    assert not startup_error_applies(startup, replace(live, errors=()))  # a live tick read members: resolved
+    assert not startup_error_applies(startup, replace(stopped, errors=(tick_error,)))
+    assert startup_error_applies(startup, replace(stopped, errors=()))  # a stopped tick reads no members
+    assert startup_error_applies(sender_missing, replace(live, errors=(tick_error,)))  # a finding the tick never repeats
+
+    async def scenario() -> None:
+        shown = replace(SNAPSHOT, errors=(tick_error,))
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(shown), STATE, startup)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await settle(pilot)
+            assert app.snapshot.errors == (tick_error,)
+
+    run_scenario(scenario())

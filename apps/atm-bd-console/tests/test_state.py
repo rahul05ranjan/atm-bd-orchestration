@@ -277,3 +277,17 @@ def test_existing_non_file_runtime_path_is_not_absent(tmp_path, kind):
         assert isinstance(recovered, Err) and isinstance(recovered.error, IoFailed)
         assert len(list(store.directory.glob("state.json.corrupt-*"))) == 1
         assert store.write_state(INITIAL_STATE) == Ok(None)
+
+
+def test_action_history_errors_are_replaced_by_each_read_not_added_to(tmp_path):
+    acquired = acquire_lock(tmp_path, "atm-bh")
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
+        path = store.directory / "actions.jsonl"
+        path.write_text("{bad\n", encoding="utf-8")
+        for _ in range(3):  # one stopped tick per read
+            assert isinstance(store.load_actions(), Ok)
+        assert [error.source for error in store.load_errors] == [f"{path}:1"]
+        path.write_text("", encoding="utf-8")
+        assert isinstance(store.load_actions(), Ok)
+        assert store.load_errors == []

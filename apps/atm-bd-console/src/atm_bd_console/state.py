@@ -23,6 +23,7 @@ class StateStore:
         self.directory = directory
         self._lock_file = lock_file
         self.load_errors: list[Error] = []
+        self._history_errors: list[Error] = []
         self._blocked_writes: dict[str, Err] = {}
 
     def load_state(self) -> Result[State]:
@@ -36,6 +37,9 @@ class StateStore:
 
     def load_actions(self) -> Result[tuple[ActionLine, ...]]:
         path = self.directory / "actions.jsonl"
+        # The bad lines are re-found on every read: this read's errors replace the last read's, never add to them.
+        self.load_errors = [error for error in self.load_errors if error not in self._history_errors]
+        self._history_errors = []
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
@@ -46,10 +50,12 @@ class StateStore:
         for number, line in enumerate(lines, start=1):
             decoded = from_json(ActionLine, line)
             if isinstance(decoded, Err):
-                self.load_errors.append(ParseFailed("parse_failed", f"{path}:{number}", getattr(decoded.error, "message", decoded.error.kind),
-                                                    "repair the action history JSON"))
+                self._history_errors.append(ParseFailed(
+                    "parse_failed", f"{path}:{number}", getattr(decoded.error, "message", decoded.error.kind),
+                    "repair the action history JSON"))
                 continue
             actions.append(decoded.value)
+        self.load_errors.extend(self._history_errors)
         return Ok(tuple(actions))
 
     def _load_runtime(self, name: str, cls: type[Any]) -> Result[Any]:

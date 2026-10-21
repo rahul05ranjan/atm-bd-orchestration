@@ -151,7 +151,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         agents=agents,
         sections=sections,
         problems=(),
-        errors=tuple(errors),
+        errors=tuple(dict.fromkeys(errors)),  # one row per distinct error, however many reads raised it
         metrics=_metrics(phase, now),
         gh=inputs.gh,
         top_pr=top_pr.number if top_pr else None,
