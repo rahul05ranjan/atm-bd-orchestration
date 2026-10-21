@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-10-20
+
 ### Fixed
 - The console findings pane renders a findings failure through the shared error formatter on a typed error, not `str(error)` (#533).
 - The console DAG pane reason uses the shared error formatter, not the backticked log format (`` `retry` gh api graphql timeout after 10s ``), so it reads like the rest of the console (#533).
