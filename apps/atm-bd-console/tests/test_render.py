@@ -520,3 +520,14 @@ def test_unknown_agents_have_their_own_glyph_not_idle() -> None:
     agent = replace(RUNNING.agents[0], status="unknown", rows=())
     text = dashboard(replace(RUNNING, agents=(agent,), errors=()), 200, 40).plain
     assert "? " in text and "· " + agent.name not in text.splitlines()[2]
+
+
+@pytest.mark.parametrize("width", [200, 120])
+def test_status_bar_never_shows_the_ok_mark_for_a_github_read_that_never_happened(width: int) -> None:
+    value = replace(snapshot(), gh=GhStatus("graphql", True, None, None, False))
+
+    text = status_bar(value, width).plain
+
+    assert "not read yet" in text
+    assert "✅" not in text
+    assert "gh: graphql ✅ --:--" not in text

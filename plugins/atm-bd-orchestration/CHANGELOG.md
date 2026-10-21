@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- The console status bar says `gh: <mode> not read yet` before the first GitHub read instead of `gh: graphql ✅ --:--`, so a read that never happened is never shown as a success (#533).
 - The console Sprint steps pane starts with the labelled `unavailable - the phase has not been read` placeholder and shows `unavailable - <typed error>` when the first tick fails, so it is never blank (#533).
 - The console TUI build line shows the package version (`__version__`, the string `atm-bd --version` prints) on a release install, not the repo commit count (`0.18.823`). A checkout or a build from a dirty tree adds `+g<sha>[-dirty]`; the wheel build now writes `<version>+g<sha>[-dirty]` and no commit count is stored or shown (#532).
 - The console's `beads unavailable:` headline shows the same text as the first error in the Errors section (kind, command, deadline or exit code and stderr, fix), through one shared formatter, instead of `timeout; inspect bd output`. The `bd` and `git` read failures carry a real fix per error kind (a timeout says the call waited N seconds and to check host load and run the command by hand; a failed command names its exit code and stderr). The header keeps the configured phase id (`phase-bk`, never `phase-`) when the phase read fails. The 20 s `DEFAULT_TIMEOUT_S` is unchanged (#533 items 1-3; item 4 stays open).

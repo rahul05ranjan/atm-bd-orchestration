@@ -276,6 +276,8 @@ def status_bar(snapshot: Snapshot, width: int, health: PollHealth | None = None)
         elif gh.error is not None or gh.ok is False:
             kind = gh.error.kind if gh.error is not None else "unavailable"
             segment = f"gh: {gh.mode} {STATUS_FAIL} {kind}{_seconds(gh.error)} failed {read_at}"
+        elif gh.at is None:
+            segment = f"gh: {gh.mode} not read yet"
         else:
             segment = f"gh: {gh.mode} {STATUS_OK} {read_at}"
     if gh.truncated:
@@ -295,6 +297,8 @@ def status_bar(snapshot: Snapshot, width: int, health: PollHealth | None = None)
             short_status = "paused: rate limited" if gh.rate_limited else "paused"
         elif gh.error is not None or gh.ok is False:
             short_status = f"{STATUS_FAIL} {gh.error.kind if gh.error is not None else 'unavailable'}{_seconds(gh.error)}"
+        elif gh.at is None:
+            short_status = f"{gh.mode} not read yet"
         else:
             short_status = f"{gh.mode} {STATUS_OK}"
         if gh.truncated:
