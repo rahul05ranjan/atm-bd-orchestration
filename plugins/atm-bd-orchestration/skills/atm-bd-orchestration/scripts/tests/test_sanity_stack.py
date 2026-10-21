@@ -547,8 +547,7 @@ def test_rebase_then_real_sanity_hook_preserves_round_and_hands_off(world, tmp_p
     sanity = hook.beads[hook.values["sanity_bead"]]
     assert sanity["close_reason"] == "PASS at " + rival["commit"]
     assert sanity["metadata"]["sanity_round"] == 2
-    assert any(command[:4] == ["atm", "task", "close", hook.values["dev_task_id"]] and actor == "phase-lead"
-               for command, actor in hook.writes)
+    assert not any(command[:4] == ["atm", "task", "close", hook.values["dev_task_id"]] for command, _actor in hook.writes)
     qa = next(message for message in hook.messages if message["type"] == "qa-task")
     assert (qa["sender"], qa["recipient"], qa["values"]["base"]) == ("phase-lead", "quality", "first")
 

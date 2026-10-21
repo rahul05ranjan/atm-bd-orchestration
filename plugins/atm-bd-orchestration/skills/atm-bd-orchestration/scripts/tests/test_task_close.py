@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -83,7 +84,7 @@ def test_template_rebase_and_hook_ancestry_use_the_same_stack_top(world, templat
                for argv, _kwargs in world.calls)
 
 
-def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
+def test_dev_handoff_is_immediate_and_closes_the_dev_task_as_the_dev(world, monkeypatch):
     before = dict(hook.os.environ)
     assert "ok" in world.run()
     assert dict(hook.os.environ) == before
@@ -92,7 +93,12 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
     assert calls[close_index + 1][:2] == ["atm", "send"]
     assert calls[close_index + 2] == ["bd", "where", "--json"]
     assert calls[close_index + 3][:3] == ["atm", "task", "assign"]
-    assert world.tasks[world.values["dev_task_id"]][-1]["to_state"] == "assigned"
+    # The dev is free for its next queued task once the hook returns; sanity runs on its own task.
+    dev_task = world.tasks[world.values["dev_task_id"]]
+    assert dev_task[-1]["to_state"] == "complete" and dev_task[-1]["close_outcome"] == "completed"
+    assert world.tasks[world.values["sanity_task_id"]][-1]["to_state"] == "assigned"
+    assert calls[close_index + 4] == ["atm", "task", "close", world.values["dev_task_id"], "completed",
+                                      f"dev complete at {world.values['commit']}"]
     for argv, sender in world.writes:
         assert sender == ("phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller")
         if argv[0] == "bd":
@@ -105,6 +111,20 @@ def test_dev_handoff_is_immediate_and_does_not_close_task(world, monkeypatch):
             assert kwargs["env"]["ATM_TEAM"] == "test-team"
         else:
             assert kwargs["env"].get("ATM_TEAM") == before.get("ATM_TEAM")
+
+
+def test_dev_rerun_after_the_task_is_closed_does_not_close_it_again(world):
+    assert "ok" in world.run()
+    assert "ok" in world.run()
+    closes = [argv for argv, _sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]]]
+    assert len(closes) == 1
+
+
+def test_not_reproducible_fix_closes_its_task_with_the_evidence_reason(world):
+    world.beads[world.values["checked_bead"]]["metadata"]["role"] = "fix"
+    assert "ok" in world.run("fix", outcome="not_reproducible")
+    close = next(argv for argv, _sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
+    assert close[4:] == ["completed", f"not reproducible: {world.values['evidence']}"]
 
 
 def test_preview_and_native_send_use_identical_completion_vars(world, monkeypatch):
@@ -213,7 +233,8 @@ def test_deadline_injection_convention_matches_assignment_gates(world, monkeypat
     spec = importlib.util.spec_from_file_location("assignment_gates_deadline_contract", SCRIPTS / "assignment-gates.py")
     gates = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gates)
-    assert hook.COMMAND_TIMEOUT == gates.COMMAND_TIMEOUT == 30
+    assert hook.COMMAND_TIMEOUT == 180
+    assert gates.COMMAND_TIMEOUT == 30
     for entry_point in (hook.main, hook.Hook.__init__, gates.main):
         assert "command_timeout" not in inspect.signature(entry_point).parameters
     instance = hook.Hook("dev", world.values, world.path, world, lambda: 42)
@@ -380,14 +401,11 @@ def test_not_reproducible_hook_verifies_the_cited_file_and_line(world):
     assert world.writes == []
 
 
-def test_sanity_pass_closes_dev_as_lead_then_assigns_qa(world):
+def test_sanity_pass_leaves_the_already_closed_dev_task_alone_then_assigns_qa(world):
+    world.tasks[world.values["dev_task_id"]].append(dict(event="completed", to_state="complete", close_outcome="completed"))
     assert "ok" in world.run("sanity")
     assert world.beads[world.values["sanity_bead"]]["status"] == "closed"
-    dev_close = next((argv, sender) for argv, sender in world.writes if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
-    assert dev_close[1] == "phase-lead"
-    # ATM rejects a close with no reason or template; the dev close carries the sanity report template.
-    assert "--template" in dev_close[0] and dev_close[0][dev_close[0].index("--template") + 1].endswith("dev-sanity-complete.md.j2")
-    assert world.tasks[world.values["dev_task_id"]][-1]["close_outcome"] == "completed"
+    assert not any(argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] for argv, _sender in world.writes)
     assert world.tasks[world.values["sanity_bead"]][-1]["close_outcome"] == "completed"
     assert world.messages[-1]["recipient"] == "quality"
 
@@ -399,7 +417,7 @@ def test_sanity_pass_closes_without_waiting_for_stack(world):
     close = next(index for index, argv in enumerate(calls) if argv[:3] == ["bd", "close", world.values["sanity_bead"]])
     assert not any(argv[:3] == ["bd", "update", world.values["stack_bead"]] for argv in calls)
     assert close < next(index for index, argv in enumerate(calls)
-                        if argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]])
+                        if argv[:4] == ["atm", "task", "close", world.values["sanity_task_id"]])
 
 
 @pytest.mark.parametrize("configured_cap", [None, 2])
@@ -793,9 +811,9 @@ def test_each_role_example_executes_its_close_path(world, role):
 
 
 @pytest.mark.parametrize("role, expected_writes", [
-    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
-    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"]]),
-    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
+    ("dev", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"], ["atm", "task", "close"]]),
+    ("fix", [["bd", "update"], ["bd", "close"], ["atm", "send"], ["atm", "task", "assign"], ["atm", "task", "close"]]),
+    ("sanity", [["bd", "close"], ["atm", "task", "close"], ["atm", "task", "assign"]]),
     ("qa", [["bd", "close"], ["atm", "send"], ["atm", "task", "close"]]),
 ])
 def test_each_role_command_order_and_identity(world, role, expected_writes):
@@ -804,10 +822,10 @@ def test_each_role_command_order_and_identity(world, role, expected_writes):
     assert "ok" in world.run(role)
     assert [[argv[0], *argv[1:2]] for argv, _sender in world.writes] == [item[:2] for item in expected_writes]
     for argv, sender in world.writes:
-        expected_sender = "phase-lead" if argv[:3] == ["atm", "task", "assign"] or argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] else "caller"
+        expected_sender = "phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller"
         assert sender == expected_sender, argv
     for argv, kwargs in world.calls:
-        expected_identity = "phase-lead" if argv[:3] == ["atm", "task", "assign"] or argv[:4] == ["atm", "task", "close", world.values["dev_task_id"]] else "caller"
+        expected_identity = "phase-lead" if argv[:3] == ["atm", "task", "assign"] else "caller"
         assert kwargs["env"]["ATM_IDENTITY"] == expected_identity, argv
 
 
@@ -1115,3 +1133,81 @@ def test_assignment_consumes_completion_vars_before_the_temporary_file_is_remove
     assert assignment["values"]["commit"] == world.head
     assert world.values["checked_bead"] in assignment["body"]
     assert json.loads(world.path.read_text())
+
+
+class ScriptedRunner:
+    """Fake runner: the first `drops` calls fail like a dropped Dolt connection, or time out, then succeed."""
+
+    def __init__(self, drops, *, timeouts=False):
+        self.drops, self.timeouts, self.calls = drops, timeouts, 0
+
+    def __call__(self, argv, **kwargs):
+        self.calls += 1
+        if self.calls <= self.drops:
+            if self.timeouts:
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            return subprocess.CompletedProcess(argv, 1, "", "driver: invalid connection")
+        return subprocess.CompletedProcess(argv, 0, "[]", "")
+
+
+def retry_hook(world, runner):
+    ticks, sleeps = iter(range(0, 10_000, 5)), []
+    loads = iter(range(1, 100))
+    sample = lambda: {"load_avg": [float(next(loads))] * 3, "cpu_pct": 50.0}
+    return hook.Hook("dev", world.values, world.path, runner, lambda: next(ticks), sleeps.append, sample), sleeps
+
+
+@pytest.mark.parametrize("drops", [0, 1, 3])
+def test_dropped_bd_calls_are_retried_with_logged_attempts(world, drops):
+    runner = ScriptedRunner(drops)
+    instance, sleeps = retry_hook(world, runner)
+    assert instance.run(["bd", "show", "x", "--json"]).returncode == 0
+    assert runner.calls == drops + 1
+    assert sleeps == [hook.DOLT_RETRY_SLEEP_S] * drops
+    assert [a["outcome"] for a in instance.attempts] == ["dolt_drop_retry"] * drops + (["ok"] if drops else [])
+    assert [a["attempt"] for a in instance.attempts] == list(range(1, len(instance.attempts) + 1))
+    for record in instance.attempts:
+        assert record["timeout_s"] == hook.COMMAND_TIMEOUT and record["elapsed_s"] == 5
+        assert record["cpu_pct"] == 50.0 and len(record["load_avg"]) == 3
+    if drops:
+        assert instance.attempts[-1]["retries_until_now"] == drops
+
+
+def test_bd_drop_beyond_the_retry_budget_fails_after_four_attempts(world):
+    runner = ScriptedRunner(99)
+    instance, sleeps = retry_hook(world, runner)
+    with pytest.raises(hook.CloseError) as error:
+        instance.run(["bd", "show", "x", "--json"])
+    assert error.value.code == "COMMAND.FAILED" and "invalid connection" in str(error.value)
+    assert runner.calls == hook.DOLT_RETRIES + 1 and len(sleeps) == hook.DOLT_RETRIES
+    assert [a["outcome"] for a in instance.attempts] == ["dolt_drop_retry"] * hook.DOLT_RETRIES + ["failed"]
+
+
+def test_timeouts_and_non_bd_failures_are_not_retried_but_are_logged(world):
+    runner = ScriptedRunner(1, timeouts=True)
+    instance, sleeps = retry_hook(world, runner)
+    with pytest.raises(hook.CloseError, match="timed out"):
+        instance.run(["bd", "show", "x", "--json"])
+    assert runner.calls == 1 and sleeps == []
+    assert [a["outcome"] for a in instance.attempts] == ["timeout"]
+    runner = ScriptedRunner(99)
+    instance, sleeps = retry_hook(world, runner)
+    with pytest.raises(hook.CloseError):
+        instance.run(["git", "status"])
+    assert runner.calls == 1 and sleeps == []
+
+
+def test_attempts_reach_the_hook_output(world):
+    world.timeout_command = ["git", "rev-parse"]
+    output = world.run()
+    assert output["attempts"][0]["outcome"] == "timeout" and output["attempts"][0]["attempt"] == 1
+
+
+def test_load_sample_is_portable(monkeypatch):
+    monkeypatch.setattr(hook.os, "getloadavg", lambda: (4.0, 2.0, 1.0))
+    monkeypatch.setattr(hook.os, "cpu_count", lambda: 8)
+    assert hook.load_sample() == {"load_avg": [4.0, 2.0, 1.0], "cpu_pct": 50.0}
+    def unavailable():
+        raise OSError
+    monkeypatch.setattr(hook.os, "getloadavg", unavailable)
+    assert hook.load_sample() == {"load_avg": None, "cpu_pct": None}

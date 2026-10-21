@@ -12,8 +12,9 @@ import pytest
 from process_helpers import PROCESS_TIMEOUT, build_command
 from process_helpers import run_process as run
 
-from atm_bd_console import __version__, build
+from atm_bd_console import __version__, build, git_source
 from atm_bd_console.build import display_identity
+from atm_bd_console.result import CommandFailed, Err, Ok
 
 CONSOLE = Path(__file__).resolve().parents[1]
 UV = which("uv")
@@ -210,3 +211,40 @@ def test_display_identity_shortens_only_clean_release_installs(tmp_path: Path, m
 
 def test_display_identity_keeps_the_full_form_in_a_checkout() -> None:
     assert "+g" in display_identity()
+
+
+class _Out:
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+@pytest.mark.parametrize("failing", ["rev-parse", "rev-list", "status"])
+def test_failed_git_read_is_not_shown_as_a_clean_identity_and_is_logged(tmp_path: Path, monkeypatch, failing) -> None:
+    (tmp_path / "apps" / "atm-bd-console").mkdir(parents=True)
+    (tmp_path / "apps" / "atm-bd-console" / "pyproject.toml").write_text("")
+    failure = CommandFailed("command_failed", ("git", failing, "--x"), 128, "fatal: boom", "check the git repository and retry")
+    outputs = {"--show-toplevel": str(tmp_path), "--short": "abc1234", "--count": "5", "--porcelain": ""}
+
+    def fake_run(repo, *args, **kwargs):
+        if args[0] == failing and "--show-toplevel" not in args:
+            return Err(failure)
+        return Ok(_Out(next(v for k, v in outputs.items() if k in args)))
+
+    events = []
+
+    class Logger:
+        def event(self, action, **fields):
+            events.append((action, fields))
+            return Ok(None)
+
+    monkeypatch.setattr(git_source, "_run", fake_run)
+    monkeypatch.setattr(build, "create_console_logger", lambda root: Ok(Logger()))
+    shown = display_identity(tmp_path)
+
+    if failing == "status":
+        assert shown == f"{'.'.join(__version__.split('.')[:2])}.5+gabc1234-dirty?"
+    else:
+        assert shown == f"{__version__}+unknown"
+    [(action, fields)] = events
+    assert action == "error" and fields["error"]["argv"] == ("git", failing, "--x")
+    assert fields["error"]["code"] == 128 and "fatal: boom" in fields["message"]

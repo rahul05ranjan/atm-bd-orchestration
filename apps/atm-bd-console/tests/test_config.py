@@ -8,7 +8,7 @@ import pytest
 
 from atm_bd_console.command import Output
 from atm_bd_console.config import load_config, repo_root
-from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, IoFailed, Ok
+from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, IoFailed, Ok, Timeout
 
 
 def _team_config(root) -> None:
@@ -117,7 +117,7 @@ def test_code_checkout_override_uses_phase_path_and_explicit_github_identity(tmp
     ]
 
 
-def test_invalid_code_checkout_is_a_named_configuration_error(tmp_path, monkeypatch) -> None:
+def test_failed_toplevel_read_keeps_the_original_command_error(tmp_path, monkeypatch) -> None:
     _team_config(tmp_path)
     phase = tmp_path / ".atm-bd" / "phase-bh.toml"
     phase.write_text(phase.read_text().replace("[templates]", 'code_checkout = "../not-a-repo"\n\n[templates]'))
@@ -128,9 +128,16 @@ def test_invalid_code_checkout_is_a_named_configuration_error(tmp_path, monkeypa
 
     monkeypatch.setattr("atm_bd_console.config.command.run", fake_run)
     result = load_config(tmp_path, "bh")
-    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
-    assert result.error.key == "code_checkout"
-    assert "primary checkout" in result.error.fix
+    # The original command error reaches the caller unchanged (argv, code, stderr), not a re-invented ConfigInvalid.
+    assert result == Err(CommandFailed("command_failed", ("git", "rev-parse", "--show-toplevel"), 128,
+                                       "not a git repository", "fix it"))
+
+
+def test_timed_out_toplevel_read_keeps_its_timeout_error(tmp_path, monkeypatch) -> None:
+    _team_config(tmp_path)
+    timeout = Timeout("timeout", ("git", "rev-parse", "--show-toplevel"), 20, "retry")
+    monkeypatch.setattr("atm_bd_console.config.command.run", lambda *_a, **_k: Err(timeout))
+    assert load_config(tmp_path, "bh") == Err(timeout)
 
 
 def test_non_github_origin_is_a_named_configuration_error(tmp_path, monkeypatch) -> None:
@@ -151,19 +158,19 @@ def test_non_github_origin_is_a_named_configuration_error(tmp_path, monkeypatch)
     assert calls == [("git", "rev-parse", "--show-toplevel"), ("git", "remote", "get-url", "origin")]
 
 
-def test_missing_origin_is_a_named_configuration_error(tmp_path, monkeypatch) -> None:
+def test_missing_origin_keeps_the_original_command_error(tmp_path, monkeypatch) -> None:
     _team_config(tmp_path)
 
     def fake_run(argv, _fix, *, cwd, **_kwargs):
         if argv == ("git", "rev-parse", "--show-toplevel"):
             return Ok(Output(0, str(Path(cwd).resolve())))
-        return Err(CommandFailed("command_failed", argv, 2, "no such remote: origin", "set origin"))
+        return Err(missing)
 
+    missing = CommandFailed("command_failed", ("git", "remote", "get-url", "origin"), 2, "no such remote: origin", "set origin")
     monkeypatch.setattr("atm_bd_console.config.command.run", fake_run)
     result = load_config(tmp_path, "bh")
-    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid)
-    assert result.error.key == "code_checkout.origin"
-    assert "no such remote: origin" in result.error.fix
+    # The original error (argv, code, stderr) is kept, not re-invented as ConfigInvalid.
+    assert result == Err(missing)
 
 
 def test_invalid_github_and_short_interval_name_key_value_and_fix(tmp_path) -> None:

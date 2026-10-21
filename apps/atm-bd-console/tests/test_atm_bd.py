@@ -811,3 +811,30 @@ def test_group_suffix_names_only_poured_group_beads() -> None:
     assert [group_suffix(bead_id) for bead_id in (
         "atm-bh-5.group-dev", "atm-bh-5.group-sanity", "atm-bh-5.group-qa", "atm-bh-5.group-qa-f1", "atm-bh-5",
     )] == ["dev", "sanity", "qa", None, None]
+
+
+def test_phase_file_template_oserror_is_io_failed_with_path_and_message(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def deny(self: Path, strict: bool = False) -> Path:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "resolve", deny)
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, IoFailed)
+    assert error.path.startswith(str(repo)) and "Permission denied" in error.message
+
+
+@pytest.mark.parametrize("raised", [RuntimeError("symlink loop"), ValueError("embedded null byte")])
+def test_phase_file_template_invalid_value_stays_config_invalid(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, raised: Exception
+) -> None:
+    def bad(self: Path, strict: bool = False) -> Path:
+        raise raised
+
+    monkeypatch.setattr(Path, "resolve", bad)
+    error = _err(phase_file(str(repo), "bh"))
+    assert isinstance(error, ConfigInvalid)
+    assert error.key.startswith("templates.")
+
+
+def test_phase_file_valid_templates_are_ok(repo: Path) -> None:
+    assert isinstance(phase_file(str(repo), "bh"), Ok)

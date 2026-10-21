@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Close orchestration beads and hand off work without closing a dev task early."""
+"""Close orchestration beads, hand off work, and close the dev task at dev complete."""
 from __future__ import annotations
 
 import argparse
@@ -24,15 +24,31 @@ from stack_top import select_stack_top
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 ROLES = ("dev", "fix", "sanity", "qa")
-COMMAND_TIMEOUT = 30
+COMMAND_TIMEOUT = int(os.environ.get("ATM_BD_GATE_TIMEOUT_S", "180"))
 ASSIGNMENT_EVENTS = frozenset(("assigned", "reassigned", "reopened"))
 TERMINAL_STATES = frozenset(("complete",))
 COMPLETED = "completed"
 REFUSED = "refused"
+# Dolt drops connections under host load (load 40-55 with parallel cargo builds): a dropped bd call is retried.
+# Worst case for one bd call that keeps dropping = (DOLT_RETRIES + 1) * COMMAND_TIMEOUT + DOLT_RETRIES * DOLT_RETRY_SLEEP_S;
+# a call that times out is not retried and fails after COMMAND_TIMEOUT. See docs/requirements/task-close-hook.md.
+DOLT_DROP = re.compile(r"invalid connection|i/o timeout", re.IGNORECASE)
+DOLT_RETRIES = 3
+DOLT_RETRY_SLEEP_S = 10
 
 
 def is_terminal(events):
     return bool(events) and events[-1].get("to_state") in TERMINAL_STATES
+
+
+def load_sample():
+    """Portable host load: os.getloadavg plus load1 as a percentage of CPU count (no new dependencies)."""
+    try:
+        one, five, fifteen = os.getloadavg()
+    except (AttributeError, OSError):
+        return {"load_avg": None, "cpu_pct": None}
+    return {"load_avg": [round(one, 2), round(five, 2), round(fifteen, 2)],
+            "cpu_pct": round(100 * one / (os.cpu_count() or 1), 1)}
 
 
 class CloseError(RuntimeError):
@@ -271,9 +287,9 @@ def validate(values, role):
 
 
 class Hook:
-    def __init__(self, role, values, path, runner, clock):
+    def __init__(self, role, values, path, runner, clock, sleep=time.sleep, sample=load_sample):
         self.role, self.values, self.path = role, values, Path(path).resolve()
-        self.runner, self.clock = runner, clock
+        self.runner, self.clock, self.sleep, self.sample = runner, clock, sleep, sample
         self.root = Path(values["primary_checkout"]).resolve()
         self.worktree = Path(values["worktree_path"]).resolve()
         self.identity = os.environ.get("ATM_IDENTITY", "")
@@ -291,21 +307,51 @@ class Hook:
         self.task = values[{"dev": "dev_task_id", "fix": "dev_task_id", "sanity": "sanity_task_id", "qa": "qa_task_id"}[role]]
         self.key = [self.task, values.get("verdict", ""), values.get("commit", "")]
         self.records, self.task_history = {}, {}
+        self.attempts = []
 
     def run(self, argv, *, lead=False, git=False, check=True):
+        started = self.clock()
+        for attempt in range(DOLT_RETRIES + 1):
+            began = self.clock()
+            result, error = None, None
+            try:
+                result = self._run_once(argv, lead=lead, git=git)
+            except CloseError as failure:
+                error = failure
+            retry = (error is None and argv[0] == "bd" and bool(result.returncode) and attempt < DOLT_RETRIES
+                     and bool(DOLT_DROP.search((result.stderr or "") + (result.stdout or ""))))
+            outcome = ("timeout" if error is not None and "timed out" in str(error) else "error" if error is not None
+                       else "dolt_drop_retry" if retry else "failed" if result.returncode else "ok")
+            if outcome != "ok" or attempt:
+                self._log_attempt(argv, attempt + 1, began, outcome, started)
+            if error is not None:
+                raise error
+            if not retry:
+                break
+            self.sleep(DOLT_RETRY_SLEEP_S)
+        if check and result.returncode:
+            raise CloseError("COMMAND.FAILED", result.stderr.strip() or result.stdout.strip(),
+                             f"Repair {' '.join(argv[:3])} and rerun with the same vars file.")
+        return result
+
+    def _log_attempt(self, argv, attempt, began, outcome, started):
+        """Record every non-clean attempt (and a success after a retry); main() prints them under "attempts"."""
+        record = {"close_attempt": {"command": " ".join(argv[:3]), "attempt": attempt, "timeout_s": COMMAND_TIMEOUT,
+                                    "elapsed_s": round(max(0, self.clock() - began), 3), "outcome": outcome,
+                                    "retries_until_now": attempt - 1,
+                                    "total_elapsed_s": round(max(0, self.clock() - started), 3), **self.sample()}}
+        self.attempts.append(record["close_attempt"])
+
+    def _run_once(self, argv, *, lead=False, git=False):
         try:
-            result = self.runner(list(argv), cwd=self.worktree if git else self.root,
-                                 env=self.lead_env if lead else self.env, capture_output=True, text=True,
-                                 timeout=COMMAND_TIMEOUT)
+            return self.runner(list(argv), cwd=self.worktree if git else self.root,
+                               env=self.lead_env if lead else self.env, capture_output=True, text=True,
+                               timeout=COMMAND_TIMEOUT)
         except subprocess.TimeoutExpired as error:
             raise CloseError("COMMAND.FAILED", f"{list(argv)!r} timed out after {COMMAND_TIMEOUT}s",
                              f"Repair {argv[0]} and rerun with the same vars file.") from error
         except (OSError, subprocess.SubprocessError) as error:
             raise CloseError("COMMAND.FAILED", str(error), f"Repair {argv[0]} and rerun with the same vars file.") from error
-        if check and result.returncode:
-            raise CloseError("COMMAND.FAILED", result.stderr.strip() or result.stdout.strip(),
-                             f"Repair {' '.join(argv[:3])} and rerun with the same vars file.")
-        return result
 
     def record_github_failure(self, argv, detail):
         # Each failed attempt overwrites this, so the result names the last one.
@@ -358,7 +404,7 @@ class Hook:
                 beads.add(values["qa_bead"])
                 if values.get("outcome") != "not_reproducible":
                     beads.add(values["stack_bead"])
-                tasks.update((values["dev_task_id"], values["qa_task_id"]))
+                tasks.add(values["qa_task_id"])
         self.records = {bead: self.read_bead(bead) for bead in sorted(beads)}
         self.task_history = {task: self.events(task) for task in sorted(tasks)}
         events = self.task_history[self.task]
@@ -539,12 +585,14 @@ class Hook:
                           "--vars", str(path or self.path)], lead=True)
         self.assigned.append(bead)
 
-    def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False):
+    def close_task(self, task, template=None, *, outcome=COMPLETED, lead=False, reason=None):
         events = self.task_history[task]
         if not is_terminal(events):
             argv = ["atm", "task", "close", task, outcome]
             if template:
                 argv += ["--template", str(TEMPLATES / template), "--vars", str(self.path)]
+            if reason:
+                argv.append(reason)
             self.run(argv, lead=lead)
 
     def close_bead(self, bead, reason):
@@ -649,6 +697,9 @@ class Hook:
         if assign and not open_assignment:
             self.send(self.lead, template)
         self.assign(self.config["dev_sanity_member"], sanity, "dev-sanity-template.xml.j2", path=path, due=assign)
+        # The dev's work is finished: free the dev for its next queued task and stop reminders.
+        # Sanity state lives on the sanity task; a FAIL re-assigns this task through the lead.
+        self.close_task(self.task, reason=reason)
 
     def sanity(self):
         values = self.values
@@ -673,7 +724,6 @@ class Hook:
             if values.get("carry_forward") and values["carry_forward"] != values["checked_bead"]:
                 raise CloseError("VARS.INVALID", "carry_forward differs from fix bead", "Supply the checked fix bead as carry_forward.")
             self.close_bead(bead, f"PASS at {values['commit']}")
-            self.close_task(values["dev_task_id"], "dev-sanity-complete.md.j2", lead=True)
             self.close_task(bead, "dev-sanity-complete.md.j2")
             self.assign(self.config["qa_member"], values["qa_bead"], "qa-template.xml.j2")
             return
@@ -718,7 +768,7 @@ class Hook:
         self.close_task(values["qa_bead"], "qa-complete.md.j2")
 
 
-def main(argv=None, runner=subprocess.run, clock=time.monotonic):
+def main(argv=None, runner=subprocess.run, clock=time.monotonic, sleep=time.sleep, sample=load_sample):
     parser = Parser(description=__doc__)
     parser.add_argument("--role", required=True, choices=ROLES)
     parser.add_argument("--vars", required=True, type=Path)
@@ -734,7 +784,7 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
                                  "Pass the fixer's result file with --result <result-file>.")
             values = merge_result(values, read_vars(args.result), args.role)
         validate_shared_vars(values, args.role)
-        hook = Hook(args.role, values, args.vars, runner, clock)
+        hook = Hook(args.role, values, args.vars, runner, clock, sleep, sample)
         if args.role == "fix" and values.get("outcome") == "not_reproducible":
             hook.verify_not_reproducible_evidence()
         started = clock()
@@ -761,6 +811,8 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic):
         producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars)
         output = {"err": {"code": "COMMAND.INVALID", "message": f"{producer}: {type(error).__name__}: {error}",
                           "fix": f"Repair the invalid value reported by {type(error).__name__} in `{producer}`: {error}."}}
+    if hook is not None and hook.attempts:
+        output["attempts"] = hook.attempts
     print(json.dumps(output))
     print(json.dumps(output), file=sys.stderr)
     return 1 if "err" in output else 0

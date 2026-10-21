@@ -5,13 +5,14 @@ import argparse
 import json
 import shutil
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 from . import atm_bd, atm_source, queues, render, runner, status_table
 from . import config as config_source
 from .build import identity
 from .codec import snapshot_stale, to_json
+from .log import error_message
 from .paths import CONSOLE_NAME
 from .result import CommandFailed, Err, Error, IoFailed, NotFound, Ok
 from .state import acquire_lock, load_snapshot
@@ -104,9 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     md_table = getattr(args, "md_table", False)
     loaded = config_source.load_config(repo_root, args.phase, github=args.github, interval_s=_cadence(args), github_poll_interval_s=args.github_poll_interval, github_quota_threshold=args.github_quota_threshold, dry_run=getattr(args, "dry_run", False) or args.command == "snapshot" or md_table, no_fetch=args.no_fetch)
-    if isinstance(loaded, Err): print(f"{invocation}: {loaded.error.kind}: {loaded.error.fix}"); return 3
+    if isinstance(loaded, Err): print(f"{invocation}: {error_message(asdict(loaded.error))}"); return 3
     check = atm_bd.repo_config(loaded.value.repo_root)
-    if isinstance(check, Err): print(f"{invocation}: {check.error.kind}: {check.error.fix}"); return 3
+    if isinstance(check, Err): print(f"{invocation}: {error_message(asdict(check.error))}"); return 3
     for command in ("bd", "atm", "git"):
         if shutil.which(command) is None:
             print(f"{invocation}: not_found: install {command} and retry")

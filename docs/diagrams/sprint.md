@@ -135,7 +135,7 @@ flowchart TB
   classDef script fill:#e6f4ea,stroke:#188038,color:#000
 
   SPR["p-x-2 sprint container<br/>cannot close: dev is open"]:::tmpl
-  DEV["p-x-2.group-dev<br/>reopened by the close hook<br/>existing ATM task stays open"]:::poured
+  DEV["p-x-2.group-dev<br/>reopened by the close hook<br/>closed ATM task re-assigned by the lead"]:::poured
   SAN["p-x-2.group-sanity: gate<br/>reset open and unassigned<br/>re-blocked by dev"]:::poured
   FAIL["hook sends sanity-fail<br/>deliverable-2 and deliverable-5<br/>with selected reasons, no child beads"]:::script
   CAP["round exceeds max_sanity_rounds (default 5)<br/>SANITY.ROUND_CAP to lead once<br/>dev stays closed; sanity not reset"]:::script
@@ -156,7 +156,7 @@ undone deliverables and selected reasons on the dev's existing open task.
 The dev fixes them, rebases onto the current top, validates, pushes and reruns
 the hook. No finding children or new task are created. Once the count exceeds
 the cap (the sixth FAIL by default), the hook reopens nothing and sends
-`SANITY.ROUND_CAP` to the lead once; the dev task stays open until the lead
+`SANITY.ROUND_CAP` to the lead once; the dev task stays closed until the lead
 rules. The same applies to a fix bead and its sanity.
 
 dev-sanity is one teammate (`agents/dev-sanity.md`) that spawns

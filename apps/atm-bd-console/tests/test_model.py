@@ -340,11 +340,11 @@ def test_per_recipient_problem_batches_survive_state_round_trip() -> None:
     lead = [Problem(f"lead-{index}", f"bead-{index}", "fenix", f"lead {index}", NOW) for index in range(3)]
     assignee = Problem("assignee", "bead-qa", "solar", "assignee", NOW)
     state, actions = update(STATE, (lead[0],), NOW + timedelta(minutes=1))
-    assert [action.kind for action in actions] == ["send"]
+    assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
     state, actions = update(state, (lead[0], lead[1], assignee), NOW + timedelta(minutes=2))
-    assert [(action.kind, action.to) for action in actions] == [("send", "fenix"), ("send", "solar")]
+    assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
     state, actions = update(state, (*lead, assignee), NOW + timedelta(minutes=3))
-    assert [(action.kind, action.to) for action in actions] == [("send", "fenix")]
+    assert actions == ()
     restored = from_json(State, to_json(state))
     assert isinstance(restored, Ok)
     state, actions = update(restored.value, (*lead, assignee), NOW + timedelta(minutes=5))
@@ -357,6 +357,25 @@ def test_per_recipient_problem_batches_survive_state_round_trip() -> None:
     state, actions = update(state, (lead[0], lead[2], assignee), NOW + timedelta(minutes=21))
     assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
     assert len(state.sent) == 5
+
+
+def test_all_problems_for_a_recipient_go_in_one_message_and_a_flapping_problem_is_not_resent() -> None:
+    problems = tuple(Problem(f"p{index}", f"bead-{index}", "fenix", f"problem {index}: fix {index}", NOW) for index in range(4))
+    problems_cleared, actions, due_after, first, last = _reconcile_problems(problems, STATE, NOW, False)
+    assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
+    assert actions[0].text.splitlines() == [
+        "atm-bd: 4 problem(s) need action", *(f"{index + 1}. problem {index}: fix {index}" for index in range(4))]
+    assert actions[0].bead_ids == tuple(f"bead-{index}" for index in range(4))
+    state = replace(STATE, problems=problems_cleared, batch_due=due_after, cycle_first_send=first, last_batch=last)
+
+    # A problem that clears and comes back five minutes later (the 23:11 / 23:17 resend) waits for the cycle.
+    _, actions, state_gone, _, _ = _reconcile_problems((), state, NOW + timedelta(minutes=5), False)
+    assert actions == ()
+    back = replace(STATE, batch_due=state_gone, problems=())
+    _, actions, _, _, _ = _reconcile_problems(problems[:1], back, NOW + timedelta(minutes=6), False)
+    assert actions == ()
+    _, actions, _, _, _ = _reconcile_problems(problems[:1], back, NOW + timedelta(minutes=10), False)
+    assert [(action.kind, action.text.splitlines()[1]) for action in actions] == [("batch", "1. problem 0: fix 0")]
 
 
 def test_pr_rows_are_layer_ordered_and_only_top_ci_is_a_problem() -> None:
@@ -425,7 +444,7 @@ def test_read_derived_problems_survive_missing_reads_without_duplicate_sends() -
                    gh=GhStatus("graphql", True, None, NOW, False))
     snapshot, actions, state = tick(first, STATE, NOW, render)
     assert [problem.key for problem in snapshot.problems] == ["missing_pr:pushed"]
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
     assert state.batch_due["solar"] == NOW + timedelta(minutes=10)
 
     unread = replace(first, prs=None, gh=GhStatus("off", None, None, None, False))
@@ -495,7 +514,8 @@ def test_shared_branch_reports_one_problem_per_kind_to_work_owner() -> None:
         snapshot, actions, _ = tick(supplied, STATE, NOW, render)
         assert [problem.key for problem in snapshot.problems] == ["conflict:shared", "missing_pr:shared"]
         assert [(problem.bead_id, problem.to) for problem in snapshot.problems] == [("dev", "solar")] * 2
-        assert [(action.kind, action.to) for action in actions] == [("send", "solar")] * 2
+        assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
+        assert len(actions[0].text.splitlines()) == 3
 
 
 def test_stop_rules_metrics_mermaid_and_sent_window() -> None:
@@ -567,7 +587,8 @@ def test_hold_is_shown_and_sent_once_then_batched() -> None:
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
     assert snapshot.sections[0].label == "Held"
     assert snapshot.sections[0].rows[0].bead_id == "qa"
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar"), ("send", "solar")]
+    assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
+    assert actions[0].text.count("\n") == 2
     _, actions, state = tick(supplied, state, NOW + timedelta(minutes=5), render)
     assert actions == ()
     _, actions, _ = tick(supplied, state, NOW + timedelta(minutes=10), render)
@@ -632,9 +653,12 @@ def test_ready_step_without_branch_reports_one_meaningful_configuration_problem(
     supplied = inputs(phase(candidate))
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
     assert len(snapshot.sections[0].rows) == 2
-    assert snapshot.problems == (Problem("hold:qa", "qa", "fenix", "missing branch configuration", NOW),)
+    assert snapshot.problems == (Problem(
+        "hold:qa", "qa", "fenix",
+        "qa (qa) cannot be dispatched: missing branch configuration; set the branch (and worktree) of bead qa", NOW),)
     assert len(actions) == 1
-    assert (actions[0].kind, actions[0].to, actions[0].text) == ("send", "fenix", "missing branch configuration")
+    assert (actions[0].kind, actions[0].to) == ("batch", "fenix")
+    assert snapshot.problems[0].text in actions[0].text
     assert all("<missing>" not in problem.text for problem in snapshot.problems)
     snapshot, actions, _ = tick(supplied, state, NOW + timedelta(minutes=5), render)
     assert len(snapshot.problems) == 1
@@ -650,13 +674,18 @@ def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> 
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
 
     conflict_text = "merge conflict with base: model.py, dispatch.py"
+    worktree_reason = ("no worktree for topic at /worktrees/atm-bh-1; "
+                       "create it with the sc-git-worktree skill (not `git worktree add`)")
     assert snapshot.sections[0].label == "Held"
-    assert [row.reason for row in snapshot.sections[0].rows] == ["no worktree for topic", conflict_text]
+    assert [row.reason for row in snapshot.sections[0].rows] == [worktree_reason, conflict_text]
     assert [problem.key for problem in snapshot.problems] == ["hold:qa", "conflict:topic"]
-    assert [problem.text for problem in snapshot.problems] == ["no worktree for topic", conflict_text]
-    assert [(action.kind, action.to, action.text) for action in actions] == [
-        ("send", "solar", "no worktree for topic"), ("send", "solar", conflict_text),
-    ]
+    assert snapshot.problems[0].text == f"qa (qa) cannot be dispatched: {worktree_reason}"
+    assert snapshot.problems[1].text.startswith("qa (qa): merge check failed for topic against base: "
+                                                "`git merge-tree --write-tree origin/base origin/topic` reported a conflict in "
+                                                "model.py, dispatch.py")
+    assert "git -C /worktrees/atm-bh-1 merge origin/base" in snapshot.problems[1].text
+    assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
+    assert actions[0].text.count("\n") == 2
 
     refreshed = replace(supplied, merges=(Ok(replace(conflict, checked_at=NOW + timedelta(minutes=5))),))
     snapshot, actions, _ = tick(refreshed, state, NOW + timedelta(minutes=5), render)
@@ -669,7 +698,7 @@ def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> 
     snapshot, actions, _ = tick(recovered_worktree, state, NOW + timedelta(minutes=6), render)
 
     assert [problem.key for problem in snapshot.problems] == ["conflict:topic"]
-    assert snapshot.problems[0].text == conflict_text
+    assert snapshot.problems[0].text.startswith("qa (qa): merge check failed for topic against base:")
     assert snapshot.problems[0].first_seen == NOW
     assert actions == ()
 
@@ -681,7 +710,7 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
                     worktrees=Ok((Worktree("/worktrees/atm-bh-1", "sprint/bh-1", "sha"),)))
     conflict = Merge("sprint/bh-1", "sprint/bh-1", MergeState.CONFLICT, ("model.py",), (), NOW)
     snapshot, actions, _ = tick(replace(common, merges=(Ok(conflict),)), STATE, NOW, render)
-    assert [(action.kind, action.to) for action in actions] == [("send", "solar")]
+    assert [(action.kind, action.to) for action in actions] == [("batch", "solar")]
     assert [problem.key for problem in snapshot.problems] == ["conflict:sprint/bh-1"]
     assert "model.py" in snapshot.problems[0].text
 
@@ -716,6 +745,31 @@ def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
     recovered, actions, _ = tick(verified, state, NOW, lambda context: Ok(DispatchSpec("qa", {})))
     assert [action.kind for action in actions] == ["assign"]
     assert recovered.sections == () and recovered.problems == ()
+
+
+def test_unpushed_branch_is_reported_once_as_unpushed_and_never_as_a_failed_merge_check() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee=None, branch="topic", target="base")
+    unpushed = Merge("topic", "base", MergeState.HEAD_NOT_PUSHED, (), ("head not pushed",), NOW)
+    supplied = inputs(phase(candidate), remotes=Ok(()), worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+                      merges=(Ok(unpushed),))
+
+    snapshot, actions, state = tick(supplied, STATE, NOW, render)
+
+    assert [problem.key for problem in snapshot.problems] == ["hold:qa"]
+    assert snapshot.problems[0].text == (
+        "qa (qa) cannot be dispatched: branch not on origin: topic; "
+        "push it: `git -C /worktrees/atm-bh-1 push -u origin topic`")
+    assert not any("merge check" in problem.text for problem in snapshot.problems)
+    assert [(action.kind, action.to) for action in actions] == [("batch", "fenix")]
+    _, actions, _ = tick(supplied, state, NOW + timedelta(minutes=5), render)
+    assert actions == ()
+
+
+def test_merge_probe_failure_on_a_step_that_is_not_ready_is_not_a_problem() -> None:
+    waiting = step("qa", "atm-bh-1", kind="qa", ready=False, assignee=None, branch="topic", target="base")
+    unavailable = Merge("topic", "base", MergeState.ERROR, (), ("timeout: retry",), NOW)
+    snapshot, actions, _ = tick(inputs(phase(waiting), merges=(Ok(unavailable),)), STATE, NOW, render)
+    assert snapshot.problems == () and actions == ()
 
 
 def test_closed_task_read_gates_dispatch_and_a_closed_candidate_is_never_assigned() -> None:

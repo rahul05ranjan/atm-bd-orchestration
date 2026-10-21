@@ -941,3 +941,11 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     assert len(app_snapshot.errors) == (3 if runtime_damage else 0) + int(member_read_fails)
     assert load_snapshot(repo, phase_file.root_id) == Ok(app_snapshot)
     assert_preserved(app_snapshot)
+
+
+def test_failed_config_read_prints_the_original_command_error(monkeypatch, capsys):
+    failed = CommandFailed("command_failed", ("git", "rev-parse", "--show-toplevel"), 128, "fatal: not a git repository", "fix")
+    monkeypatch.setattr(cli.config_source, "load_config", lambda *_a, **_k: Err(failed))
+    assert cli.main(["cron", "--phase", "bh"]) == 3
+    out = capsys.readouterr().out
+    assert "git rev-parse" in out and "[128]" in out and "fatal: not a git repository" in out

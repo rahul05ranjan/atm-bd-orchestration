@@ -34,7 +34,7 @@ sequenceDiagram
     alt round at most max_sanity_rounds (default 5)
       S->>B: hook reopens dev, resets sanity open and unassigned
       S->>D: hook sends sanity-fail: numbered undone deliverables and reasons
-      Note over D: existing dev task stays open; fix, rebase, push, rerun hook
+      Note over D: lead re-assigns the closed dev task; fix, rebase, push, rerun hook
     else round exceeds max_sanity_rounds
       S->>L: hook sends SANITY.ROUND_CAP once
       Note over S,B: dev stays closed; sanity is not reset; no finding children

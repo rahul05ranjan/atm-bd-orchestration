@@ -229,7 +229,8 @@ def test_merge_error_keeps_pr_state_and_reports_problem():
     inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
                      members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((pr,)), merges=(Ok(merge),), remotes=None)
     result, _, _ = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
-    assert any("merge check failed" in problem.text and pr.head in problem.text for problem in result.problems)
+    # Only a ready step is blocked by an unavailable merge check; the dispatch hold reports it, not a merge fault.
+    assert not any("merge check" in problem.text for problem in result.problems)
 
 
 def test_merge_check_states_are_open_pr_only_and_named():
@@ -244,7 +245,7 @@ def test_merge_check_states_are_open_pr_only_and_named():
     result, _, _ = tick(closed_inputs, INITIAL_STATE, NOW, lambda _: None)
     assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
     result, _, _ = tick(replace(closed_inputs, prs=Ok((pr,))), INITIAL_STATE, NOW, lambda _: None)
-    assert any(problem.key.startswith("merge_error:") for problem in result.problems)
+    assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
 
     unpushed = replace(error, state=MergeState.HEAD_NOT_PUSHED)
     facts = sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=pr, merge=unpushed),)))[0]
@@ -269,34 +270,30 @@ def test_markdown_is_stable_and_escapes_sprint_ids():
     assert markdown(rows(snapshot)) == expected
 
 
-def test_collision_notice_is_deduplicated_and_failed_delivery_retries():
+def test_collision_goes_in_the_leads_one_batch_and_failed_delivery_retries():
     snapshot = _snapshot()
     other = replace(snapshot.task_data[0], agent="other")
     inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)),
                      tasks=Ok((*snapshot.task_data, other)), members=Ok(snapshot.member_data),
                      gh=snapshot.gh, prs=Ok(()), merges=(), remotes=None)
     result, actions, proposed = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
-    collision = next(action for action in actions if action.text.startswith("collision:"))
+    batches = [action for action in actions if action.kind == "batch"]
+    assert [(action.to, action.kind) for action in actions] == [(inputs.lead, "batch")]
+    collision = next(problem for problem in result.problems if problem.key.startswith("collision:"))
     assert "other" in collision.text and "arch-ctm" in collision.text
-    assert any(problem.text == collision.text for problem in result.problems)
-    failed = replace(collision, outcome="failed timeout")
+    assert collision.text in batches[0].text
+    failed = replace(batches[0], outcome="failed timeout")
     retriable = _durable_state(INITIAL_STATE, proposed, actions, (failed,))
-    assert not retriable.collision_notices
     _, again, _ = tick(inputs, retriable, NOW, lambda _: None)
-    assert any(action.text == collision.text for action in again)
-    sent = replace(collision, outcome="sent")
-    durable = _durable_state(INITIAL_STATE, proposed, actions, (sent,))
-    _, again, second = tick(inputs, durable, NOW, lambda _: None)
-    assert all(action.text != collision.text for action in again)
-    _, third, _ = tick(inputs, second, NOW, lambda _: None)
-    assert all(action.text != collision.text for action in third)
-    new_task = replace(other, agent="third")
-    _, changed, _ = tick(replace(inputs, tasks=Ok((*inputs.tasks.value, new_task))), second, NOW, lambda _: None)
-    changed_notice = next(action for action in changed if action.text.startswith("collision:"))
-    assert "third" in changed_notice.text and changed_notice.text != collision.text
+    assert [action.kind for action in again] == ["batch"]
+    durable = _durable_state(INITIAL_STATE, proposed, actions, (replace(batches[0], outcome="sent"),))
+    _, again, second = tick(inputs, durable, NOW + timedelta(minutes=5), lambda _: None)
+    assert again == ()
+    _, next_cycle, _ = tick(inputs, second, NOW + timedelta(minutes=10), lambda _: None)
+    assert [action.kind for action in next_cycle] == ["batch"]
 
 
-def test_collision_sends_once_across_three_ticks_and_once_on_join(monkeypatch):
+def test_collision_is_sent_once_per_cycle_not_once_per_tick(monkeypatch):
     snapshot = _snapshot()
     other = replace(snapshot.task_data[0], agent="other")
     inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)),
@@ -314,15 +311,15 @@ def test_collision_sends_once_across_three_ticks_and_once_on_join(monkeypatch):
             return Ok(None)
 
     state = INITIAL_STATE
-    for index in range(4):
-        if index == 3:
+    for minutes in (0, 3, 6, 10):
+        now = NOW + timedelta(minutes=minutes)
+        if minutes == 10:
             inputs = replace(inputs, tasks=Ok((*inputs.tasks.value, replace(other, agent="third"))))
-        result, actions, proposed = tick(inputs, state, NOW, lambda _: None)
-        notices = tuple(action for action in actions if action.text.startswith("collision:"))
+        result, actions, proposed = tick(inputs, state, now, lambda _: None)
         assert len([problem for problem in result.problems if problem.key.startswith("collision:")]) == 1
-        reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), notices, Store(), NOW, Logger())
+        reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), actions, Store(), now, Logger())
         assert errors == ()
-        state = _durable_state(state, proposed, notices, reported)
+        state = _durable_state(state, proposed, actions, reported)
     assert len(sent) == 2
     assert all(call[0] == f"{inputs.lead}@{CONFIG.team}" and call[2:] == ("atm-bd", "tool") for call in sent)
     assert all(SPRINT.id in call[1] and STEP.worktree in call[1] and "arch-ctm" in call[1] and "other" in call[1]

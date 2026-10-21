@@ -94,18 +94,14 @@ def test_failed_refresh_rejects_cached_pin_and_recovers_fresh_commit(runtime, re
     assert store.load_merges().value.merges["clean"].state == MergeState.CLEAN
 
 
-@pytest.mark.parametrize("failure", ("missing", "timeout", "unsupported"))
+@pytest.mark.parametrize("failure", ("timeout", "unsupported"))
 def test_failed_merge_overwrites_cached_clean_and_recovery_resumes(runtime, repo, monkeypatch, failure):
     config, state, store, events, assigned = runtime
     original_run = git_source._run
-    if failure == "missing":
-        config = replace(config, no_fetch=True)
-        git(repo, "update-ref", "-d", "refs/remotes/origin/main")
-    else:
-        error = (Timeout("timeout", ("git", "merge-tree"), 30, "retry the merge check") if failure == "timeout" else
-                 CommandFailed("command_failed", ("git", "merge-tree"), 129, "unknown option write-tree", "upgrade git"))
-        monkeypatch.setattr(git_source, "_run", lambda path, *args, **kwargs:
-                            Err(error) if args[0] == "merge-tree" else original_run(path, *args, **kwargs))
+    error = (Timeout("timeout", ("git", "merge-tree"), 30, "retry the merge check") if failure == "timeout" else
+             CommandFailed("command_failed", ("git", "merge-tree"), 129, "unknown option write-tree", "upgrade git"))
+    monkeypatch.setattr(git_source, "_run", lambda path, *args, **kwargs:
+                        Err(error) if args[0] == "merge-tree" else original_run(path, *args, **kwargs))
 
     snapshot, held_state = runner.step(config, state, False, store)
 
@@ -117,6 +113,28 @@ def test_failed_merge_overwrites_cached_clean_and_recovery_resumes(runtime, repo
     assert any(action == "hold" and "unavailable" in fields["reason"] for action, fields in events)
     assert any(fields.get("source") == "git.merge" and fields.get("error") == asdict(snapshot.errors[0]) for _, fields in events)
     monkeypatch.setattr(git_source, "_run", original_run)
+    assert git_source.fetch(repo) == Ok(None)
+
+    recovered, _ = runner.step(config, held_state, False, store)
+
+    assert len(assigned) == 1
+    assert recovered.errors == ()
+    assert [problem.key for problem in recovered.problems] == ["github_unavailable"]
+    assert store.load_merges().value.merges["clean"].state == MergeState.CLEAN
+
+
+def test_missing_base_ref_is_an_unpushed_base_with_the_push_command_not_a_failed_merge_check(runtime, repo):
+    config, state, store, _events, assigned = runtime
+    config = replace(config, no_fetch=True)
+    git(repo, "update-ref", "-d", "refs/remotes/origin/main")
+
+    snapshot, held_state = runner.step(config, state, False, store)
+
+    assert assigned == []
+    assert snapshot.errors == ()
+    assert "base branch main is not on origin: push it (`git push -u origin main`)" in snapshot.problems[0].text
+    assert not any("merge check failed" in problem.text or "merge verification" in problem.text for problem in snapshot.problems)
+    assert store.load_merges().value.merges["clean"].state == MergeState.BASE_DELETED
     assert git_source.fetch(repo) == Ok(None)
 
     recovered, _ = runner.step(config, held_state, False, store)

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.3] - 2026-10-20
+
+### Fixed
+- The console sends each recipient one message per 10-minute cycle that lists all of their problems (collision and unknown-state problems included), instead of one message per new problem plus a batch. A recipient's due time is kept while its problems clear and return, so a returning problem is no longer sent again minutes later.
+- A branch or base missing on origin is reported as what it is (`branch not on origin` with `git -C <worktree> push -u origin <branch>`, or `base branch <b> is not on origin`), only when it holds a ready step, and never as `merge check failed`. `merge check failed` now appears only when `git merge-tree` ran and returned a conflict, with its files, its output and the merge fix. An unavailable merge check on a step that is not ready is no longer a problem.
+- Every console problem names the bead and step it blocks and the exact fix.
+- `bead-queues --stack` makes one `gh stack view --json` check and files one `stack_incoherent` row listing every stack issue (layer, its base against the lower layer's head, the stack writer's `gh stack rebase`/`gh stack submit`). A coherent stack gives no row. When `gh` cannot give the stack it falls back to a read-only `git merge-base --is-ancestor` chain check over the phase's layer branches, silent when coherent; a `gh` failure is never a stack fault. It never rebases or changes the stack. The `pr_unlinked` queue and the `gh api .../stacks` read are removed.
+- `bead-groups` pours fix groups for a phase-end finding whose container is the phase epic: it derives the phase from the epic id, uses the epic as the sprint (branch `fix/<epic>-<ref>`), and requires `difficulty` on each such finding (`BEAD_GROUPS_FINDINGS_INVALID` when missing). Sprint containers behave as before (#215, PR #516).
+- `schema-reviewer-assignment` 3.1.0 carries `carry_forward_findings` and `findings_scope_locked` with the SCOPE LOCK note, like the other reviewer assignments (#119, PR #517).
+- The close hook closes the dev's task at dev complete (after assigning sanity), so the dev starts its next queued task at once; sanity PASS no longer closes it, and a sanity FAIL re-assigns the same task id. `dev-template`, `fix-assignment`, `dev-complete` and `fix-complete` say so (#467, PR #519).
+- The close hook retries a `bd` call that fails with a dropped Dolt connection (`invalid connection` or `i/o timeout`) 3 times, 10 seconds apart, and records each non-clean attempt under `attempts` in its JSON output with timeout, elapsed time, load average and CPU percentage. A real timeout is not retried. `COMMAND_TIMEOUT` defaults to 180 seconds and is read from `ATM_BD_GATE_TIMEOUT_S` (#514, PR #521).
+- A failed bead, ATM or git read in the console keeps the last good phase, agents, held rows, problems and worktrees on screen and shows `source failed since HH:MM:SS` in the header until the next poll succeeds (#515, PR #520).
+- A failed `bd` read keeps its original typed error end to end; `not_found` is reported only for a successful empty read. This also fixes two further sites that collapsed an `Err` into a missing value, `config.code_repository` and `queues._local_issues` (#524, PR #525).
+- #215 is fixed for real phase epics: `bead-groups` recognizes the real phase epic shape for phase-end finding pours (#215, PR #526).
+
 ## [0.18.2] - 2026-10-20
 
 ### Fixed

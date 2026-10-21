@@ -27,14 +27,14 @@ from contract_samples import (
     TIMEOUT,
 )
 
-from atm_bd_console import log, runner
+from atm_bd_console import atm_bd, log, runner
 from atm_bd_console.beads_source import open_rows
 from atm_bd_console.command import Output
 from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
-from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
+from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import (
     INITIAL_STATE,
@@ -54,6 +54,7 @@ from atm_bd_console.types import (
 )
 
 RUNNING_STATE = replace(STATE, idle_since=None)
+REAL_PHASE = atm_bd.phase
 
 
 class StoreReads:
@@ -923,6 +924,29 @@ def test_merge_check_runs_only_for_open_pr_and_names_missing_remote_branches(
         assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
 
 
+@pytest.mark.parametrize(("missing_ref", "expected"), (
+    ("origin/topic", MergeState.HEAD_NOT_PUSHED), ("origin/base", MergeState.BASE_DELETED),
+))
+def test_merge_check_for_a_ref_missing_on_origin_is_unpushed_not_a_failed_check(
+    github_runtime, monkeypatch, missing_ref, expected,
+) -> None:
+    store, _, events, inputs = github_runtime
+    pr = PullRequest(7, "https://example.test/pull/7", "topic", "base", "abc", CiState.PASS, (), state=PrState.OPEN)
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"),), True))
+    monkeypatch.setattr(runner.github_source, "open_prs", lambda *_: (Ok((pr,)), GhStatus("rest", True, None, NOW, False)))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    # The cached ref list still names both branches while the local origin ref is gone.
+    monkeypatch.setattr(runner.git_source, "remote_refs",
+                        lambda *_: Ok(tuple(RemoteRef(branch, REMOTE_REF.sha) for branch in ("topic", "base"))))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Err(NotFound("not_found", missing_ref, "fetch the named branch and retry")))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, True, store)
+
+    assert [result.value.state for result in inputs[0].merges] == [expected]
+    assert all(isinstance(result, Ok) for result in inputs[0].merges)
+    assert not any(fields.get("source") == "git.merge" and fields.get("outcome") == "failed" for _, fields in events)
+
+
 def test_all_phase_git_operations_use_code_root_and_bead_reads_keep_repo_root(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
     config = replace(CONFIG, code_root="/code-checkout", github_repo="sample/code", no_fetch=False)
@@ -1003,7 +1027,7 @@ def test_lead_problem_uses_tool_sender_and_assignment_stays_with_lead(github_run
 
     snapshot, _ = runner.step(config, INITIAL_STATE, False, store)
 
-    assert any(problem.to == "fenix" and problem.text == "missing branch configuration" for problem in snapshot.problems)
+    assert any(problem.to == "fenix" and "missing branch configuration; set the branch" in problem.text for problem in snapshot.problems)
     calls = fake_bin.argv()
     sends = [argv for argv in calls if argv[1] == "send"]
     assert sends == [("atm", "send", "fenix@atm-dev", "--as", sender, "--team", sender_team, "--stdin")]
@@ -1188,13 +1212,13 @@ def test_source_failure_and_dispatch_hold_are_logged(github_runtime, monkeypatch
 
 
 def test_failed_notice_is_not_committed_and_remains_pending() -> None:
-    action = replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
+    action = replace(ACTION, kind="batch", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
     problem = Problem("missing_pr:branch", "atm-bh-6.fix", "fenix", "missing PR", ACTION.at)
     proposed = replace(STATE, problems=(problem,), cycle_first_send=ACTION.at, sent=(action,), batch_due={"fenix": ACTION.at})
 
     durable = runner._durable_state(STATE, proposed, (action,), (replace(action, outcome="failed command_failed"),))
 
-    assert durable.problems == () and durable.sent == STATE.sent and durable.batch_due == {}
+    assert durable.problems == (problem,) and durable.sent == STATE.sent and durable.batch_due == {}
     assert durable.cycle_first_send == STATE.cycle_first_send
 
 
@@ -1218,7 +1242,7 @@ def test_dry_run_reports_actions_without_advancing_durable_state(github_runtime,
 def test_failed_delivery_is_retried_on_the_next_tick(github_runtime, monkeypatch) -> None:
     store, _, _, _ = github_runtime
     attempts = []
-    action = replace(ACTION, kind="send", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
+    action = replace(ACTION, kind="batch", to="fenix", bead_ids=("atm-bh-6.fix",), spec=None)
     problem = Problem("missing_pr:branch", "atm-bh-6.fix", "fenix", "missing PR", ACTION.at)
 
     def tick(_inputs, state, now, _spec):
@@ -1232,7 +1256,8 @@ def test_failed_delivery_is_retried_on_the_next_tick(github_runtime, monkeypatch
     _, after_second = runner.step(replace(CONFIG, dry_run=False), after_first, False, store)
 
     assert attempts == [1, 1]
-    assert after_first.problems == after_second.problems == ()
+    assert after_first.problems == after_second.problems == (problem,)
+    assert after_first.batch_due == after_second.batch_due == {}
 
 
 def test_second_atm_action_failure_is_persisted(github_runtime, monkeypatch) -> None:
@@ -1382,3 +1407,74 @@ def test_config_error_reports_write_failures(monkeypatch, tmp_path, failed_write
     assert writes[0][1] == STATE and next_state == STATE
     assert writes[1][1].errors == (error, *((IO_FAILED,) if "state" in failed_writes else ()))
     assert snapshot.errors == (error, *(IO_FAILED for _ in failed_writes))
+
+
+@pytest.mark.parametrize(("patched", "source"), [
+    ("open_rows", "beads.open"), ("ready", "beads.ready"),
+])
+def test_step_reports_failed_bead_reads(monkeypatch, github_runtime, patched, source) -> None:
+    store, _, _, _ = github_runtime
+    assert not any(name.startswith("beads.") for name in runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads)
+    monkeypatch.setattr(runner.beads_source, patched, lambda *_: Err(TIMEOUT))
+    failed = runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads
+    assert failed[source] == TIMEOUT
+
+
+def test_step_reports_failed_atm_and_git_reads(monkeypatch, github_runtime) -> None:
+    store, _, _, _ = github_runtime
+    monkeypatch.setattr(runner.atm_source, "members", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.atm_source, "tasks", lambda *_: Err(TIMEOUT))
+    monkeypatch.setattr(runner.git_source, "worktrees", lambda *_: Err(TIMEOUT))
+    failed = runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads
+    for source in ("atm.members", "atm.tasks", "git.worktrees"):
+        assert failed[source] == TIMEOUT
+
+
+ROOT_FAILED = CommandFailed("command_failed", ("bd", "show", "atm-phase-bh", "--json"), 1,
+                            "dolt: i/o timeout reading atm-phase-bh", "inspect bd output")
+
+
+def _root_show(monkeypatch, root_reads):
+    reads = iter(root_reads)
+    shown = []
+
+    def show(ids):
+        if ids == (PHASE_FILE.root_id,):
+            shown.append(ids)
+            return next(reads)
+        return Ok(())
+
+    monkeypatch.setattr(runner.beads_source, "show", show)
+    return shown
+
+
+@pytest.mark.parametrize("state", [RUNNING_STATE, STATE])
+def test_failed_root_show_is_the_real_error_not_not_found(monkeypatch, github_runtime, state) -> None:
+    store, _, events, inputs = github_runtime
+    _root_show(monkeypatch, [Err(ROOT_FAILED)])
+    monkeypatch.setattr(runner.atm_bd, "phase", REAL_PHASE)
+    result = runner.step(CONFIG, state, True, store)
+    phase = inputs[-1].phase
+    assert isinstance(phase, Err) and not isinstance(phase.error, NotFound)
+    assert phase.error is ROOT_FAILED
+    assert result.failed_reads["beads.show_root"] is ROOT_FAILED
+    message = error_message(asdict(phase.error))
+    assert "dolt: i/o timeout reading atm-phase-bh" in message and "bd show atm-phase-bh" in message
+    assert "fix root in the phase file" not in message
+    logged = [f for action, f in events if action == "read" and f["source"] == "beads.show_root"]
+    assert logged and logged[0]["outcome"] == "failed" and logged[0]["error"] == asdict(ROOT_FAILED)
+
+
+def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, github_runtime) -> None:
+    store, _, _, inputs = github_runtime
+    root = replace(BEAD, id=PHASE_FILE.root_id, labels=(PHASE_FILE.label,), parent=None)
+    _root_show(monkeypatch, [Ok(()), Err(ROOT_FAILED), Ok((root,))])
+    monkeypatch.setattr(runner.atm_bd, "phase", REAL_PHASE)
+    empty = runner.step(CONFIG, RUNNING_STATE, True, store)
+    assert inputs[-1].phase == Err(NotFound("not_found", "atm-phase-bh (no root bead)",
+                                            "bd show atm-phase-bh; fix root in the phase file"))
+    assert "beads.show_root" not in empty.failed_reads
+    failed = runner.step(CONFIG, RUNNING_STATE, True, store)
+    assert isinstance(inputs[-1].phase.error, CommandFailed) and "beads.show_root" in failed.failed_reads
+    recovered = runner.step(CONFIG, RUNNING_STATE, True, store)
+    assert isinstance(inputs[-1].phase, Ok) and "beads.show_root" not in recovered.failed_reads
