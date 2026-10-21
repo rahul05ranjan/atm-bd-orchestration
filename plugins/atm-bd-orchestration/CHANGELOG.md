@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The console TUI build line shows the package version (`__version__`, the string `atm-bd --version` prints) on a release install, not the repo commit count (`0.18.823`). A checkout or a build from a dirty tree adds `+g<sha>[-dirty]`; the wheel build now writes `<version>+g<sha>[-dirty]` and no commit count is stored or shown (#532).
+
 ## [0.18.3] - 2026-10-20
 
 ### Fixed

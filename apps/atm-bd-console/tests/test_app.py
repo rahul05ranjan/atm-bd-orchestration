@@ -732,3 +732,19 @@ def test_off_screen_presses_are_traced_without_raising(tmp_path: Path) -> None:
         assert not (tmp_path / "state" / "diagnostics.log").exists()
 
     run_scenario(scenario())
+
+
+def test_build_line_for_a_release_install_is_the_package_version(monkeypatch) -> None:
+    from atm_bd_console import __version__
+    from atm_bd_console import build as build_module
+
+    monkeypatch.setattr(build_module, "BUILT_IDENTITY", f"{__version__}+g846527b")
+    monkeypatch.setattr(build_module, "_checkout_identity", lambda root: None)
+
+    async def scenario() -> None:
+        app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            assert app.query_one("#build").render().plain == f"atm-bd console {__version__}"
+
+    asyncio.run(scenario())

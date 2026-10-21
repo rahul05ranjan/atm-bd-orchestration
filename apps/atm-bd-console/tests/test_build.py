@@ -101,7 +101,7 @@ def test_display_identity_rejects_package_copied_under_a_foreign_git_root(tmp_pa
     monkeypatch.setattr(build, "__file__", str(copied / "build.py"))
     monkeypatch.setattr(build, "BUILT_IDENTITY", "0.18.2+gembedded")
 
-    assert build.display_identity() == "0.18.2"
+    assert build.display_identity() == __version__
 
 
 @pytest.mark.skipif(which("uv") is None, reason="uv is required to build and install the test wheel")
@@ -200,8 +200,10 @@ def test_build_rejects_sources_without_reliable_git_identity(tmp_path: Path, fai
 
 
 @pytest.mark.parametrize(("embedded", "shown"), [
-    ("0.16.490+g846527b", "0.16.490"),            # release install: count only (#254)
-    ("0.16.490+g846527b-dirty", "0.16.490+g846527b-dirty"),  # built from a dirty tree: say so
+    (f"{__version__}+g846527b", __version__),                # release install: exactly the package version (#532)
+    (f"{__version__}+g846527b-dirty", f"{__version__}+g846527b-dirty"),  # built from a dirty tree: say so
+    ("0.18.823+g846527b", __version__),                      # older wheel: its commit count is never shown
+    ("0.18.823+g846527b-dirty", f"{__version__}+g846527b-dirty"),
     (None, f"{__version__}+unknown"),
 ])
 def test_display_identity_shortens_only_clean_release_installs(tmp_path: Path, monkeypatch, embedded, shown) -> None:
@@ -210,7 +212,9 @@ def test_display_identity_shortens_only_clean_release_installs(tmp_path: Path, m
 
 
 def test_display_identity_keeps_the_full_form_in_a_checkout() -> None:
-    assert "+g" in display_identity()
+    shown = display_identity()
+    assert shown.startswith(f"{__version__}+g")
+    assert shown.removesuffix("-dirty").removeprefix(f"{__version__}+g").isalnum()  # sha only, no commit count
 
 
 class _Out:
@@ -218,12 +222,12 @@ class _Out:
         self.stdout = stdout
 
 
-@pytest.mark.parametrize("failing", ["rev-parse", "rev-list", "status"])
+@pytest.mark.parametrize("failing", ["rev-parse", "status"])
 def test_failed_git_read_is_not_shown_as_a_clean_identity_and_is_logged(tmp_path: Path, monkeypatch, failing) -> None:
     (tmp_path / "apps" / "atm-bd-console").mkdir(parents=True)
     (tmp_path / "apps" / "atm-bd-console" / "pyproject.toml").write_text("")
     failure = CommandFailed("command_failed", ("git", failing, "--x"), 128, "fatal: boom", "check the git repository and retry")
-    outputs = {"--show-toplevel": str(tmp_path), "--short": "abc1234", "--count": "5", "--porcelain": ""}
+    outputs = {"--show-toplevel": str(tmp_path), "--short": "abc1234", "--porcelain": ""}
 
     def fake_run(repo, *args, **kwargs):
         if args[0] == failing and "--show-toplevel" not in args:
@@ -242,7 +246,7 @@ def test_failed_git_read_is_not_shown_as_a_clean_identity_and_is_logged(tmp_path
     shown = display_identity(tmp_path)
 
     if failing == "status":
-        assert shown == f"{'.'.join(__version__.split('.')[:2])}.5+gabc1234-dirty?"
+        assert shown == f"{__version__}+gabc1234-dirty?"
     else:
         assert shown == f"{__version__}+unknown"
     [(action, fields)] = events

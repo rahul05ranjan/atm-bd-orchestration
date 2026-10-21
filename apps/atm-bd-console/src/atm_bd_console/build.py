@@ -25,17 +25,22 @@ def identity() -> str:
 
 
 def display_identity(root: Path | None = None) -> str:
-    """The build line in the TUI (#254): a release install shows only <major>.<minor>.<commit count>.
+    """The build line in the TUI (#254, #532): the package version, the same string as ``atm-bd --version``.
 
-    A checkout (identity derived from git at runtime) and a build from a dirty tree keep the full form, so
-    the sha and the dirty marker stay visible exactly where a debug build is running.
+    A release install shows exactly ``__version__``. A checkout (identity derived from git at runtime) and a
+    build from a dirty tree add ``+g<sha>[-dirty]``, so the sha and the dirty marker stay visible exactly where a
+    debug build is running. The commit count is never shown.
     """
     checkout = _checkout_identity(root)
     if checkout is not None:
         return checkout
-    if BUILT_IDENTITY is not None and not BUILT_IDENTITY.endswith("-dirty"):
-        return BUILT_IDENTITY.partition("+")[0]
-    return BUILT_IDENTITY or f"{__version__}+unknown"
+    if BUILT_IDENTITY is None:
+        return f"{__version__}+unknown"
+    # Only the provenance after "+" is used: an older wheel's leading <major>.<minor>.<commit count> is ignored.
+    provenance = BUILT_IDENTITY.partition("+")[2]
+    if not BUILT_IDENTITY.endswith("-dirty"):
+        return __version__
+    return f"{__version__}+{provenance}"
 
 
 def _checkout_identity(root: Path | None) -> str | None:
@@ -46,16 +51,9 @@ def _checkout_identity(root: Path | None) -> str | None:
     if isinstance(toplevel, Err) or Path(toplevel.value.stdout.strip()).resolve() != root.resolve() or not package.is_file():
         return None
     revision = git_source._run(root, "rev-parse", "--short", "HEAD")
-    count = git_source._run(root, "rev-list", "--count", "HEAD")
     if isinstance(revision, Err):
         _log_failed_read(root, "rev-parse", revision.error)
         return f"{__version__}+unknown"
-    if isinstance(count, Err):
-        _log_failed_read(root, "rev-list", count.error)
-        return f"{__version__}+unknown"
-    if not count.value.stdout.strip().isdigit():
-        return f"{__version__}+unknown"
-    major, minor, _patch = __version__.split(".", 2)
     dirty = git_source._run(root, "status", "--porcelain")
     if isinstance(dirty, Err):
         # A failed status read is not a clean tree: show it as unknown and log why.
@@ -63,7 +61,7 @@ def _checkout_identity(root: Path | None) -> str | None:
         dirty_marker = "-dirty?"
     else:
         dirty_marker = "-dirty" if dirty.value.stdout.strip() else ""
-    return f"{major}.{minor}.{count.value.stdout.strip()}+g{revision.value.stdout.strip()}{dirty_marker}"
+    return f"{__version__}+g{revision.value.stdout.strip()}{dirty_marker}"
 
 
 def _log_failed_read(root: Path, source: str, error: Error) -> None:
