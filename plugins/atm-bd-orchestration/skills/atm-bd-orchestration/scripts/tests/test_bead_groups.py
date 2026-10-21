@@ -117,7 +117,7 @@ class PhaseEndFindingTests(unittest.TestCase):
         runner.bd = Mock()
         runner.bd.show.return_value = None
         stack = {"id": "t-phase-d.stack", "metadata": {"trunk": "integrate/phase-d", "stack_number": None, "layers": []}}
-        epic = {"status": "open", "metadata": {"integration_branch": "integrate/phase-d"}}
+        epic = {"status": "open", "metadata": {"integration_branch": "integrate/phase-d", "phase": "d", "plan_scope": "epic"}}
         runner.show = lambda bead: stack if bead == "t-phase-d.stack" else epic
         runner.sidecar = lambda _: {"default_option": "C", "options": {"C": {}}, "ref": "{vars[finding_ref]}-r{vars[round]}"}
         row = {"ref": "pe-f1", "severity": "blocking", "reviewer": "review", "title": "issue", "remedy": "fix",

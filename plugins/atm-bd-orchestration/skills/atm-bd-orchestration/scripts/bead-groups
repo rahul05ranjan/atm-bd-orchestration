@@ -202,10 +202,10 @@ class Run:
             raise TargetError("BEAD_GROUPS_FINDINGS_INVALID", f"{path}: found_at_commit must be a commit sha")
         container = self.show(sprint)
         meta = container.get("metadata") or {}
-        phase_end = bool(re.fullmatch(r".+-phase-[a-z0-9]+", sprint)) and not any(meta.get(k) for k in ("phase", "sprint", "stack"))
+        phase_end = bool(re.fullmatch(r".+-phase-[a-z0-9]+", sprint)) and not any(meta.get(k) for k in ("sprint", "stack"))
         if phase_end:
-            # A phase-end finding traces to the phase epic, which carries no sprint facts: the epic is the "sprint",
-            # the phase comes from its id, the stack is the phase's stack ledger, and difficulty must come per finding.
+            # A phase-end finding traces to the phase epic, which carries phase metadata but no sprint/stack facts: the epic is the "sprint",
+            # the phase comes from its id (it wins over the epic's own phase key), the stack is the phase's stack ledger, and difficulty must come per finding.
             meta = {**meta, "phase": sprint_index_common.phase_of_root(sprint), "sprint": sprint, "stack": "stack"}
         missing = [k for k in ("phase", "sprint", "stack", "difficulty") if meta.get(k) in (None, "")]
         if missing and not (phase_end and missing == ["difficulty"]):
