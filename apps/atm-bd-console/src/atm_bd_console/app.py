@@ -30,12 +30,13 @@ from textual.widgets.option_list import Option
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .agent_roles import agent_group
 from .build import display_identity
+from .closed_cache import ClosedBeads
 from .enums import QaState, SprintState
 from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
 from .log import create_console_logger, error_message
 from .poll_health import PollHealth
 from .result import Err, Error, IoFailed, Ok
-from .state import StateStore, acquire_lock
+from .state import acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn, StepResult
 
@@ -321,8 +322,10 @@ class ConsoleApp(App[int]):
         Binding("ctrl+q", "noop", show=False, priority=True),
     ]
 
-    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> None:
+    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None,
+                 closed: ClosedBeads | None = None) -> None:
         super().__init__(driver_class=CONSOLE_DRIVER_CLASS)
+        self.closed = closed if closed is not None else ClosedBeads()
         self.config = config
         self.step = step
         self.state = state
@@ -398,6 +401,7 @@ class ConsoleApp(App[int]):
 
     def action_refresh(self) -> None:
         self.tick(True)
+        self.closed.drop_stage_lists()
         if self.query_one(TabbedContent).active == "quality":
             self._load_closed_quality()
 
@@ -472,7 +476,7 @@ class ConsoleApp(App[int]):
 
     @work(thread=True, group="quality", exclusive=True, exit_on_error=False)
     def _load_closed_quality(self) -> None:
-        result = ledger_source.closed_quality(self.config.repo_root, self.config.phase)
+        result = ledger_source.closed_quality(self.config.repo_root, self.config.phase, self.closed)
         self.call_from_thread(self._finish_quality, result)
 
     def _finish_quality(self, result) -> None:
@@ -739,7 +743,7 @@ class ConsoleApp(App[int]):
             f"Build: {display_identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
-RunnerStep = Callable[[Config, State, bool, StateStore], StepResult]
+RunnerStep = Callable[..., StepResult]
 
 
 def run(config: Config, step: StepFn | None, state: State, startup_error: Error | None = None, *, runner_step: RunnerStep | None = None) -> int:
@@ -753,7 +757,8 @@ def run(config: Config, step: StepFn | None, state: State, startup_error: Error 
         if runner_step is not None:
             saved = lock.value.load_state()
             state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
-        bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value)
+        closed = ClosedBeads.load(lock.value.directory)
+        bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value, closed)
         assert bound_step is not None
-        result = ConsoleApp(config, bound_step, state, startup_error).run()
+        result = ConsoleApp(config, bound_step, state, startup_error, closed).run()
     return result or 0

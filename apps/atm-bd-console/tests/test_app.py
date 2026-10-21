@@ -101,16 +101,17 @@ def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
         _load_closed_quality=lambda: calls.append("quality"),
         tick=lambda force: calls.append(("tick", force)),
         query_one=lambda *_: active,
+        closed=SimpleNamespace(drop_stage_lists=lambda: calls.append("relist")),
     )
     ConsoleApp.on_tabbed_content_tab_activated(dummy, SimpleNamespace(pane=SimpleNamespace(id="quality")))
     assert calls == ["quality"]
     calls.clear()
     ConsoleApp.action_refresh(dummy)
-    assert calls == [("tick", True)]
+    assert calls == [("tick", True), "relist"]
     calls.clear()
     active.active = "quality"
     ConsoleApp.action_refresh(dummy)
-    assert calls == [("tick", True), "quality"]
+    assert calls == [("tick", True), "relist", "quality"]
 
 
 @pytest.mark.parametrize("size", [(100, 40), (160, 40)])

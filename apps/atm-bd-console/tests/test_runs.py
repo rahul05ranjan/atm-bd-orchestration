@@ -8,6 +8,7 @@ import pytest
 import sc_compose
 
 from atm_bd_console import beads_source, command, findings_renderer, ledger_source, runs, skill_loader
+from atm_bd_console.closed_cache import ClosedBeads
 from atm_bd_console.enums import QaState
 from atm_bd_console.result import Ok
 
@@ -30,7 +31,7 @@ def test_closed_quality_reads_only_relevant_stages_and_checked_ids(monkeypatch) 
         return Ok(command.Output(0, json.dumps(rows)))
 
     monkeypatch.setattr(beads_source.command, "run", run)
-    result = ledger_source.closed_quality("/repo", "bj")
+    result = ledger_source.closed_quality("/repo", "bj", ClosedBeads())
     assert isinstance(result, Ok)
     assert result.value[0][0].pr_number == 42
     assert result.value[1][0]["id"] == "f1"

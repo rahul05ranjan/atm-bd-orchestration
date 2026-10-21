@@ -755,7 +755,7 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
     assert isinstance(acquired, Ok)
 
     class FakeApp:
-        def __init__(self, _config, step, state, _startup_error):
+        def __init__(self, _config, step, state, _startup_error, closed=None):
             self.step = step
             self.state = state
 
@@ -763,7 +763,7 @@ def test_app_bound_runner_step_uses_the_lock_store(monkeypatch, tmp_path) -> Non
             self.step(config, self.state, False)
             return 0
 
-    def runner_step(current, current_state, force, store):
+    def runner_step(current, current_state, force, store, closed=None):
         assert store is acquired.value and store._lock_file is not None
         seen.extend((current, current_state, force, store))
         return StepResult(SNAPSHOT, current_state)

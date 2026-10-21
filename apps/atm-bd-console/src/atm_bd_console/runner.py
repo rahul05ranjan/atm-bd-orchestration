@@ -7,14 +7,16 @@ from functools import partial
 from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
+from .closed_cache import ClosedBeads
 from .dispatch import candidates, sprint_of, verification_reason
 from .enums import MergeState, PrState, SprintState
 from .log import TickLog, create_console_logger, error_message
-from .result import Err, NotFound, Ok, Result
+from .result import Err, Error, NotFound, Ok, Result
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import (
     Action,
     ActionLine,
+    Bead,
     Config,
     GhStatus,
     Inputs,
@@ -126,10 +128,38 @@ def _refresh_github(config: Config, now: datetime, gh: GhStatus, groups=()):
     return result, status
 
 
+def _show_closed(closed: ClosedBeads, ids: tuple[str, ...], logger: TickLog) -> Result[tuple[Bead, ...]]:
+    """Read only the ids not yet cached; a failed read is the original Err and caches nothing. Beads that are
+    not closed are returned for this tick but never cached."""
+    missing = closed.missing_beads(ids)
+    if not missing:
+        return Ok(closed.cached_beads(ids))
+    fresh = logger.result("beads.show_closed", beads_source.show(missing), task_ids=list(missing))
+    if isinstance(fresh, Err):
+        return fresh
+    closed.store_beads(fresh.value)
+    returned = {bead.id for bead in fresh.value}
+    return Ok((*fresh.value, *closed.cached_beads(bead_id for bead_id in ids if bead_id not in returned)))
+
+
+def _persist_closed(closed: ClosedBeads, logger: TickLog) -> tuple[Error, ...]:
+    """Write the cache when it changed. Returns the errors for the snapshot: the startup load error (once) and
+    a failed write; neither stops the tick."""
+    errors = [*closed.pending_errors]
+    closed.pending_errors.clear()
+    saved = closed.save()
+    if isinstance(saved, Err):
+        errors.append(saved.error)
+    for error in errors:
+        logger.error(error, source="closed_cache")
+    return tuple(errors)
+
+
 def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger,
-                  force_github: bool = False):
-    shown_ids = atm_bd.closed_show_ids(file, ())
-    shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
+                  force_github: bool = False, closed: ClosedBeads | None = None):
+    closed = closed if closed is not None else ClosedBeads()
+    shown = _show_closed(closed, atm_bd.closed_show_ids(file, ()), logger)
+    closed_errors = _persist_closed(closed, logger)
     phase = shown if isinstance(shown, Err) else atm_bd.phase(file, root_bead, (), (), shown.value)
     if root_bead is not None and root_bead.status == SprintState.CLOSED and isinstance(phase, Ok):
         phase = Ok(replace(phase.value, step_errors=()))
@@ -172,7 +202,7 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     next_state = state if config.dry_run else next_state
     written = store.write_state(next_state)
     history_errors = () if isinstance(history, Ok) or isinstance(history.error, NotFound) else (history.error,)
-    errors = (*snapshot.errors, *history_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
+    errors = (*snapshot.errors, *history_errors, *closed_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
     for error in errors:
         logger.error(error)
     logger.finish(actions=0)
@@ -204,8 +234,10 @@ def _closed_tasks(
     return Ok(tuple(closed))
 
 
-def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
-    """Run one best-effort tick using the caller-owned lock-backed store."""
+def step(config: Config, state: State, force_github: bool, store: StateStore,
+         cache: ClosedBeads | None = None) -> StepResult:
+    """Run one best-effort tick using the caller-owned lock-backed store and closed-bead cache."""
+    cache = cache if cache is not None else ClosedBeads()
     now = datetime.now(UTC)
     logger = TickLog(create_console_logger(config.repo_root))
     logger.event("tick_start", phase=config.phase)
@@ -230,14 +262,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
     if root_bead is not None and root_bead.status == SprintState.CLOSED:
-        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github)
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github, cache)
     if not force_github and isinstance(root, Ok) and model.idle_stop_due(state, now):
-        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, closed=cache)
     opened = logger.result("beads.open", beads_source.open_rows(file.value.label), label=file.value.label)
     ready = logger.result("beads.ready", beads_source.ready(file.value.label), label=file.value.label)
     known = opened.value.beads if isinstance(opened, Ok) else ()
-    shown_ids = atm_bd.closed_show_ids(file.value, known)
-    shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
+    if isinstance(opened, Ok):
+        cache.forget_beads(bead.id for bead in known)
+        cache.note_open(config.phase, opened.value.rows)
+    shown = _show_closed(cache, atm_bd.closed_show_ids(file.value, known), logger)
+    closed_errors = _persist_closed(cache, logger)
     if isinstance(root, Err):
         phase = root
     elif isinstance(opened, Err):
@@ -368,7 +403,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 )
     def persist(store: StateStore):
             reported, action_errors = _run_actions(config, actions, store, now, logger)
-            errors = [*store.load_errors, *action_errors, *refresh_errors]
+            errors = [*store.load_errors, *closed_errors, *action_errors, *refresh_errors]
             durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
             reported_sent = (*state.sent, *reported)[-5:]
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs), attempted_at=attempted_at)), store.write_state(durable)):

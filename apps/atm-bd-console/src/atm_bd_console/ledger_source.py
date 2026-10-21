@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from . import beads_source, command, runs
+from .closed_cache import ClosedBeads
 from .result import Err, Ok, Result
 from .skill_loader import load_skill
 
@@ -49,21 +50,44 @@ def collect(repo_root: str, phase: str, open_rows: tuple[dict[str, Any], ...], c
     return runs.sanity_runs(read_ledger(repo_root, phase)), runs.qa_runs(qa_rows), findings
 
 
-def closed_quality(repo_root: str, phase: str) -> Result[tuple[list[runs.QaRun], list[dict[str, Any]]]]:
+def _closed_stage(repo_root: str, phase: str, stage: str, closed: ClosedBeads) -> Result[list[dict[str, Any]]]:
+    """The closed rows of one stage: listed once, then topped up with the ids seen open that have since closed."""
+    cached = closed.stage_rows(phase, stage)
+    if cached is None:
+        listed = beads_source.closed_stage_rows(phase, stage, cwd=repo_root)
+        if isinstance(listed, Err):
+            return listed
+        closed.set_stage_rows(phase, stage, listed.value)
+        return listed
+    vanished = closed.vanished_stage_ids(phase, stage)
+    if vanished:
+        shown = beads_source.show_rows(vanished, cwd=repo_root)
+        if isinstance(shown, Err):
+            return shown
+        closed.add_stage_rows(phase, stage, shown.value)
+    return Ok(closed.stage_rows(phase, stage) or [])
+
+
+def closed_quality(repo_root: str, phase: str, closed: ClosedBeads) -> Result[tuple[list[runs.QaRun], list[dict[str, Any]]]]:
     """Load just the closed QA and finding stages when the user requests Quality."""
-    qa = beads_source.closed_stage_rows(phase, "qa", cwd=repo_root)
+    qa = _closed_stage(repo_root, phase, "qa", closed)
     if isinstance(qa, Err):
         return qa
-    findings = beads_source.closed_stage_rows(phase, "finding", cwd=repo_root)
+    findings = _closed_stage(repo_root, phase, "finding", closed)
     if isinstance(findings, Err):
         return findings
     ids = tuple(sorted({checked for row in qa.value
                         if isinstance((meta := row.get("metadata")), dict)
                         if isinstance((checked := meta.get("checked_bead")), str) and checked}))
-    checked = beads_source.show_rows(ids, cwd=repo_root)
-    if isinstance(checked, Err):
-        return checked
-    by_id = {row.get("id"): row for row in checked.value}
+    missing = closed.missing_rows(ids)
+    if missing:
+        fresh = beads_source.show_rows(missing, cwd=repo_root)
+        if isinstance(fresh, Err):
+            return fresh
+        closed.store_rows(fresh.value)
+        by_id = {row.get("id"): row for row in [*fresh.value, *closed.cached_rows(ids)]}
+    else:
+        by_id = {row.get("id"): row for row in closed.cached_rows(ids)}
     enriched = []
     for row in qa.value:
         metadata = row.get("metadata")
