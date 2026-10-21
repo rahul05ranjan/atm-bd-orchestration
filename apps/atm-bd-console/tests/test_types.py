@@ -122,7 +122,7 @@ def test_every_contract_class_is_listed() -> None:
 def test_contract_class_is_frozen_with_design_fields(name: str) -> None:
     cls = _class(name)
     assert is_dataclass(cls)
-    assert cls.__dataclass_params__.frozen
+    assert vars(cls)["__dataclass_params__"].frozen
     assert tuple(field.name for field in fields(cls)) == tuple(FIELDS[name].split())
 
 
@@ -163,7 +163,8 @@ def test_type_aliases() -> None:
     assert get_args(types.StepKind) == LITERALS[("Step", "kind")]
     assert get_args(types.AgentStatus) == LITERALS[("AgentView", "status")]
     assert get_args(result.Error) == tuple(_class(name) for name in ERROR_NAMES)
-    assert get_args(result.Result) == (result.Ok[result.T], result.Err)
+    generic_getitem = "__class_getitem__"
+    assert get_args(result.Result) == (getattr(result.Ok, generic_getitem)(result.T), result.Err)
     assert get_args(types.SpecFn) == ([types.DispatchContext], result.Result[types.DispatchSpec])
     args, result_type = get_args(types.StepFn)
     assert args == [types.Config, types.State, bool]

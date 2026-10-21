@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from conftest import run_scenario, settle
@@ -13,19 +13,18 @@ from atm_bd_console.app import ConsoleApp
 from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.result import IoFailed
 from atm_bd_console.timefmt import clock
-from atm_bd_console.types import Metrics, StepResult
+from atm_bd_console.types import Metrics, Snapshot, StepResult
 
 LATER = RUNNING.generated_at + timedelta(seconds=60)
 LATEST = RUNNING.generated_at + timedelta(seconds=120)
 
 
-def blanked(**fields) -> object:
+def blanked(*, generated_at: datetime = LATER) -> Snapshot:
     """What model.tick builds when the phase read failed: every phase-derived part empty, the error listed."""
-    fields = {"generated_at": LATER, **fields}
     return replace(
-        RUNNING, phase="", phase_data=None, sprints=(), sections=(), agents=(), problems=(),
+        RUNNING, generated_at=generated_at, phase="", phase_data=None, sprints=(), sections=(), agents=(), problems=(),
         prs=(), top_pr=None, top_ci=None, metrics=Metrics(0, 0, 0, 0), mermaid="graph TD", errors=(*RUNNING.errors, TIMEOUT),
-        member_data=(), task_data=(), task_bead_data=(), worktree_data=(), **fields,
+        member_data=(), task_data=(), task_bead_data=(), worktree_data=(),
     )
 
 

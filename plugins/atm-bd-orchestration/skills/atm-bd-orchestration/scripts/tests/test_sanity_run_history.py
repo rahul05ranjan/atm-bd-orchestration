@@ -23,10 +23,14 @@ from rendering import render
 ROOT = Path(__file__).parents[2]
 SCRIPTS = ROOT / "scripts"
 LOADER = importlib.machinery.SourceFileLoader("sanity_history", str(SCRIPTS / "sanity-run-history"))
-HISTORY = importlib.util.module_from_spec(importlib.util.spec_from_loader(LOADER.name, LOADER))
+HISTORY_SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+assert HISTORY_SPEC is not None
+HISTORY = importlib.util.module_from_spec(HISTORY_SPEC)
 LOADER.exec_module(HISTORY)
 SPLIT_LOADER = importlib.machinery.SourceFileLoader("sanity_split_tests", str(Path(__file__).parent / "test_sanity_split.py"))
-SPLIT_TESTS = importlib.util.module_from_spec(importlib.util.spec_from_loader(SPLIT_LOADER.name, SPLIT_LOADER))
+SPLIT_SPEC = importlib.util.spec_from_loader(SPLIT_LOADER.name, SPLIT_LOADER)
+assert SPLIT_SPEC is not None
+SPLIT_TESTS = importlib.util.module_from_spec(SPLIT_SPEC)
 SPLIT_LOADER.exec_module(SPLIT_TESTS)
 run_bounded = partial(run_command, timeout=HANG_GUARD_SECONDS)
 
@@ -505,6 +509,7 @@ class ShippedFlow(unittest.TestCase):
 
     def test_oversized_jev_failure_reaches_ledger_with_reason(self):
         spec = importlib.util.spec_from_file_location("jev_client_for_history", CLIENT)
+        assert spec is not None and spec.loader is not None
         client = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(client)
         request = client.written_request("delivery", "x" * 50000, part=("1 of 1", ["x"]))

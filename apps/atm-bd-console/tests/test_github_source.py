@@ -241,6 +241,7 @@ def test_gh_errors_are_typed(fake_bin, monkeypatch, stderr, kind, http) -> None:
     result, status = open_prs("graphql")
     assert isinstance(result, Err) and isinstance(result.error, kind) and status.ok is False and status.error == result.error
     if http is not None:
+        assert isinstance(result.error, Rejected)
         assert result.error.status == http
 
 
@@ -306,7 +307,8 @@ def test_no_repository_slug_is_hard_coded(fake_bin, monkeypatch, tmp_path) -> No
     assert "repository(owner: $owner, name: $name)" in github_source.GRAPHQL
     fake_bin.make("gh", 'printf "%s" "$PWD" >&2\nexit 1\n')
     result, _ = open_prs("rest", tmp_path)
-    assert isinstance(result, Err) and result.error.stderr == str(tmp_path)
+    assert isinstance(result, Err) and isinstance(result.error, CommandFailed)
+    assert result.error.stderr == str(tmp_path)
 
 
 def test_rest_and_check_runs_use_code_checkout_and_explicit_repo(monkeypatch, tmp_path):

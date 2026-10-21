@@ -4,6 +4,7 @@ import io
 import json
 import re
 import tarfile
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -281,7 +282,7 @@ def test_http_get_maps_404_to_none_and_other_failures_to_repository_errors(monke
     def fail(code):
         def urlopen(request, timeout):
             assert timeout == skill_source.HTTP_TIMEOUT_S
-            raise urllib.error.HTTPError(request.full_url, code, "status", {}, None)
+            raise urllib.error.HTTPError(request.full_url, code, "status", Message(), None)
         return urlopen
 
     monkeypatch.setattr(skill_source.urllib.request, "urlopen", fail(404))

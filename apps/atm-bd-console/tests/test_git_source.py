@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 from process_helpers import run_process
 
 from atm_bd_console import git_source
 from atm_bd_console.enums import MergeState
-from atm_bd_console.result import Err, NotFound, Ok
+from atm_bd_console.result import Err, NotFound, Ok, Result
+
+T = TypeVar("T")
+
+
+def ok(value: Result[T]) -> T:
+    assert isinstance(value, Ok)
+    return value.value
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -55,9 +63,9 @@ def test_fetch_then_remote_refs_lists_pushed_branches_with_shas(repo: Path, tmp_
     git(other, "checkout", "-q", "-b", "late", "origin/main")
     late = commit(other, "late", **{"d.txt": "d\n"})
     git(other, "push", "-q", "origin", "late")
-    assert "late" not in {ref.branch for ref in git_source.remote_refs(repo).value}
+    assert "late" not in {ref.branch for ref in ok(git_source.remote_refs(repo))}
     assert git_source.fetch(repo) == Ok(None)
-    refs = {ref.branch: ref.sha for ref in git_source.remote_refs(repo).value}
+    refs = {ref.branch: ref.sha for ref in ok(git_source.remote_refs(repo))}
     assert set(refs) == {"main", "clean", "conflict", "late"}
     assert refs["late"] == late
     assert refs["main"] == git(repo, "rev-parse", "origin/main")
@@ -67,7 +75,7 @@ def test_fetch_then_remote_refs_lists_pushed_branches_with_shas(repo: Path, tmp_
 def test_worktrees_lists_main_and_a_detached_worktree(repo: Path, tmp_path: Path) -> None:
     detached = tmp_path / "detached"
     git(repo, "worktree", "add", "-q", "--detach", str(detached), "origin/clean")
-    rows = git_source.worktrees(repo).value
+    rows = ok(git_source.worktrees(repo))
     assert [(Path(row.path).resolve(), row.branch, row.head) for row in rows] == [
         (repo.resolve(), "main", git(repo, "rev-parse", "HEAD")),
         (detached.resolve(), None, git(repo, "rev-parse", "origin/clean")),
@@ -75,12 +83,12 @@ def test_worktrees_lists_main_and_a_detached_worktree(repo: Path, tmp_path: Path
 
 
 def test_clean_branch_merges_clean(repo: Path) -> None:
-    merge = git_source.merge(repo, "clean", "main").value
+    merge = ok(git_source.merge(repo, "clean", "main"))
     assert (merge.branch, merge.target, merge.state, merge.files, merge.messages) == ("clean", "main", MergeState.CLEAN, (), ())
 
 
 def test_conflicting_branch_lists_the_conflicted_files_and_messages(repo: Path) -> None:
-    merge = git_source.merge(repo, "conflict", "main").value
+    merge = ok(git_source.merge(repo, "conflict", "main"))
     assert merge.state == MergeState.CONFLICT
     assert merge.files == ("a.txt", "b.txt")
     assert merge.messages == (

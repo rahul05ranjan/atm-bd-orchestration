@@ -4,17 +4,21 @@ import asyncio
 import os
 import threading
 import time
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Self, cast
 
 import pytest
 from conftest import HANG_GUARD_S, FakeStep, run_scenario, settle
 from contract_fixtures import RUNNING
 from contract_samples import CONFIG, SNAPSHOT, STATE, TIMEOUT
 from rich.cells import cell_len
+from sc_observability import Level
 from textual import events
+from textual.widgets import OptionList, TabbedContent
+from type_helpers import text_of
 
 from atm_bd_console import app as console
 from atm_bd_console import prs, render
@@ -35,6 +39,13 @@ from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepResult, StepView
+
+
+@dataclass
+class DiagnosticEvent:
+    timestamp: str
+    level: Level
+    message: str | None
 
 
 def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
@@ -73,24 +84,24 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
     monkeypatch.setattr(status_table, "rows", shared_rows)
-    ConsoleApp.refresh_views(dummy)
+    ConsoleApp.refresh_views(cast(ConsoleApp, dummy))
     assert seen == [RUNNING]
     rendered = nodes["#status-table"].value
     assert list(rendered.columns[0]._cells) == [row.sprint for row in values]
     assert nodes["#status-table"].display is True
     dummy.snapshot = replace(RUNNING, phase_data=None, errors=(TIMEOUT,))
-    ConsoleApp.refresh_views(dummy)
+    ConsoleApp.refresh_views(cast(ConsoleApp, dummy))
     assert nodes["#status-table"].display is True  # a labelled placeholder, never hidden
     assert nodes["#status-table"].value.plain == f"Sprint status: unavailable - {error_text(TIMEOUT)}"
     assert f"beads unavailable: {error_text(TIMEOUT)}" in nodes["#dashboard"].value.plain
     assert seen == [RUNNING]
     dummy.snapshot = RUNNING
-    ConsoleApp.refresh_views(dummy)
+    ConsoleApp.refresh_views(cast(ConsoleApp, dummy))
     assert nodes["#status-table"].display is True
     assert seen == [RUNNING, RUNNING]
     dummy.sanity_held = Held().apply(Err(TIMEOUT), datetime.now(UTC))
     dummy.open_quality_held = Held().apply(Err(TIMEOUT), datetime.now(UTC))
-    ConsoleApp.refresh_views(dummy)
+    ConsoleApp.refresh_views(cast(ConsoleApp, dummy))
     assert nodes["#quality-error"].display is True
     assert error_text(TIMEOUT) in nodes["#quality-error"].value.plain
     assert "Sanity runs: not loaded" in nodes["#sanity-list"].value.plain
@@ -108,14 +119,16 @@ def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
         query_one=lambda *_: active,
         closed=SimpleNamespace(drop_stage_lists=lambda: calls.append("relist")),
     )
-    ConsoleApp.on_tabbed_content_tab_activated(dummy, SimpleNamespace(pane=SimpleNamespace(id="quality")))
+    ConsoleApp.on_tabbed_content_tab_activated(
+        cast(ConsoleApp, dummy), cast(TabbedContent.TabActivated, SimpleNamespace(pane=SimpleNamespace(id="quality")))
+    )
     assert calls == ["quality"]
     calls.clear()
-    ConsoleApp.action_refresh(dummy)
+    ConsoleApp.action_refresh(cast(ConsoleApp, dummy))
     assert calls == [("tick", True), "relist"]
     calls.clear()
     active.active = "quality"
-    ConsoleApp.action_refresh(dummy)
+    ConsoleApp.action_refresh(cast(ConsoleApp, dummy))
     assert calls == [("tick", True), "relist", "quality"]
 
 
@@ -149,12 +162,12 @@ def test_quality_runs_render_aligned_verdict_and_severity_columns(monkeypatch, t
                          FakeStep(SNAPSHOT, ([], quality_runs, findings)), STATE)
         async with app.run_test(size=size) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "quality"
+            app.query_one("TabbedContent", TabbedContent).active = "quality"
             await settle(pilot)
-            header = app.query_one("#quality-runs-header").render()
-            options = app.query_one("#quality-runs")
+            header = text_of(app.query_one("#quality-runs-header").render())
+            options = app.query_one("#quality-runs", OptionList)
             assert app.query_one("#quality-runs-header").content_region.x == options.content_region.x
-            labels = {options.get_option_at_index(i).id: options.get_option_at_index(i).prompt
+            labels = {options.get_option_at_index(i).id: text_of(options.get_option_at_index(i).prompt)
                       for i in range(options.option_count)}
             header_fields = header.plain.split(" | ")
             assert [field.strip() for field in header_fields] == [
@@ -255,10 +268,10 @@ def test_raised_tick_failure_is_logged_and_diagnostics_file_is_removed(tmp_path:
         app = ConsoleApp(config, RaisingStep(), STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "diagnostics"
+            app.query_one("TabbedContent", TabbedContent).active = "diagnostics"
             app.refresh_views()
             await settle(pilot)
-            shown = app.query_one("#diagnostics-text").render().plain
+            shown = text_of(app.query_one("#diagnostics-text").render()).plain
             assert "error: `retry the console tick` io_failed step exploded" in shown
             assert not (tmp_path / "state" / "diagnostics.log").exists()
 
@@ -277,10 +290,10 @@ def test_diagnostics_view_reads_structured_log_entries(tmp_path: Path) -> None:
         app = ConsoleApp(config, FakeStep(replace(RUNNING, errors=(TIMEOUT,))), STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "diagnostics"
+            app.query_one("TabbedContent", TabbedContent).active = "diagnostics"
             app.refresh_views()
             await settle(pilot)
-            shown = app.query_one("#diagnostics-text").render().plain
+            shown = text_of(app.query_one("#diagnostics-text").render()).plain
             assert " error: `retry` timeout after 10s" in shown
             assert not (tmp_path / "state" / "diagnostics.log").exists()
 
@@ -296,8 +309,8 @@ def test_display_clocks_are_local_and_structured_log_stays_zulu(tmp_path: Path, 
 
         class FixedDateTime(datetime):
             @classmethod
-            def now(cls, _tz=None):
-                return fixed_now
+            def now(cls, tz: tzinfo | None = None) -> Self:
+                return cls.fromtimestamp(fixed_now.timestamp(), tz or fixed_now.tzinfo)
 
         monkeypatch.setattr(console, "datetime", FixedDateTime)
         snapshot = replace(SNAPSHOT, generated_at=fixed_now)
@@ -328,10 +341,10 @@ def test_display_clocks_are_local_and_structured_log_stays_zulu(tmp_path: Path, 
         async def scenario() -> None:
             async with app.run_test(size=(120, 40)) as pilot:
                 await settle(pilot)
-                app.query_one("TabbedContent").active = "diagnostics"
+                app.query_one("TabbedContent", TabbedContent).active = "diagnostics"
                 app.refresh_views()
                 await settle(pilot)
-                shown = app.query_one("#diagnostics-text").render().plain
+                shown = text_of(app.query_one("#diagnostics-text").render()).plain
                 assert f"{expected_clock} error: fixed diagnostic event" in shown
                 assert not (tmp_path / "state" / "diagnostics.log").exists()
 
@@ -352,7 +365,7 @@ def test_diagnostic_line_uses_local_clock_and_preserves_message(monkeypatch) -> 
     monkeypatch.setenv("TZ", "Etc/GMT+8")
     time.tzset()
     try:
-        event = SimpleNamespace(
+        event = DiagnosticEvent(
             timestamp="2026-10-18T12:00:00+00:00", level="error", message="`retry` gh api [1] rate limited",
         )
         assert console._diagnostic_line(event) == "04:00:00 error: `retry` gh api [1] rate limited"
@@ -371,7 +384,7 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             await settle(pilot)
             build = app.query_one("#build")
             text = f"atm-bd console {display_identity()}"
-            assert build.render().plain == text and build.display
+            assert text_of(build.render()).plain == text and build.display
             assert build.region.y == 0 and build.region.right == 120
             tabs_right = max(tab.region.right for tab in app.query("ContentTab"))
             assert build.region.x > tabs_right
@@ -388,8 +401,8 @@ def test_build_line_sits_right_justified_on_the_tab_header_row_and_never_covers_
             app.query_one(Tabs).focus()
             await pilot.press("left")  # wrap from Dispatch to Diagnostics
             await settle(pilot)
-            assert app.query_one("TabbedContent").active == "diagnostics"
-            shown = app.query_one("#diagnostics-text").render().plain
+            assert app.query_one("TabbedContent", TabbedContent).active == "diagnostics"
+            shown = text_of(app.query_one("#diagnostics-text").render()).plain
             assert f"Build: {display_identity()}" in shown
             assert "Agents: ·arch-ctm" in shown
             await pilot.resize_terminal(120, 40)
@@ -409,20 +422,20 @@ def test_raised_multiline_error_fits_dashboard_and_header_after_resize() -> None
         async with app.run_test(size=(120, 24)) as pilot:
             await settle(pilot)
             dashboard = app.query_one("#dashboard")
-            shown = dashboard.render().plain.splitlines()
+            shown = text_of(dashboard.render()).plain.splitlines()
             assert len(shown) == 2
             assert "first error detail" in shown[1]
             assert "second line should be normalized" in shown[1]
             assert max(cell_len(line) for line in shown) <= app.size.width
 
             await pilot.resize_terminal(18, 10)
-            app.query_one("TabbedContent").active = "status"
+            app.query_one("TabbedContent", TabbedContent).active = "status"
             await pilot.pause()
             dashboard = app.query_one("#dashboard")
-            shown = dashboard.render().plain.splitlines()
+            shown = text_of(dashboard.render()).plain.splitlines()
             assert max(cell_len(line) for line in shown) <= app.size.width
             header = app.query_one("#status-header")
-            assert max(cell_len(line) for line in header.render().plain.splitlines()) <= app.size.width
+            assert max(cell_len(line) for line in text_of(header.render()).plain.splitlines()) <= app.size.width
             assert "…" in shown[1]
 
     run_scenario(scenario())
@@ -582,7 +595,9 @@ def test_run_takes_the_lock_and_returns_the_app_code(tmp_path, monkeypatch) -> N
 
         def run(self) -> int:
             # While the app runs, a second console cannot take the lock.
-            assert acquire_lock(config.repo_root, "bh").error.kind == "lock_held"
+            locked = acquire_lock(config.repo_root, "bh")
+            assert isinstance(locked, Err)
+            assert locked.error.kind == "lock_held"
             return 0
 
     monkeypatch.setattr(console, "ConsoleApp", Recorder)
@@ -599,11 +614,11 @@ def test_opening_prs_then_r_forces_github_exactly_twice() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "prs"
+            app.query_one("TabbedContent", TabbedContent).active = "prs"
             await settle(pilot)
             await pilot.press("r")
             await settle(pilot)
-            app.query_one("TabbedContent").active = "dispatch"
+            app.query_one("TabbedContent", TabbedContent).active = "dispatch"
             await settle(pilot)
             assert step.calls == [False, True, True]
 
@@ -623,12 +638,12 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test(size=(140, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "status"
+            app.query_one("TabbedContent", TabbedContent).active = "status"
             await settle(pilot)
             selected = 0 if all_closed else 1
-            options = app.query_one("#sprints")
+            options = app.query_one("#sprints", OptionList)
             assert options.highlighted == selected
-            shown = app.query_one("#sprint-steps-text").render().plain
+            shown = text_of(app.query_one("#sprint-steps-text").render()).plain
             assert sprints[selected].id in shown
             assert sprints[selected].steps[0].bead_id in shown
 
@@ -640,7 +655,7 @@ def test_status_initial_sprint_has_steps_and_refresh_preserves_user_selection(al
             await pilot.press("r")
             await settle(pilot)
             assert options.highlighted == 2
-            shown = app.query_one("#sprint-steps-text").render().plain
+            shown = text_of(app.query_one("#sprint-steps-text").render()).plain
             assert "updated sprint" in shown
             assert sprints[2].steps[0].bead_id in shown
 
@@ -663,11 +678,11 @@ def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tup
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test(size=size) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "status"
+            app.query_one("TabbedContent", TabbedContent).active = "status"
             await settle(pilot)
             panel = app.query_one("#status-panel")
             initial = panel.region
-            sprints_widget = app.query_one("#sprints")
+            sprints_widget = app.query_one("#sprints", OptionList)
             details = app.query_one("#sprint-steps")
             details_text = app.query_one("#sprint-steps-text")
             assert sprints_widget.region.width > 0 and details.region.width > 0
@@ -682,11 +697,11 @@ def test_status_graph_region_is_stable_above_two_column_sprint_details(size: tup
             await pilot.press("down")
             await settle(pilot)
             assert panel.region == initial
-            assert "atm-bh-6.dev-5" in details_text.render().plain
+            assert "atm-bh-6.dev-5" in text_of(details_text.render()).plain
             await pilot.press("end")
             await settle(pilot)
             assert panel.region == initial
-            assert "atm-bh-7.dev-13" in details_text.render().plain
+            assert "atm-bh-7.dev-13" in text_of(details_text.render()).plain
             assert details.max_scroll_y > 0
 
     run_scenario(scenario())
@@ -712,7 +727,7 @@ def test_input_trace_records_terminal_presses_keys_and_tab_changes(tmp_path: Pat
                 app.post_message(event)
             await pilot.press("d")
             await settle(pilot)
-            shown = app.query_one("#diagnostics-text").render().plain
+            shown = text_of(app.query_one("#diagnostics-text").render()).plain
         trace = [line.split(" ", 1)[1] for line in app.input_log_path.read_text().splitlines()]
         assert str(app.input_log_path) in shown
         assert trace[0].startswith("start size=120x40 driver=HeadlessDriver TERM=")
@@ -752,7 +767,7 @@ def test_build_line_for_a_release_install_is_the_package_version(monkeypatch) ->
         app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            assert app.query_one("#build").render().plain == f"atm-bd console {__version__}"
+            assert text_of(app.query_one("#build").render()).plain == f"atm-bd console {__version__}"
 
     asyncio.run(scenario())
 
@@ -777,6 +792,7 @@ def test_startup_atm_members_error_is_not_repeated_by_the_tick_that_reads_the_sa
         app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(shown), STATE, startup)
         async with app.run_test(size=(120, 30)) as pilot:
             await settle(pilot)
+            assert app.snapshot is not None
             assert app.snapshot.errors == (tick_error,)
 
     run_scenario(scenario())
@@ -806,10 +822,10 @@ def _diagnostics_text(monkeypatch, tmp_path, logger_result) -> str:
         app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path / "state")), FakeStep(RUNNING), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "diagnostics"
+            app.query_one("TabbedContent", TabbedContent).active = "diagnostics"
             app.refresh_views()
             await settle(pilot)
-            shown.append(app.query_one("#diagnostics-text").render().plain)
+            shown.append(text_of(app.query_one("#diagnostics-text").render()).plain)
 
     run_scenario(scenario())
     return shown[0]
@@ -827,7 +843,7 @@ def test_diagnostics_shows_the_typed_error_of_a_failed_log_query_not_no_errors(m
 
 
 def test_diagnostics_line_survives_a_malformed_stored_timestamp() -> None:
-    event = SimpleNamespace(timestamp="not-a-time", level="error", message="boom")
+    event = DiagnosticEvent(timestamp="not-a-time", level="error", message="boom")
     assert console._diagnostic_line(event) == "not-a-time error: boom"
 
 
@@ -838,7 +854,7 @@ def test_sprint_steps_pane_is_never_blank_before_or_after_a_failed_first_tick() 
         app = ConsoleApp(CONFIG, step, STATE)
         async with app.run_test() as pilot:
             assert step.started.wait(HANG_GUARD_S)
-            assert "unavailable" in app.query_one("#sprint-steps-text").render().plain
+            assert "unavailable" in text_of(app.query_one("#sprint-steps-text").render()).plain
             step.release.set()
             await settle(pilot)
 
@@ -848,7 +864,7 @@ def test_sprint_steps_pane_is_never_blank_before_or_after_a_failed_first_tick() 
         app = ConsoleApp(CONFIG, RaisingStep(), STATE)
         async with app.run_test() as pilot:
             await settle(pilot)
-            shown = app.query_one("#sprint-steps-text").render().plain
+            shown = text_of(app.query_one("#sprint-steps-text").render()).plain
             assert "unavailable" in shown and "step exploded" in shown
 
     run_scenario(failed())
@@ -868,7 +884,7 @@ def test_findings_render_failure_shows_the_typed_error_text(monkeypatch) -> None
     dummy = SimpleNamespace(quality_runs=run, finding_beads=[], snapshot=None, config=CONFIG,
                             _update_findings=lambda content, colors: shown.append((content, colors)))
 
-    ConsoleApp._show_findings(dummy, "qa-1")
+    ConsoleApp._show_findings(cast(ConsoleApp, dummy), "qa-1")
 
     expected = error_text(IoFailed("io_failed", "findings rendering", "renderer exploded",
                                    "report the findings renderer as a defect; select the run again"))

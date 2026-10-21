@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 from test_github_source import RECORDED_REST, TEST_REPO, graphql
@@ -28,7 +29,7 @@ def quota(remaining, resource="graphql"):
     return {"resources": {resource: {"remaining": remaining, "limit": 5000, "reset": int(RESET.timestamp())}}}
 
 
-def budget(mode="graphql", previous=None, now=NOW):
+def budget(mode: Literal["graphql", "rest"] = "graphql", previous=None, now=NOW):
     return github_source.Budget(mode, "/code", 50, 600, now, previous or GhStatus(mode, None, None, None, False), TEST_REPO)
 
 

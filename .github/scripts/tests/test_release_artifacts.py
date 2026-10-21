@@ -210,12 +210,15 @@ def write_repo_fixture(
 
 
 def run_validate_manifest(
-    tmp_path: Path, *, manifest_wheels: list[str], **fixture_kwargs: object
+    tmp_path: Path, *, manifest_wheels: list[str], include_crates: bool = True,
+    include_python: bool = True, python_build_system: str = "maturin"
 ) -> subprocess.CompletedProcess[str]:
     workspace, manifest = write_repo_fixture(
         tmp_path,
         manifest_wheels=manifest_wheels,
-        **fixture_kwargs,
+        include_crates=include_crates,
+        include_python=include_python,
+        python_build_system=python_build_system,
     )
     return subprocess.run(
         [

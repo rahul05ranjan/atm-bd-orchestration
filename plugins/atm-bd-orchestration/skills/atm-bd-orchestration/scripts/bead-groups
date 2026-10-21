@@ -84,6 +84,7 @@ class TargetError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+        self.target_id: str | None = None
 
 
 class Strict(dict):
@@ -392,13 +393,22 @@ def main(argv: list[str]) -> int:
 
     entries, targets = [], []
     for kind, item in [("sprint", b) for b in dict.fromkeys(sprint_ids)] + [("finding", t) for t in finding_targets]:
-        bead = item if kind == "sprint" else getattr(item, "target_id", None) or item["id"]
+        if isinstance(item, TargetError):
+            bead = item.target_id or "unknown finding"
+        elif isinstance(item, dict):
+            bead = item["id"]
+        else:
+            bead = item
         entry = {"id": bead, "kind": kind, "problems": []}
         entries.append(entry)
         try:
             if isinstance(item, TargetError):
                 raise item
-            target = run.sprint_target(bead) if kind == "sprint" else item
+            if kind == "sprint":
+                target = run.sprint_target(bead)
+            else:
+                assert isinstance(item, dict)
+                target = item
             entry.update({"formula": target["formula"], "option": target["option"]})
             targets.append((entry, target))
         except (TargetError, BdError) as exc:

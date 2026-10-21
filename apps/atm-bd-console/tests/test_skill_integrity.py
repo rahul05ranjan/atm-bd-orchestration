@@ -173,6 +173,7 @@ class FakeInstaller:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.dest_root = ""
 
     def check_tools(self):
         self.calls.append("check_tools")
@@ -483,7 +484,9 @@ def _archive_manifest(archive: Path) -> dict:
     with tarfile.open(archive) as source:
         member, = (m for m in source.getmembers() if m.name.endswith("/src/atm_bd_console/skill-manifest.json")
                    and m.name.count("/") == 3)
-        return json.loads(source.extractfile(member).read())
+        payload = source.extractfile(member)
+        assert payload is not None
+        return json.loads(payload.read())
 
 
 @pytest.fixture
@@ -567,7 +570,9 @@ def _bundled(archive: Path) -> dict[str, bytes]:
         for member in source.getmembers():
             head, _, rest = member.name.partition("/src/atm_bd_console/_skills/")
             if member.isfile() and rest and "/" not in head:
-                found[rest] = source.extractfile(member).read()
+                payload = source.extractfile(member)
+                assert payload is not None
+                found[rest] = payload.read()
         return found
 
 

@@ -188,8 +188,9 @@ def check(beads: Beads, config: dict, rows: list[dict], problems: list[str], bef
 def warnings(beads: Beads, root_id: str, file_beads: list[dict] | None) -> None:
     everything = file_beads if file_beads is not None else beads.everything()
     since = next((b.get("created_at") or "" for b in everything if b.get("id") == root_id), "")
-    if not since and beads.get(root_id):
-        since = beads.get(root_id).get("created_at") or ""
+    root_bead = beads.get(root_id)
+    if not since and root_bead:
+        since = root_bead.get("created_at") or ""
     for b in everything:
         if b.get("status") != "closed" and not parent_of(b) and b.get("issue_type") != "epic" \
                 and (b.get("created_at") or "") >= since:

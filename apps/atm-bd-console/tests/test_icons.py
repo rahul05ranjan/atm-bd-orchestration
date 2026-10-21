@@ -165,7 +165,10 @@ def test_enum_icon_tables_are_complete_and_exact():
                                   (CiState, CI_ICONS, expected_ci), (PrState, PR_ICONS, expected_prs)):
         assert set(table) == set(enum)
         assert table == expected
-        assert all(icon(member) == expected[member] for member in enum)
+    assert all(icon(member) == expected_agents[member] for member in AgentIcon)
+    assert all(icon(member) == expected_sprints[member] for member in SprintState)
+    assert all(icon(member) == expected_ci[member] for member in CiState)
+    assert all(icon(member) == expected_prs[member] for member in PrState)
 
 
 @pytest.mark.parametrize(

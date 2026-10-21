@@ -73,7 +73,7 @@ def load_bundled_installer():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    module.check_tools = lambda: None
+    vars(module)["check_tools"] = lambda: None
     return module
 
 

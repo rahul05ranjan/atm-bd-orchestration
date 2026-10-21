@@ -10,7 +10,9 @@ from contract_fixtures import RUNNING
 from contract_samples import CONFIG, PHASE, SPRINT_VIEW, STATE, STEP_VIEW
 from rich.cells import cell_len
 from textual import events
+from textual.widgets import OptionList, TabbedContent
 from textual.widgets._markdown import MarkdownBlock
+from type_helpers import text_of
 
 from atm_bd_console import findings_renderer, ledger_source, render, runs
 from atm_bd_console.app import (
@@ -20,6 +22,7 @@ from atm_bd_console.app import (
     _QUALITY_QA_COLUMN,
     _QUALITY_SPRINT_COLUMN,
     ConsoleApp,
+    StatusPanel,
     _agent_name,
     _quality_row,
     _quality_run_cells,
@@ -192,13 +195,13 @@ def test_sanity_and_quality_panes_show_fixture_data(monkeypatch, tmp_path) -> No
                          FakeStep(SNAPSHOT, ([], runs.qa_runs([qa]), [finding])), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            tabs = app.query_one("TabbedContent")
+            tabs = app.query_one("TabbedContent", TabbedContent)
             tabs.active = "sanity"
             assert app.query_one("#sanity-list") and app.query_one("#sanity-errors")
             tabs.active = "quality"
-            options = app.query_one("#quality-runs")
+            options = app.query_one("#quality-runs", OptionList)
             assert options.option_count == 1
-            label = options.get_option_at_index(0).prompt
+            label = text_of(options.get_option_at_index(0).prompt)
             fields = label.plain.split(" | ")
             assert (
                 fields[_QUALITY_QA_COLUMN].strip().endswith("fail")
@@ -250,7 +253,7 @@ def test_quality_finding_reviewer_retains_roster_icon_color(
                          FakeStep(snapshot, ([], runs.qa_runs([qa]), [finding])), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "quality"
+            app.query_one("TabbedContent", TabbedContent).active = "quality"
             widget = app.query_one("#quality-findings")
             pending = capture_updates(monkeypatch, widget)
             app._show_findings("qa-1")
@@ -300,7 +303,7 @@ def test_quality_sanity_reviewer_display_uses_roster_icon_without_mutating_revie
                          FakeStep(snapshot, ([], runs.qa_runs([qa]), [finding])), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "quality"
+            app.query_one("TabbedContent", TabbedContent).active = "quality"
             widget = app.query_one("#quality-findings")
             pending = capture_updates(monkeypatch, widget)
             app._show_findings("qa-1")
@@ -385,9 +388,9 @@ def test_anc_023_same_fixture_renders_agent_icon_before_name_on_every_surface(tm
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             # Diagnostics agent line.
-            app.query_one("TabbedContent").active = "diagnostics"
+            app.query_one("TabbedContent", TabbedContent).active = "diagnostics"
             await settle(pilot)
-            diagnostics = app.query_one("#diagnostics-text").render().plain
+            diagnostics = text_of(app.query_one("#diagnostics-text").render()).plain
             assert icon_and_name in diagnostics
 
     run_scenario(scenario())
@@ -398,7 +401,7 @@ def test_three_tabs_render_the_running_snapshot_with_the_status_bar() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            tabs = app.query_one("TabbedContent")
+            tabs = app.query_one("TabbedContent", TabbedContent)
             bar = app.query_one("#status-bar")
             for pane in ("dispatch", "status", "prs"):
                 tabs.active = pane
@@ -419,9 +422,9 @@ def test_selecting_a_sprint_lists_its_steps_with_assignees() -> None:
         app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT), STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "status"
+            app.query_one("TabbedContent", TabbedContent).active = "status"
             await settle(pilot)
-            sprints = app.query_one("#sprints")
+            sprints = app.query_one("#sprints", OptionList)
             sprints.focus()
             sprints.highlighted = 3
             await pilot.press("enter")
@@ -450,7 +453,7 @@ def test_pr_history_toggle_uses_the_current_snapshot_without_another_tick() -> N
         app = ConsoleApp(replace(CONFIG, interval_s=3600), step, STATE)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "prs"
+            app.query_one("TabbedContent", TabbedContent).active = "prs"
             await settle(pilot)
             before = str(app.query_one("#prs-text").render()).count("\U000f062d")
             await pilot.press("m")
@@ -477,10 +480,10 @@ def test_dag_drag_pans_the_graph_and_copies_nothing(monkeypatch) -> None:
         monkeypatch.setattr(app, "notify", lambda message, **_kwargs: notices.append(message))
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            tabs = app.query_one("TabbedContent")
+            tabs = app.query_one("TabbedContent", TabbedContent)
             tabs.active = "status"
             await settle(pilot)
-            panel = app.query_one("#status-panel")
+            panel = app.query_one("#status-panel", StatusPanel)
             before = panel.scroll_x
             assert panel.max_scroll_x > before + 30
             x, y = panel.region.x + 20, panel.region.y + 2
@@ -507,9 +510,9 @@ def test_dag_pan_follows_a_drag_that_leaves_the_panel_until_the_button_is_releas
         monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "status"
+            app.query_one("TabbedContent", TabbedContent).active = "status"
             await settle(pilot)
-            panel = app.query_one("#status-panel")
+            panel = app.query_one("#status-panel", StatusPanel)
             before = panel.scroll_x
             await pilot.mouse_down(panel, offset=(20, 2))
             await pilot.hover("#sprints", offset=(5, 3))  # pointer is off the panel: capture keeps routing the drag
@@ -564,11 +567,11 @@ def test_resizing_to_80_columns_rerenders_without_wide_lines() -> None:
             for selector in ("#dashboard", "#prs-text", "#status-bar", "#status-header"):
                 assert max(cell_len(line) for line in lines(app, selector)) <= 80, selector
             # The status diagram scrolls sideways instead of wrapping.
-            app.query_one("TabbedContent").active = "status"
+            app.query_one("TabbedContent", TabbedContent).active = "status"
             await settle(pilot)
             assert WIDE in str(app.query_one("#status-text").render())
             assert app.query_one("#status-text").size.height == 2
-            assert app.query_one("#status-panel").max_scroll_x > 0
+            assert app.query_one("#status-panel", StatusPanel).max_scroll_x > 0
 
     run_scenario(scenario())
 
@@ -603,8 +606,8 @@ def test_sprint_tab_shows_placeholders_when_the_phase_failed_and_nothing_was_car
             assert app.query_one("#status-table").display is True
             assert reason in str(app.query_one("#status-table").render())
             assert str(app.query_one("#status-header").render()).startswith("sprints: unavailable")
-            sprints = app.query_one("#sprints")
-            assert sprints.option_count == 1 and reason in sprints.get_option_at_index(0).prompt.plain
+            sprints = app.query_one("#sprints", OptionList)
+            assert sprints.option_count == 1 and reason in text_of(sprints.get_option_at_index(0).prompt).plain
             app._show_sprint("none")
             assert reason in str(app.query_one("#sprint-steps-text").render())
 

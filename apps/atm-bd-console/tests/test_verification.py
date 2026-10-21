@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from contract_samples import BEAD, CONFIG, PHASE, PHASE_FILE, REPO_CONFIG
-from test_git_source import commit, git
+from test_git_source import commit, git, ok
 
 from atm_bd_console import git_source, runner
 from atm_bd_console.codec import to_json
@@ -47,8 +47,8 @@ def runtime(repo, tmp_path, monkeypatch):
     monkeypatch.setattr(runner.atm_source, "send", lambda *_: Ok(None))
     monkeypatch.setattr(runner.atm_source, "assign", lambda *args: assigned.append(args) or Ok(None))
     config = replace(CONFIG, repo_root=str(repo), code_root=str(repo), github="off", dry_run=False, no_fetch=False)
-    state = replace(INITIAL_STATE, remotes=git_source.remote_refs(repo).value, last_cycle=datetime.now(UTC))
-    with acquire_lock(repo, PHASE_FILE.root_id).value as store:
+    state = replace(INITIAL_STATE, remotes=ok(git_source.remote_refs(repo)), last_cycle=datetime.now(UTC))
+    with ok(acquire_lock(repo, PHASE_FILE.root_id)) as store:
         clean = Merge("clean", "main", MergeState.CLEAN, (), (), datetime.now(UTC))
         assert store.write_merges(MergeFile(clean.checked_at, {"clean": clean})) == Ok(None)
         yield config, state, store, events, assigned
@@ -74,11 +74,11 @@ def test_failed_refresh_rejects_cached_pin_and_recovers_fresh_commit(runtime, re
 
     assert assigned == []
     assert held_state.remotes == ()
-    assert store.load_state().value.remotes == ()
+    assert ok(store.load_state()).remotes == ()
     assert any("origin verification unavailable" in problem.text for problem in snapshot.problems)
     assert snapshot.errors
-    assert to_json(load_snapshot(repo, PHASE_FILE.root_id).value) == to_json(snapshot)
-    assert store.load_merges().value.merges["clean"].state == MergeState.ERROR
+    assert to_json(ok(load_snapshot(repo, PHASE_FILE.root_id))) == to_json(snapshot)
+    assert ok(store.load_merges()).merges["clean"].state == MergeState.ERROR
     assert any(fields.get("source") == f"git.{failure}" and fields.get("outcome") == "failed" for _, fields in events)
     assert not any(fields.get("source") == "git.merge" for _, fields in events)
     if failure == "fetch":
