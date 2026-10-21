@@ -334,6 +334,7 @@ class ConsoleApp(App[int]):
         self.health = PollHealth()
         self.status_text = ""
         self.status_error: Error | None = None
+        self.dag = status.DagPane(log=self._log_render_error)
         self.tick_error: Error | None = None
         self._step_lock = threading.Lock()
         self._tick_running = False
@@ -530,7 +531,7 @@ class ConsoleApp(App[int]):
             self._step_lock.release()
         if snapshot is not None:
             try:
-                text, error = status.status_text(snapshot)
+                text, error = self.dag.show(snapshot, datetime.now(UTC))
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
         self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error, failed)
@@ -550,6 +551,12 @@ class ConsoleApp(App[int]):
         if self._pending_forced_refresh:
             self._pending_forced_refresh = False
             self.tick(True)
+
+    def _log_render_error(self, error: Error) -> None:
+        logger = create_console_logger(self.config.repo_root)
+        if isinstance(logger, Ok):
+            logger.value.event("error", level="error", source="status.mmdflux", message=error_message(asdict(error)), error=asdict(error))
+            logger.value.flush()
 
     def _show_tick_error(self, error: Error) -> None:
         if not self.is_running:
