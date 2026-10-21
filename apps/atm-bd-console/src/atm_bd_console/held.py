@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Generic, TypeVar
 
 from .error_text import error_text
-from .render import _age, clock
 from .result import Error, Ok, Result
+from .timefmt import _age, clock
 
 T = TypeVar("T")
 

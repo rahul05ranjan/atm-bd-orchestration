@@ -786,6 +786,24 @@ def test_closed_task_read_gates_dispatch_and_a_closed_candidate_is_never_assigne
     assert error in snapshot.errors and actions == ()
 
 
+def test_failed_roster_read_builds_no_action_and_failed_task_read_shows_nobody_idle() -> None:
+    candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base", assignee="quality-mgr")
+    supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
+                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+                      merges=(Ok(Merge("topic", "base", MergeState.CLEAN, (), (), NOW)),))
+    spec = lambda context: Ok(DispatchSpec("qa", {}))
+    _, actions, _ = tick(supplied, STATE, NOW, spec)
+    assert [action.kind for action in actions] == ["assign"]
+    error = Timeout("timeout", ("atm", "members"), 20, "retry")
+    snapshot, actions, _ = tick(replace(supplied, members=Err(error)), STATE, NOW, spec)
+    assert actions == () and error in snapshot.errors
+    member = Member("dev", "active", NOW)
+    snapshot, _, _ = tick(inputs(phase(), members=Ok((member,)), tasks=Err(error)), STATE, NOW, render)
+    assert [agent.status for agent in snapshot.agents] == ["unknown"]
+    snapshot, _, _ = tick(inputs(phase(), members=Ok((member,)), tasks=Ok(())), STATE, NOW, render)
+    assert [agent.status for agent in snapshot.agents] == ["idle"]
+
+
 def test_ready_candidate_refreshes_even_when_origin_ref_is_cached() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base")
     state = replace(STATE, last_cycle=NOW, remotes=(RemoteRef("topic", "cached"),))

@@ -7,13 +7,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from contract_samples import STEP
+from contract_fixtures import RUNNING
+from contract_samples import STEP, TIMEOUT
 from rich.cells import cell_len
 
 from atm_bd_console import atm_source
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState, SprintState
+from atm_bd_console.error_text import error_text
 from atm_bd_console.model import _agent_views
+from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.render import _age, _error_text, dashboard, github_quotas, status_bar
 from atm_bd_console.result import (
     CommandFailed,
@@ -293,7 +296,7 @@ def test_status_bar_formats_and_cell_width() -> None:
         )
         failed = replace(value, gh=GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, True))
         assert status_bar(failed, 200).plain == (
-            "gh core ?/? · graphql ?/? · reset --:-- | gh: graphql ⛔ timeout 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
+            "gh core ?/? · graphql ?/? · reset --:-- | gh: graphql ⛔ timeout 5s failed 14:04 100+ | gh poll 600s / 50% | 3/9 [███░░░░░░] 33% | active 14h20m | tick 14:04:31 | lead ·fenix"
         )
         truncated_ok = replace(value, gh=GhStatus("graphql", True, None, NOW, True))
         assert status_bar(truncated_ok, 200).plain == (
@@ -466,3 +469,53 @@ def test_agent_row_prefix_for_a_fix_step_is_its_bead_short_id_not_the_phase_tag(
     text = dashboard(value, 160, 40).plain
     assert "phase-bi.10: Fix the row prefix" in text
     assert "phase-bi: " not in text
+
+
+def _failed_phase(**changes):
+    fields = {"errors": (TIMEOUT,), **changes}
+    return replace(RUNNING, phase_data=None, agents=(), sections=(), sprints=(), problems=(), prs=(),
+                   metrics=Metrics(0, 0, 0, 0), **fields)
+
+
+def test_dashboard_header_carries_the_stale_indicator_and_age_not_a_fresh_looking_clock() -> None:
+    good_at = RUNNING.generated_at
+    later = good_at + timedelta(seconds=150)
+    health = PollHealth()
+    health.apply(RUNNING, {})
+    shown = health.apply(replace(RUNNING, generated_at=later, errors=(TIMEOUT,)), {"beads.open": TIMEOUT})
+    lines = dashboard(shown, 600, 40, health).plain.splitlines()
+    assert lines[1] == f"! beads.open failed since {later:%H:%M:%S} · showing data from {good_at:%H:%M:%S} (2m old)"
+    assert any(line.endswith(f"(carried since {later:%H:%M:%S})") and "timeout" in line for line in lines)
+    assert "! " not in dashboard(RUNNING, 200, 40, PollHealth()).plain
+
+
+def test_dashboard_without_a_roster_or_phase_is_a_labelled_placeholder() -> None:
+    health = PollHealth()
+    snapshot = health.apply(_failed_phase(), {"atm.members": TIMEOUT, "beads.open": TIMEOUT})
+    text = dashboard(snapshot, 300, 40, health).plain
+    assert f"agents unavailable: {error_text(TIMEOUT)}" in text
+    assert f"beads unavailable: {error_text(TIMEOUT)}" in text
+    assert "nothing read yet" in text and "carried since" not in text
+
+
+def test_a_failed_dispatch_input_says_held_is_unavailable_with_the_reason() -> None:
+    health = PollHealth()
+    snapshot = health.apply(RUNNING, {"atm.tasks": TIMEOUT})
+    text = dashboard(snapshot, 300, 40, health).plain
+    assert "== Held: unavailable" in text and f"atm.tasks: {error_text(TIMEOUT)}" in text
+    assert "== Held: unavailable" not in dashboard(RUNNING, 300, 40, PollHealth()).plain
+
+
+def test_the_beads_headline_names_the_failing_phase_read_not_an_unrelated_first_error() -> None:
+    unrelated = NotFound("not_found", "atm-bd@tool", "add it")
+    health = PollHealth()
+    snapshot = health.apply(_failed_phase(errors=(unrelated, TIMEOUT)), {"beads.open": TIMEOUT})
+    assert f"beads unavailable: {error_text(TIMEOUT)}" in dashboard(snapshot, 300, 40, health).plain
+    assert f"beads ⛔ timeout {TIMEOUT.seconds}s" in status_bar(snapshot, 300, health).plain
+    assert f"beads ⛔ timeout {TIMEOUT.seconds}s" in status_bar(snapshot, 100, health).plain
+
+
+def test_unknown_agents_have_their_own_glyph_not_idle() -> None:
+    agent = replace(RUNNING.agents[0], status="unknown", rows=())
+    text = dashboard(replace(RUNNING, agents=(agent,), errors=()), 200, 40).plain
+    assert "? " in text and "· " + agent.name not in text.splitlines()[2]

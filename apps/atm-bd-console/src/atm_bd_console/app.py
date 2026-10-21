@@ -32,6 +32,7 @@ from .agent_roles import agent_group
 from .build import display_identity
 from .closed_cache import ClosedBeads
 from .enums import QaState, SprintState
+from .error_text import error_text
 from .held import Held, held_view
 from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
 from .log import create_console_logger, error_message
@@ -79,8 +80,19 @@ class _DiagnosticEvent(Protocol):
     message: str | None
 
 
-def status_header(snapshot: Snapshot) -> Text:
-    """Show sprint counts using the same status icons as the DAG."""
+def phase_unavailable(snapshot: Snapshot, health: PollHealth | None = None) -> str | None:
+    """The labelled reason there is no phase data to show (None when there is some)."""
+    if snapshot.phase_data is not None:
+        return None
+    error = render.beads_error(snapshot, health)
+    return f"unavailable - {error_text(error)}" if error is not None else "unavailable - the phase has not been read"
+
+
+def status_header(snapshot: Snapshot, health: PollHealth | None = None) -> Text:
+    """Show sprint counts using the same status icons as the DAG; no phase data is `sprints: unavailable`, never 0/0."""
+    reason = phase_unavailable(snapshot, health)
+    if reason is not None:
+        return Text(f"sprints: {reason}", style="red")
     states = [sprint.state for sprint in snapshot.sprints]
     closed, running = states.count(SprintState.CLOSED), states.count(SprintState.IN_PROGRESS)
     waiting = len(states) - closed - running
@@ -607,6 +619,9 @@ class ConsoleApp(App[int]):
             label.append(glyph, style=style)
             label.append(f" {sprint.id}  {sprint.title}")
             options.append(Option(label, id=sprint.id))
+        if not options:
+            reason = phase_unavailable(snapshot, self.health) or "no sprints in this phase"
+            options.append(Option(Text(f"Sprints: {reason}", style="red"), disabled=True))
         sprints.add_options(options)
         if highlighted is not None and highlighted < len(snapshot.sprints):
             sprints.highlighted = highlighted
@@ -668,8 +683,9 @@ class ConsoleApp(App[int]):
         if self.snapshot is None:
             return
         sprint = next((value for value in self.snapshot.sprints if value.id == sprint_id), None)
+        placeholder = phase_unavailable(self.snapshot, self.health) or "select a sprint"
         self.query_one("#sprint-steps-text", Static).update(
-            sprint_steps(sprint, self.snapshot.agents) if sprint else ""
+            sprint_steps(sprint, self.snapshot.agents) if sprint else Text(placeholder, style="dim")
         )
 
     def on_resize(self) -> None:
@@ -708,18 +724,21 @@ class ConsoleApp(App[int]):
         if snapshot is not None:
             height = panel.size.height or self.size.height
             table = self.query_one("#status-table", Static)
-            table.display = snapshot.phase_data is not None
-            if snapshot.phase_data is not None:
+            unavailable = phase_unavailable(snapshot, self.health)
+            table.display = True
+            if unavailable is None:
                 table.update(status_table.rich_table(status_table.rows(snapshot)))
-            self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
+            else:
+                table.update(Text(f"Sprint status: {unavailable}", style="red"))
+            self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height, self.health))
             self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
-            self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
-            header = status_header(snapshot)
+            self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width, self.health))
+            header = status_header(snapshot, self.health)
             header.no_wrap = True
             header.overflow = "ellipsis"
             if self.status_error is not None:
                 header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
-            indicator = self.health.indicator()
+            indicator = self.health.indicator(snapshot.generated_at)
             if indicator:
                 header.append(f"  {indicator}", style="yellow")
             header.truncate(width, overflow="ellipsis")

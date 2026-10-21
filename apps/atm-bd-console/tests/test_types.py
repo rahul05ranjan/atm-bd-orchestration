@@ -82,7 +82,7 @@ LITERALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("Row", "kind"): ("dev", "fix", "sprint_qa", "fix_qa", "other"),
     ("Row", "difficulty"): DIFFICULTY,
     ("Row", "marker"): ("red", "yellow"),
-    ("AgentView", "status"): ("busy", "stalling", "blocked", "offline", "idle"),
+    ("AgentView", "status"): ("busy", "stalling", "blocked", "offline", "idle", "unknown"),
     ("StepView", "kind"): ("dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"),
     ("Action", "kind"): ("assign", "send", "batch"),
     ("Snapshot", "stopped"): ("closed", "idle"),

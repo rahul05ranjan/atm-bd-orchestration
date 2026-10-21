@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, tzinfo
+from typing import TYPE_CHECKING
 
 from rich.cells import cell_len
 from rich.text import Text
@@ -22,8 +22,13 @@ from .icons import (
     icon_for,
 )
 from .ids import short_id
-from .result import Error
+from .poll_health import DISPATCH
+from .result import Error, Timeout
+from .timefmt import _age, clock
 from .types import Action, AgentView, GhStatus, Member, Row, Snapshot
+
+if TYPE_CHECKING:
+    from .poll_health import PollHealth
 
 _STATUSES = {
     "busy": ("●", "green"),
@@ -31,24 +36,8 @@ _STATUSES = {
     "blocked": ("■", "red"),
     "offline": ("○", "dim"),
     "idle": ("·", "dim"),
+    "unknown": ("?", "yellow"),
 }
-
-
-def clock(value: datetime, *, seconds: bool = False, local_zone: tzinfo | None = None) -> str:
-    """Format a timestamp in local time, optionally using an injected zone."""
-    local_time = value.astimezone(local_zone) if local_zone is not None else value.astimezone()
-    return local_time.strftime("%H:%M:%S" if seconds else "%H:%M")
-
-
-def _age(age_s: int) -> str:
-    age_s = max(0, age_s)
-    if age_s < 60:
-        return f"{age_s}s"
-    if age_s < 3600:
-        return f"{age_s // 60}m"
-    if age_s < 86400:
-        return f"{age_s // 3600}h{(age_s % 3600) // 60:02d}"
-    return f"{age_s // 86400}d"
 
 
 def _fit(line: Text, width: int) -> Text:
@@ -157,22 +146,37 @@ def _sent_line(action: Action, snapshot: Snapshot) -> Text:
     return line
 
 
-def _beads_error(snapshot: Snapshot) -> tuple[str, str]:
-    if snapshot.errors:
-        return snapshot.errors[0].kind, _error_text(snapshot.errors[0])
+def beads_error(snapshot: Snapshot, health: PollHealth | None = None) -> Error | None:
+    """The error behind a missing phase: the failing phase read itself, else the first error of the tick."""
+    phase_error = health.phase_error() if health is not None else None
+    if phase_error is not None:
+        return phase_error
+    return snapshot.errors[0] if snapshot.errors else None
+
+
+def _beads_error(snapshot: Snapshot, health: PollHealth | None = None) -> tuple[str, str]:
+    error = beads_error(snapshot, health)
+    if error is not None:
+        return error.kind, _error_text(error)
     return "unavailable", "unavailable: retry the phase read"
 
 
-def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
+def dashboard(snapshot: Snapshot, width: int, height: int, health: PollHealth | None = None) -> Text:
     lines = [Text(f"phase-{snapshot.phase} · {clock(snapshot.generated_at)} · next {snapshot.interval_s}s")]
+    indicator = health.indicator(snapshot.generated_at) if health is not None else None
+    if indicator:
+        lines.append(Text(indicator, style="yellow"))
     if snapshot.stopped == "closed":
         lines.append(Text(f"stopped: phase closed {clock(snapshot.generated_at)}"))
     elif snapshot.stopped == "idle":
         lines.append(Text("stopped: idle 60 min"))
     if snapshot.phase_data is None:
-        _, text = _beads_error(snapshot)
+        _, text = _beads_error(snapshot, health)
         lines.append(Text(f"beads unavailable: {text}", style="red"))
     lines.append(Text())
+    members_failure = health.failures.get("atm.members") if health is not None else None
+    if members_failure is not None and not snapshot.agents:
+        lines.append(Text(f"agents unavailable: {_error_text(members_failure.error)}", style="red"))
     for agent in sorted(snapshot.agents, key=lambda member: (
         AGENT_GROUPS.index(agent_group(member.agent_type)), member.name,
     )):
@@ -180,7 +184,14 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
     if snapshot.errors:
         lines.extend((Text(), Text(f"== Errors ({len(snapshot.errors)})")))
         # Error carries no time of its own, so each row shows the tick that surfaced it (generated_at), not the mock's per-error time.
-        lines.extend(Text(f" {clock(snapshot.generated_at)} {_error_text(error)}") for error in snapshot.errors)
+        for error in snapshot.errors:
+            since = health.carried_since(error) if health is not None else None
+            tag = f" (carried since {since:%H:%M:%S})" if since is not None else ""
+            lines.append(Text(f" {clock(snapshot.generated_at)} {_error_text(error)}{tag}"))
+    held_failures = [failure for failure in health.failures.values() if failure.source in DISPATCH] if health else []
+    if held_failures and snapshot.phase_data is not None and snapshot.stopped is None:
+        lines.extend((Text(), Text("== Held: unavailable", style="yellow")))
+        lines.extend(Text(f"  {failure.source}: {_error_text(failure.error)}") for failure in held_failures)
     for section in snapshot.sections:
         if not section.rows:
             continue
@@ -250,7 +261,11 @@ def github_quotas(gh: GhStatus, now) -> str:
     return line
 
 
-def status_bar(snapshot: Snapshot, width: int) -> Text:
+def _seconds(error: Error | None) -> str:
+    return f" {error.seconds}s" if isinstance(error, Timeout) else ""
+
+
+def status_bar(snapshot: Snapshot, width: int, health: PollHealth | None = None) -> Text:
     gh = snapshot.gh
     if gh.mode == "off":
         segment = "gh: off"
@@ -260,7 +275,7 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
             segment = github_pause(gh, compact=width < 100)
         elif gh.error is not None or gh.ok is False:
             kind = gh.error.kind if gh.error is not None else "unavailable"
-            segment = f"gh: {gh.mode} {STATUS_FAIL} {kind} {read_at}"
+            segment = f"gh: {gh.mode} {STATUS_FAIL} {kind}{_seconds(gh.error)} failed {read_at}"
         else:
             segment = f"gh: {gh.mode} {STATUS_OK} {read_at}"
     if gh.truncated:
@@ -268,8 +283,8 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
     segment += f" | gh poll {gh.poll_interval_s}s / {gh.quota_threshold}%"
     metrics = snapshot.metrics
     if snapshot.phase_data is None:
-        kind, _ = _beads_error(snapshot)
-        progress = f"beads ⛔ {kind}"
+        error = beads_error(snapshot, health)
+        progress = f"beads ⛔ {error.kind if error is not None else 'unavailable'}{_seconds(error)}"
     else:
         filled = min(9, max(0, round(metrics.pct * 9 / 100)))
         progress = f"{metrics.done}/{metrics.total} [{'█' * filled}{'░' * (9 - filled)}] {metrics.pct}%"
@@ -279,7 +294,7 @@ def status_bar(snapshot: Snapshot, width: int) -> Text:
         if gh.paused:
             short_status = "paused: rate limited" if gh.rate_limited else "paused"
         elif gh.error is not None or gh.ok is False:
-            short_status = f"{STATUS_FAIL} {gh.error.kind if gh.error is not None else 'unavailable'}"
+            short_status = f"{STATUS_FAIL} {gh.error.kind if gh.error is not None else 'unavailable'}{_seconds(gh.error)}"
         else:
             short_status = f"{gh.mode} {STATUS_OK}"
         if gh.truncated:

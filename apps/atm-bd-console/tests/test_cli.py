@@ -36,6 +36,7 @@ from atm_bd_console import app, cli, runner
 from atm_bd_console.build import identity
 from atm_bd_console.enums import MergeState, SprintState
 from atm_bd_console.error_text import error_text
+from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.result import CommandFailed, Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.status_table import markdown, rows
@@ -356,7 +357,7 @@ def test_startup_error_is_in_dashboard_before_first_refresh(monkeypatch):
     assert isinstance(error, NotFound)
     sprints = SimpleNamespace(highlighted=None, clear_options=lambda: None, add_options=lambda _options: None)
     dummy = SimpleNamespace(
-        is_running=True, startup_error=error, query_one=lambda *_: sprints,
+        is_running=True, startup_error=error, query_one=lambda *_: sprints, health=PollHealth(),
         refresh_views=lambda: None, call_after_refresh=lambda _callback: None,
     )
 
@@ -908,7 +909,8 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     headless_snapshot = load_snapshot(repo, phase_file.root_id)
     headless_state = load_state(repo, phase_file.root_id)
     assert isinstance(headless_snapshot, Ok) and isinstance(headless_state, Ok)
-    assert any(json.loads(line)["kind"] == "assign" for line in headless_output.splitlines())
+    # A failed roster read builds no action (it would route every assignment to a made-up member).
+    assert any(json.loads(line)["kind"] == "assign" for line in headless_output.splitlines()) is (not member_read_fails)
     assert_preserved(headless_snapshot.value)
     if runtime_damage is not None:
         for name in damaged:
@@ -935,7 +937,7 @@ def test_headless_cli_and_app_run_real_runner_step_with_state_store(
     assert cli.main(["console", "--phase", "bh"]) == 0
     assert len(app_result) == 1 and app_result[0][0] is not None
     app_snapshot, app_state = app_result[0]
-    assert actions == ["assign", "assign"]
+    assert actions == ([] if member_read_fails else ["assign", "assign"])
     assert headless_snapshot.value.sent == app_snapshot.sent
     assert headless_state.value == app_state
     assert [error.kind for error in headless_snapshot.value.errors] == [error.kind for error in app_snapshot.errors]

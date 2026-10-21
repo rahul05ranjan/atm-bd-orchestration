@@ -80,7 +80,8 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     assert nodes["#status-table"].display is True
     dummy.snapshot = replace(RUNNING, phase_data=None, errors=(TIMEOUT,))
     ConsoleApp.refresh_views(dummy)
-    assert nodes["#status-table"].display is False
+    assert nodes["#status-table"].display is True  # a labelled placeholder, never hidden
+    assert nodes["#status-table"].value.plain == f"Sprint status: unavailable - {error_text(TIMEOUT)}"
     assert f"beads unavailable: {error_text(TIMEOUT)}" in nodes["#dashboard"].value.plain
     assert seen == [RUNNING]
     dummy.snapshot = RUNNING
