@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from atm_bd_console.codec import from_json
+from atm_bd_console.command import Output
 from atm_bd_console.enums import SprintState
 from atm_bd_console.icons import SPRINT_ICONS
-from atm_bd_console.result import CommandFailed, ConfigInvalid, NotFound, Ok, Timeout
-from atm_bd_console.status import _fallback, status_text
+from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, NotFound, Ok, Timeout
+from atm_bd_console.status import DagPane, _fallback, status_text
 from atm_bd_console.types import Snapshot, SprintView, StepView
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -129,3 +131,118 @@ def test_nonzero_and_timeout_return_error_and_fallback(monkeypatch) -> None:
     rendered, error = status_text(snapshot())
     assert isinstance(error, Timeout) and error.seconds == 20
     assert rendered.startswith("\U000f05e0 bh-1")
+
+
+# DAG pane keeps the last good diagram (#533). A fake runner replaces mmdflux; the clock is a passed-in value.
+NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+PARSE_STDERR = "Error: parse error: Parse error at line 1, column 1: expected flowchart"
+
+
+class FakeMmdflux:
+    def __init__(self, *outcomes) -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(self, argv, fix, **kwargs):
+        self.calls.append(tuple(argv))
+        if argv[1] == "--version":
+            return Ok(Output(0, "mmdflux 2.6.1\n"))
+        return self.outcomes.pop(0)
+
+
+def failing(code=1, stderr=PARSE_STDERR):
+    return Err(CommandFailed("command_failed", ("mmdflux", "--format", "text"), code, stderr, ""))
+
+
+def pane_show(pane, fake, value, now=NOW):
+    return pane.show(value, now, lambda s: status_text(s, fake))
+
+
+def test_good_then_failing_render_keeps_first_diagram_with_stale_marker_and_reason() -> None:
+    fake = FakeMmdflux(Ok(Output(0, "DIAGRAM\n")), failing())
+    pane = DagPane()
+    assert pane_show(pane, fake, snapshot()) == ("DIAGRAM\n", None)
+
+    text, error = pane_show(pane, fake, snapshot(), NOW + timedelta(minutes=4))
+
+    assert text.startswith("DIAGRAM\n")
+    assert "stale 4m" in text and PARSE_STDERR in text and "exit 1" in text
+    assert isinstance(error, CommandFailed) and error.stderr == PARSE_STDERR
+
+
+def test_empty_sprints_do_not_run_mmdflux_and_the_reason_is_the_beads_error() -> None:
+    beads = Timeout("timeout", ("bd", "list"), 20, "retry the read")
+    empty = replace(snapshot(), sprints=(), mermaid="graph TD", errors=(beads,))
+    fake = FakeMmdflux()
+    pane = DagPane()
+
+    text, error = pane_show(pane, fake, empty)
+
+    assert fake.calls == []
+    assert error is beads
+    assert text.startswith("no diagram yet") and "timeout" in text
+
+
+def test_empty_sprints_without_a_read_error_say_there_is_no_phase_data() -> None:
+    _, error = status_text(replace(snapshot(), sprints=(), mermaid="graph TD", errors=()), FakeMmdflux())
+    assert isinstance(error, NotFound) and error.what == "phase data"
+
+
+def test_empty_after_good_keeps_the_last_diagram_without_calling_mmdflux() -> None:
+    fake = FakeMmdflux(Ok(Output(0, "DIAGRAM\n")))
+    pane = DagPane()
+    pane_show(pane, fake, snapshot())
+    beads = Timeout("timeout", ("bd", "list"), 20, "retry the read")
+
+    text, error = pane_show(pane, fake, replace(snapshot(), sprints=(), errors=(beads,)), NOW + timedelta(seconds=90))
+
+    assert text.startswith("DIAGRAM\n") and "stale 1m" in text and error is beads
+    assert fake.calls.count(("mmdflux", "--format", "text")) == 1
+
+
+def test_mmdflux_failure_keeps_argv_code_stderr_logs_it_and_has_its_own_fix() -> None:
+    logged: list = []
+    fake = FakeMmdflux(failing())
+    pane = DagPane(log=logged.append)
+
+    _, error = pane_show(pane, fake, snapshot())
+
+    assert isinstance(error, CommandFailed)
+    assert (error.argv, error.code, error.stderr) == (("mmdflux", "--format", "text"), 1, PARSE_STDERR)
+    assert "report it as a defect" in error.fix and "graph TD" in error.fix
+    assert "correct the Mermaid source" not in error.fix
+    assert logged == [error]
+
+
+def test_timeout_fix_names_the_loaded_host_and_the_wait() -> None:
+    fake = FakeMmdflux(Err(Timeout("timeout", ("mmdflux", "--format", "text"), 20, "")))
+    _, error = status_text(snapshot(), fake)
+    assert isinstance(error, Timeout) and "host is loaded" in error.fix and "20s" in error.fix
+
+
+def test_first_tick_failure_is_a_labelled_fallback_never_empty() -> None:
+    text, error = pane_show(DagPane(), FakeMmdflux(failing()), snapshot())
+    assert error is not None
+    assert text.startswith("no diagram yet, text fallback below")
+    assert "bh-1" in text and "bh-2" in text
+
+
+def test_recovery_clears_the_stale_marker() -> None:
+    fake = FakeMmdflux(Ok(Output(0, "ONE\n")), failing(), Ok(Output(0, "TWO\n")))
+    pane = DagPane()
+    pane_show(pane, fake, snapshot())
+    assert "stale" in pane_show(pane, fake, snapshot(), NOW + timedelta(minutes=1))[0]
+
+    assert pane_show(pane, fake, snapshot(), NOW + timedelta(minutes=2)) == ("TWO\n", None)
+
+
+def test_stale_reason_prints_a_many_id_bd_argv_as_a_count_and_the_error_keeps_the_full_argv() -> None:
+    ids = tuple(f"atm-bk-{n}" for n in range(28))
+    beads = Timeout("timeout", ("bd", "show", *ids), 20, "check host load")
+    pane = DagPane()
+    pane_show(pane, FakeMmdflux(Ok(Output(0, "DIAGRAM\n"))), snapshot())
+
+    text, error = pane_show(pane, FakeMmdflux(), replace(snapshot(), sprints=(), errors=(beads,)), NOW + timedelta(minutes=2))
+
+    assert "bd show (28 ids) timed out after 20s" in text and "atm-bk-0" not in text
+    assert error is beads and error.argv == ("bd", "show", *ids)

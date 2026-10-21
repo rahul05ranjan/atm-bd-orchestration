@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from .result import Error
+from .timefmt import _age, clock
 from .types import Snapshot
 
 TICK = "tick"
@@ -23,6 +24,7 @@ class Failure:
     source: str
     error: Error
     since: datetime
+    good_at: datetime | None = None  # when the part last read good; None: nothing was ever carried
 
 
 class PollHealth:
@@ -36,36 +38,56 @@ class PollHealth:
         """Return the snapshot to show: the new one with every failed part replaced by its last good value."""
         now = snapshot.generated_at
         carried = {source: error for source, error in failed.items() if source in CARRIED}
-        self._track(carried, now)
         previous = self.last_good
+        self._track(carried, now, previous.generated_at if previous is not None else None)
         shown = snapshot
         if previous is not None and carried:
-            shown = _carry(previous, snapshot, set(carried), tuple(carried.values()))
+            shown = _carry(previous, snapshot, set(carried))
         self.last_good = shown
         return shown
 
     def tick_failed(self, error: Error, now: datetime) -> None:
         """A whole tick raised: the shown snapshot is untouched; only the indicator changes."""
-        since = self.failures[TICK].since if TICK in self.failures else now
-        self.failures[TICK] = Failure(TICK, error, since)
+        held = self.failures.get(TICK)
+        good_at = self.last_good.generated_at if self.last_good is not None else None
+        self.failures[TICK] = Failure(TICK, error, held.since if held else now, held.good_at if held else good_at)
 
-    def indicator(self) -> str | None:
+    def indicator(self, now: datetime) -> str | None:
+        """`! sources failed since T`, then the age of what is on screen: the oldest carried content."""
         if not self.failures:
             return None
         ordered = sorted(self.failures.values(), key=lambda failure: (failure.since, failure.source))
-        since = ordered[0].since
         names = ", ".join(failure.source for failure in ordered)
-        return f"! {names} failed since {since:%H:%M:%S}"
+        text = f"! {names} failed since {clock(ordered[0].since, seconds=True)}"
+        good = [failure.good_at for failure in ordered if failure.good_at is not None]
+        if not good:
+            return f"{text} · nothing read yet"
+        oldest = min(good)
+        return f"{text} · showing data from {clock(oldest, seconds=True)} ({_age(int((now - oldest).total_seconds()))} old)"
 
-    def _track(self, carried: Mapping[str, Error], now: datetime) -> None:
+    def carried_since(self, error: Error) -> datetime | None:
+        """When this error's source started failing, if its last good content is what is on screen."""
+        return next((failure.since for failure in self.failures.values()
+                     if failure.error == error and failure.good_at is not None), None)
+
+    def phase_error(self) -> Error | None:
+        """The error of the first phase-source read that is failing (the one behind `beads unavailable`)."""
+        ordered = sorted((failure for failure in self.failures.values() if failure.source in PHASE),
+                         key=lambda failure: (failure.since, failure.source))
+        return ordered[0].error if ordered else None
+
+    def _track(self, carried: Mapping[str, Error], now: datetime, good_at: datetime | None) -> None:
         self.failures = {
-            source: Failure(source, error, self.failures[source].since if source in self.failures else now)
+            source: Failure(source, error, self.failures[source].since, self.failures[source].good_at)
+            if source in self.failures else Failure(source, error, now, good_at)
             for source, error in carried.items()
         }
 
 
-def _carry(previous: Snapshot, new: Snapshot, sources: set[str], failed_errors: tuple[Error, ...]) -> Snapshot:
-    errors = tuple(error for error in new.errors if error not in failed_errors)
+def _carry(previous: Snapshot, new: Snapshot, sources: set[str]) -> Snapshot:
+    # The failed reads' errors stay in the snapshot (the renderers tag them `carried since T`); generated_at is the
+    # tick's own clock, and the indicator carries the age of the content.
+    errors = new.errors
     live = {"generated_at": new.generated_at, "gh": new.gh, "errors": errors, "sent": new.sent, "files": new.files}
     if sources & PHASE and previous.phase_data is not None:
         return replace(previous, **live)

@@ -7,14 +7,16 @@ from functools import partial
 from typing import Literal
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
+from .closed_cache import ClosedBeads
 from .dispatch import candidates, sprint_of, verification_reason
 from .enums import MergeState, PrState, SprintState
 from .log import TickLog, create_console_logger, error_message
-from .result import Err, NotFound, Ok, Result
+from .result import Err, Error, NotFound, Ok, Result
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import (
     Action,
     ActionLine,
+    Bead,
     Config,
     GhStatus,
     Inputs,
@@ -28,6 +30,11 @@ from .types import (
     StepResult,
     Task,
 )
+
+
+def _unique(errors) -> tuple[Error, ...]:
+    """Each distinct error once, in first-seen order."""
+    return tuple(dict.fromkeys(errors))
 
 
 def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
@@ -126,10 +133,38 @@ def _refresh_github(config: Config, now: datetime, gh: GhStatus, groups=()):
     return result, status
 
 
+def _show_closed(closed: ClosedBeads, ids: tuple[str, ...], logger: TickLog) -> Result[tuple[Bead, ...]]:
+    """Read only the ids not yet cached; a failed read is the original Err and caches nothing. Beads that are
+    not closed are returned for this tick but never cached."""
+    missing = closed.missing_beads(ids)
+    if not missing:
+        return Ok(closed.cached_beads(ids))
+    fresh = logger.result("beads.show_closed", beads_source.show(missing), task_ids=list(missing))
+    if isinstance(fresh, Err):
+        return fresh
+    closed.store_beads(fresh.value)
+    returned = {bead.id for bead in fresh.value}
+    return Ok((*fresh.value, *closed.cached_beads(bead_id for bead_id in ids if bead_id not in returned)))
+
+
+def _persist_closed(closed: ClosedBeads, logger: TickLog) -> tuple[Error, ...]:
+    """Write the cache when it changed. Returns the errors for the snapshot: the startup load error (once) and
+    a failed write; neither stops the tick."""
+    errors = [*closed.pending_errors]
+    closed.pending_errors.clear()
+    saved = closed.save()
+    if isinstance(saved, Err):
+        errors.append(saved.error)
+    for error in errors:
+        logger.error(error, source="closed_cache")
+    return tuple(errors)
+
+
 def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore, file, repo, root_bead, logger,
-                  force_github: bool = False):
-    shown_ids = atm_bd.closed_show_ids(file, ())
-    shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
+                  force_github: bool = False, closed: ClosedBeads | None = None):
+    closed = closed if closed is not None else ClosedBeads()
+    shown = _show_closed(closed, atm_bd.closed_show_ids(file, ()), logger)
+    closed_errors = _persist_closed(closed, logger)
     phase = shown if isinstance(shown, Err) else atm_bd.phase(file, root_bead, (), (), shown.value)
     if root_bead is not None and root_bead.status == SprintState.CLOSED and isinstance(phase, Ok):
         phase = Ok(replace(phase.value, step_errors=()))
@@ -141,12 +176,14 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
     gh = cached_prs.value.gh if config.github != "off" and isinstance(cached_prs, Ok) else _gh(config.github)
     gh = replace(gh, poll_interval_s=config.github_poll_interval_s, quota_threshold=config.github_quota_threshold)
     cache_errors = ()
+    prs_read_at = cached_prs.value.read_at if isinstance(cached_prs, Ok) else None
     if force_github and config.github != "off":
         groups = _branch_groups(phase.value, repo) if config.github == "rest" and isinstance(phase, Ok) else ()
         refreshed, gh = _refresh_github(config, now, gh, groups)
         if isinstance(refreshed, Ok):
             prs = refreshed
         previous_read = cached_prs.value.read_at if isinstance(cached_prs, Ok) else now
+        prs_read_at = now if isinstance(refreshed, Ok) else prs_read_at
         saved = store.write_prs(PrsFile(now if isinstance(refreshed, Ok) else previous_read, gh, prs.value, attempted_at=now))
         if isinstance(saved, Err):
             cache_errors = (saved.error,)
@@ -164,24 +201,23 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         now,
         partial(atm_bd.dispatch_spec, templates=file.templates),
     )
+    if not snapshot.phase:
+        snapshot = replace(snapshot, phase=config.phase)
     if isinstance(cached_snapshot, Ok):
         snapshot = replace(snapshot, agents=cached_snapshot.value.agents)
     snapshot = replace(snapshot, sent=sent)
     next_state = state if config.dry_run else next_state
     written = store.write_state(next_state)
     history_errors = () if isinstance(history, Ok) or isinstance(history.error, NotFound) else (history.error,)
-    errors = (*snapshot.errors, *history_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
+    errors = (*snapshot.errors, *history_errors, *closed_errors, *store.load_errors, *cache_errors, *((written.error,) if isinstance(written, Err) else ()))
+    sanity = logger.result("sanity.ledger", ledger_source.sanity_runs(config.repo_root, config.phase))
     for error in errors:
         logger.error(error)
     logger.finish(actions=0)
-    persisted = replace(snapshot, errors=(*errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+    persisted = replace(snapshot, errors=_unique((*errors, *logger.errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
     snapshot = _write_snapshot(store, persisted, logger)
-    try:
-        run_data = ledger_source.collect(config.repo_root, config.phase, (), [])
-        runs_error = None
-    except (OSError, ValueError, RuntimeError) as error:
-        run_data, runs_error = None, str(error)
-    return StepResult(snapshot, next_state, run_data=run_data, runs_error=runs_error, failed_reads=logger.failed_reads)
+    # The open QA rows were not read on a stopped tick: no quality result, so the held rows stay.
+    return StepResult(snapshot, next_state, sanity=sanity, failed_reads=logger.failed_reads, prs_read_at=prs_read_at)
 
 
 def _closed_tasks(
@@ -202,8 +238,10 @@ def _closed_tasks(
     return Ok(tuple(closed))
 
 
-def step(config: Config, state: State, force_github: bool, store: StateStore) -> StepResult:
-    """Run one best-effort tick using the caller-owned lock-backed store."""
+def step(config: Config, state: State, force_github: bool, store: StateStore,
+         cache: ClosedBeads | None = None) -> StepResult:
+    """Run one best-effort tick using the caller-owned lock-backed store and closed-bead cache."""
+    cache = cache if cache is not None else ClosedBeads()
     now = datetime.now(UTC)
     logger = TickLog(create_console_logger(config.repo_root))
     logger.event("tick_start", phase=config.phase)
@@ -219,7 +257,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         for error in snapshot.errors:
             logger.error(error)
         logger.finish(actions=0)
-        persisted = replace(snapshot, errors=(*snapshot.errors, *logger.errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+        persisted = replace(snapshot, errors=_unique((*snapshot.errors, *logger.errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
         persisted = _write_snapshot(store, persisted, logger)
         return StepResult(persisted, state, failed_reads=logger.failed_reads)
     config = replace(config, lead=file.value.lead)
@@ -228,14 +266,17 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
     if root_bead is not None and root_bead.status == SprintState.CLOSED:
-        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github)
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github, cache)
     if not force_github and isinstance(root, Ok) and model.idle_stop_due(state, now):
-        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
+        return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, closed=cache)
     opened = logger.result("beads.open", beads_source.open_rows(file.value.label), label=file.value.label)
     ready = logger.result("beads.ready", beads_source.ready(file.value.label), label=file.value.label)
     known = opened.value.beads if isinstance(opened, Ok) else ()
-    shown_ids = atm_bd.closed_show_ids(file.value, known)
-    shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
+    if isinstance(opened, Ok):
+        cache.forget_beads(bead.id for bead in known)
+        cache.note_open(config.phase, opened.value.rows)
+    shown = _show_closed(cache, atm_bd.closed_show_ids(file.value, known), logger)
+    closed_errors = _persist_closed(cache, logger)
     if isinstance(root, Err):
         phase = root
     elif isinstance(opened, Err):
@@ -247,15 +288,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
     else:
         phase = atm_bd.phase(file.value, root_bead, known, ready.value, shown.value)
     logger.result("phase", phase)
-    run_data = None
-    runs_error = None
-    if isinstance(opened, Err):
-        runs_error = str(opened.error)
-    else:
-        try:
-            run_data = ledger_source.collect(config.repo_root, config.phase, opened.value.rows, [])
-        except (OSError, ValueError, RuntimeError) as run_error:
-            runs_error = str(run_error)
+    sanity = logger.result("sanity.ledger", ledger_source.sanity_runs(config.repo_root, config.phase))
+    quality = opened if isinstance(opened, Err) else Ok(ledger_source.open_quality(config.phase, opened.value.rows))
     members = logger.result("atm.members", atm_source.members(config.team, config.lead), team=config.team)
     tasks = logger.result("atm.tasks", atm_source.tasks(config.team, config.lead), team=config.team)
     closed_tasks = _closed_tasks(config, phase, tasks, logger)
@@ -353,6 +387,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 merge_results.append(Ok(unavailable))
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads, closed_tasks)
     snapshot, actions, next_state = model.tick(inputs, state, now, partial(atm_bd.dispatch_spec, templates=file.value.templates))
+    if not snapshot.phase:
+        snapshot = replace(snapshot, phase=config.phase)  # the header keeps the configured id when the phase read failed
     steps = {item.bead_id: item for item in phase.value.steps} if isinstance(phase, Ok) else {}
     for section in snapshot.sections:
         if section.label == "Held":
@@ -364,7 +400,7 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 )
     def persist(store: StateStore):
             reported, action_errors = _run_actions(config, actions, store, now, logger)
-            errors = [*store.load_errors, *action_errors, *refresh_errors]
+            errors = [*store.load_errors, *closed_errors, *action_errors, *refresh_errors]
             durable = state if config.dry_run else _durable_state(state, next_state, actions, reported)
             reported_sent = (*state.sent, *reported)[-5:]
             for written in (store.write_merges(MergeFile(now, merges)), store.write_prs(PrsFile(prs_read_at, gh, tuple(prs), attempted_at=attempted_at)), store.write_state(durable)):
@@ -373,7 +409,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 logger.error(error)
             logger.finish(actions=len(actions))
             errors.extend(logger.errors)
-            persisted = replace(snapshot, sent=reported_sent, errors=(*snapshot.errors, *errors), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
+            persisted = replace(snapshot, sent=reported_sent, errors=_unique((*snapshot.errors, *errors)), files={"snapshot": str(store.directory / "snapshot.json"), "state": str(store.directory / "state.json")})
             persisted = _write_snapshot(store, persisted, logger)
-            return StepResult(persisted, durable, reported, run_data, runs_error, logger.failed_reads)
+            return StepResult(persisted, durable, reported, sanity, quality, logger.failed_reads,
+                              prs_read_at=prs_read_at if prs_input is not None else None)
     return persist(store)

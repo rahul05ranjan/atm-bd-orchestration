@@ -30,16 +30,20 @@ from textual.widgets.option_list import Option
 from . import findings_renderer, ledger_source, prs, render, runs, status, status_table
 from .agent_roles import agent_group
 from .build import display_identity
+from .closed_cache import ClosedBeads
 from .enums import QaState, SprintState
+from .error_text import error_text
+from .held import Held, held_view
 from .icons import JEV_VERDICT_ICONS, LLM_VERDICT_ICONS, SPRINT_ICONS, icon_for, qa_run_icon
 from .log import create_console_logger, error_message
 from .poll_health import PollHealth
-from .result import Err, Error, IoFailed, Ok
-from .state import StateStore, acquire_lock
+from .result import Err, Error, IoFailed, Ok, Result
+from .state import acquire_lock
 from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn, StepResult
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
+FINDINGS_PLACEHOLDER = "*Select a run to see its findings.*"
 
 
 class FindingsMarkdown(Markdown):
@@ -76,8 +80,31 @@ class _DiagnosticEvent(Protocol):
     message: str | None
 
 
-def status_header(snapshot: Snapshot) -> Text:
-    """Show sprint counts using the same status icons as the DAG."""
+def startup_error_applies(error: Error, snapshot: Snapshot) -> bool:
+    """Whether the startup error still has a row of its own. A failed `atm members` at startup is the same read every live
+    tick repeats: that tick shows the same failure itself or has cleared it, so the startup row would be a duplicate or
+    stale. A stopped tick does not read members, so the startup failure stays unless the tick already lists it."""
+    argv = getattr(error, "argv", None)
+    if argv is None:
+        return True
+    if any(getattr(other, "argv", None) == argv for other in snapshot.errors):
+        return False
+    return snapshot.stopped is not None
+
+
+def phase_unavailable(snapshot: Snapshot, health: PollHealth | None = None) -> str | None:
+    """The labelled reason there is no phase data to show (None when there is some)."""
+    if snapshot.phase_data is not None:
+        return None
+    error = render.beads_error(snapshot, health)
+    return f"unavailable - {error_text(error)}" if error is not None else "unavailable - the phase has not been read"
+
+
+def status_header(snapshot: Snapshot, health: PollHealth | None = None) -> Text:
+    """Show sprint counts using the same status icons as the DAG; no phase data is `sprints: unavailable`, never 0/0."""
+    reason = phase_unavailable(snapshot, health)
+    if reason is not None:
+        return Text(f"sprints: {reason}", style="red")
     states = [sprint.state for sprint in snapshot.sprints]
     closed, running = states.count(SprintState.CLOSED), states.count(SprintState.IN_PROGRESS)
     waiting = len(states) - closed - running
@@ -93,7 +120,11 @@ def status_header(snapshot: Snapshot) -> Text:
 
 def _diagnostic_line(event: _DiagnosticEvent) -> str:
     """Add local display time and level to a stored message without interpreting it."""
-    return f"{render.clock(datetime.fromisoformat(event.timestamp), seconds=True)} {event.level}: {event.message or ''}"
+    try:
+        stamp = render.clock(datetime.fromisoformat(event.timestamp), seconds=True)
+    except ValueError:
+        stamp = event.timestamp  # a malformed stored timestamp is shown as stored, never raised into the tab
+    return f"{stamp} {event.level}: {event.message or ''}"
 
 
 def sprint_steps(sprint: SprintView, agents: tuple[AgentView, ...] = ()) -> Text:
@@ -171,6 +202,27 @@ def sanity_text(
         line.extend((Text(run.final_verdict or "—"), Text(str(run.iteration or "—"))))
         lines.append(line)
     return _aligned(lines), _aligned(errors)
+
+
+def sanity_pane(held: Held[list[runs.SanityRun]], agents: tuple[AgentView, ...], now: datetime,
+                *, local_zone: tzinfo | None = None) -> tuple[Text, Text]:
+    """Every sanity run, newest first, or the labelled reason there is none; a failed read keeps the last rows, marked stale."""
+    items, note = held_view(held, "Sanity runs", now)
+    if items is None:
+        return Text(note, style="red"), Text()
+    main, errors = sanity_text(items, agents, local_zone=local_zone)
+    if note:
+        main.append(f"\n{note}", style="red")
+    elif not items:
+        main.append("\nNo sanity runs recorded for this phase.", style="dim")
+    return main, errors
+
+
+def quality_notes(open_held: Held[tuple[list[runs.QaRun], list[dict]]],
+                  closed_held: Held[tuple[list[runs.QaRun], list[dict]]], now: datetime) -> str:
+    """One line per stale or never-loaded part of the Quality tab; empty when both parts are fresh."""
+    notes = [held_view(open_held, "Open QA runs", now)[1], held_view(closed_held, "Closed QA runs", now)[1]]
+    return "\n".join(note for note in notes if note)
 
 
 _QUALITY_HEADERS = ("Completed", "QA", "Sprint", "QA bead", "PR", "Round", "B", "I", "M", "Elapsed")
@@ -306,8 +358,7 @@ class ConsoleApp(App[int]):
     Screen { layers: base overlay; }
     #build { layer: overlay; position: absolute; width: auto; height: 1; }
     #diagnostics { height: 1fr; overflow: auto; }
-    #sanity-list { height: 3fr; overflow: auto; }
-    #sanity-errors { height: 2fr; overflow: auto; }
+    #sanity-list, #sanity-errors { height: auto; }
     #quality-runs { height: 3fr; }
     #quality-runs-header { height: 1; margin-left: 2; }
     #quality-findings { height: 2fr; overflow: auto; }
@@ -321,8 +372,10 @@ class ConsoleApp(App[int]):
         Binding("ctrl+q", "noop", show=False, priority=True),
     ]
 
-    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None) -> None:
+    def __init__(self, config: Config, step: StepFn, state: State, startup_error: Error | None = None,
+                 closed: ClosedBeads | None = None) -> None:
         super().__init__(driver_class=CONSOLE_DRIVER_CLASS)
+        self.closed = closed if closed is not None else ClosedBeads()
         self.config = config
         self.step = step
         self.state = state
@@ -331,21 +384,19 @@ class ConsoleApp(App[int]):
         self.health = PollHealth()
         self.status_text = ""
         self.status_error: Error | None = None
+        self.prs_read_at: datetime | None = None
+        self.dag = status.DagPane(log=self._log_render_error)
         self.tick_error: Error | None = None
         self._step_lock = threading.Lock()
         self._tick_running = False
         self._pending_forced_refresh = False
         self._status_view_initialized = False
         self.show_pr_history = False
-        self.sanity_runs: list[runs.SanityRun] = []
         self.quality_runs: list[runs.QaRun] = []
         self.finding_beads: list[dict] = []
-        self.runs_error: str | None = None
-        self._open_quality_runs: list[runs.QaRun] = []
-        self._open_findings: list[dict] = []
-        self._closed_quality_runs: list[runs.QaRun] = []
-        self._closed_findings: list[dict] = []
-        self._quality_error: str | None = None
+        self.sanity_held: Held[list[runs.SanityRun]] = Held()
+        self.open_quality_held: Held[tuple[list[runs.QaRun], list[dict]]] = Held()
+        self.closed_quality_held: Held[tuple[list[runs.QaRun], list[dict]]] = Held()
         # Every mouse press, click, key and tab change with the widget it landed on (#241 evidence).
         self.input_log_path = Path(config.state_dir) / "input.log"
 
@@ -365,14 +416,14 @@ class ConsoleApp(App[int]):
                         yield Static(id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
-            with TabPane("Sanity", id="sanity"):
+            with TabPane("Sanity", id="sanity"), VerticalScroll():
                 yield Static(id="sanity-list")
                 yield Static(id="sanity-errors")
             with TabPane("Quality", id="quality"):
                 yield Static(id="quality-error")
                 yield Static(id="quality-runs-header")
                 yield OptionList(id="quality-runs")
-                yield FindingsMarkdown(id="quality-findings")
+                yield FindingsMarkdown(FINDINGS_PLACEHOLDER, id="quality-findings")
             with TabPane("Diagnostics", id="diagnostics"):
                 yield Static(id="diagnostics-text")
         yield Static(id="status-bar")
@@ -398,6 +449,7 @@ class ConsoleApp(App[int]):
 
     def action_refresh(self) -> None:
         self.tick(True)
+        self.closed.drop_stage_lists()
         if self.query_one(TabbedContent).active == "quality":
             self._load_closed_quality()
 
@@ -472,25 +524,24 @@ class ConsoleApp(App[int]):
 
     @work(thread=True, group="quality", exclusive=True, exit_on_error=False)
     def _load_closed_quality(self) -> None:
-        result = ledger_source.closed_quality(self.config.repo_root, self.config.phase)
+        result = ledger_source.closed_quality(self.config.repo_root, self.config.phase, self.closed)
         self.call_from_thread(self._finish_quality, result)
 
     def _finish_quality(self, result) -> None:
         if not self.is_running:
             return
-        previous = (self._quality_error, self._closed_quality_runs, self._closed_findings)
-        if isinstance(result, Err):
-            self._quality_error = str(result.error)
-        else:
-            self._quality_error = None
-            self._closed_quality_runs, self._closed_findings = result.value
-            self._combine_quality()
-        if previous != (self._quality_error, self._closed_quality_runs, self._closed_findings):
+        previous = self.closed_quality_held
+        self.closed_quality_held = previous.apply(result, datetime.now(UTC))
+        self._combine_quality()
+        # A good read's time always changes the held value, so a good read always redraws; a repeated failure does not.
+        if previous != self.closed_quality_held:
             self.refresh_views()
 
     def _combine_quality(self) -> None:
-        qa = {run.bead.get("id"): run.bead for run in (*self._closed_quality_runs, *self._open_quality_runs)}
-        findings = {row.get("id"): row for row in (*self._closed_findings, *self._open_findings)}
+        closed_runs, closed_findings = self.closed_quality_held.value or ([], [])
+        open_runs, open_findings = self.open_quality_held.value or ([], [])
+        qa = {run.bead.get("id"): run.bead for run in (*closed_runs, *open_runs)}
+        findings = {row.get("id"): row for row in (*closed_findings, *open_findings)}
         self.quality_runs = runs.qa_runs(list(qa.values()))
         self.finding_beads = list(findings.values())
 
@@ -509,16 +560,17 @@ class ConsoleApp(App[int]):
         text = ""
         error: Error | None = None
         tick_error: Error | None = None
-        run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None = None
-        runs_error = None
+        sanity: Result[list[runs.SanityRun]] | None = None
+        quality: Result[tuple[list[runs.QaRun], list[dict]]] | None = None
         failed: dict[str, Error] = {}
+        prs_read_at: datetime | None = None
         self._step_lock.acquire()
         try:
             step_result = self.step(self.config, self.state, force_github)
             snapshot, state = step_result
             self.state = state
-            run_data = step_result.run_data
-            runs_error = step_result.runs_error
+            sanity, quality = step_result.sanity, step_result.quality
+            prs_read_at = step_result.prs_read_at
             failed = dict(getattr(step_result, "failed_reads", {}))
         except Exception as step_error:  # noqa: BLE001
             tick_error = IoFailed("io_failed", "console tick", str(step_error), "retry the console tick")
@@ -526,26 +578,36 @@ class ConsoleApp(App[int]):
             self._step_lock.release()
         if snapshot is not None:
             try:
-                text, error = status.status_text(snapshot)
+                text, error = self.dag.show(snapshot, datetime.now(UTC))
             except Exception as render_error:  # noqa: BLE001
                 tick_error = IoFailed("io_failed", "console status rendering", str(render_error), "retry the console tick")
-        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, run_data, runs_error, failed)
+        self.call_from_thread(self._finish_tick, snapshot, text, error, tick_error, sanity, quality, failed,
+                                prs_read_at)
 
     def _finish_tick(self, snapshot: Snapshot | None, text: str, error: Error | None, tick_error: Error | None,
-                     run_data: tuple[list[runs.SanityRun], list[runs.QaRun], list[dict]] | None,
-                     runs_error: str | None, failed: dict[str, Error] | None = None) -> None:
-        if run_data is not None:
-            self.sanity_runs, self._open_quality_runs, self._open_findings = run_data
-            self._combine_quality()
-        self.runs_error = runs_error
+                     sanity: Result[list[runs.SanityRun]] | None,
+                     quality: Result[tuple[list[runs.QaRun], list[dict]]] | None,
+                     failed: dict[str, Error] | None = None, prs_read_at: datetime | None = None) -> None:
+        # A read that did not happen this tick (None) leaves what is held; a failed one keeps it and marks it stale.
+        now = datetime.now(UTC)
+        self.sanity_held = self.sanity_held.apply(sanity, now)
+        self.open_quality_held = self.open_quality_held.apply(quality, now)
+        self._combine_quality()
         if tick_error is not None:
             self._show_tick_error(tick_error)
         elif snapshot is not None:
+            self.prs_read_at = prs_read_at
             self._show(self.health.apply(snapshot, failed or {}), text, error)
         self._tick_running = False
         if self._pending_forced_refresh:
             self._pending_forced_refresh = False
             self.tick(True)
+
+    def _log_render_error(self, error: Error) -> None:
+        logger = create_console_logger(self.config.repo_root)
+        if isinstance(logger, Ok):
+            logger.value.event("error", level="error", source="status.mmdflux", message=error_message(asdict(error)), error=asdict(error))
+            logger.value.flush()
 
     def _show_tick_error(self, error: Error) -> None:
         if not self.is_running:
@@ -565,7 +627,7 @@ class ConsoleApp(App[int]):
         # A tick can finish after q has begun shutdown; its screen is gone, so there is nothing to draw.
         if not self.is_running:
             return
-        if self.startup_error is not None:
+        if self.startup_error is not None and startup_error_applies(self.startup_error, snapshot):
             snapshot = replace(snapshot, errors=(self.startup_error, *snapshot.errors))
         self.snapshot, self.status_text, self.status_error, self.tick_error = snapshot, text, error, None
         sprints = self.query_one("#sprints", OptionList)
@@ -578,6 +640,9 @@ class ConsoleApp(App[int]):
             label.append(glyph, style=style)
             label.append(f" {sprint.id}  {sprint.title}")
             options.append(Option(label, id=sprint.id))
+        if not options:
+            reason = phase_unavailable(snapshot, self.health) or "no sprints in this phase"
+            options.append(Option(Text(f"Sprints: {reason}", style="red"), disabled=True))
         sprints.add_options(options)
         if highlighted is not None and highlighted < len(snapshot.sprints):
             sprints.highlighted = highlighted
@@ -602,6 +667,7 @@ class ConsoleApp(App[int]):
     def _show_findings(self, bead_id: str | None) -> None:
         run = next((r for r in self.quality_runs if r.bead.get("id") == bead_id), None)
         if run is None:
+            self._update_findings(FINDINGS_PLACEHOLDER, {})
             return
         try:
             findings = runs.run_findings(run.bead, self.finding_beads)
@@ -624,6 +690,9 @@ class ConsoleApp(App[int]):
         except Exception as error:  # noqa: BLE001
             colors = {}
             content = f"Unable to render findings: {error}"
+        self._update_findings(content, colors)
+
+    def _update_findings(self, content: str, colors: dict[str, str]) -> None:
         try:
             widget = self.query_one("#quality-findings", FindingsMarkdown)
         except NoMatches:
@@ -635,8 +704,9 @@ class ConsoleApp(App[int]):
         if self.snapshot is None:
             return
         sprint = next((value for value in self.snapshot.sprints if value.id == sprint_id), None)
+        placeholder = phase_unavailable(self.snapshot, self.health) or "select a sprint"
         self.query_one("#sprint-steps-text", Static).update(
-            sprint_steps(sprint, self.snapshot.agents) if sprint else ""
+            sprint_steps(sprint, self.snapshot.agents) if sprint else Text(placeholder, style="dim")
         )
 
     def on_resize(self) -> None:
@@ -675,32 +745,34 @@ class ConsoleApp(App[int]):
         if snapshot is not None:
             height = panel.size.height or self.size.height
             table = self.query_one("#status-table", Static)
-            table.display = snapshot.phase_data is not None
-            if snapshot.phase_data is not None:
+            unavailable = phase_unavailable(snapshot, self.health)
+            table.display = True
+            if unavailable is None:
                 table.update(status_table.rich_table(status_table.rows(snapshot)))
-            self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height))
-            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history))
-            self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width))
-            header = status_header(snapshot)
+            else:
+                table.update(Text(f"Sprint status: {unavailable}", style="red"))
+            self.query_one("#dashboard", Static).update(render.dashboard(snapshot, dashboard_width, height, self.health))
+            self.query_one("#prs-text", Static).update(prs.render_prs(snapshot, width, self.show_pr_history, self.prs_read_at))
+            self.query_one("#status-bar", Static).update(render.status_bar(snapshot, width, self.health))
+            header = status_header(snapshot, self.health)
             header.no_wrap = True
             header.overflow = "ellipsis"
             if self.status_error is not None:
                 header.append(f"  {self.status_error.kind}: {self.status_error.fix}", style="red")
-            indicator = self.health.indicator()
+            indicator = self.health.indicator(snapshot.generated_at)
             if indicator:
                 header.append(f"  {indicator}", style="yellow")
             header.truncate(width, overflow="ellipsis")
             self.query_one("#status-header", Static).update(header)
             self.query_one("#status-text", Static).update(Text(self.status_text, no_wrap=True))
-            sanity, errors = sanity_text(self.sanity_runs, snapshot.agents)
-            if self.runs_error:
-                sanity.append(f"\nUnable to load runs: {self.runs_error}", style="red")
+            now = datetime.now(UTC)
+            sanity, errors = sanity_pane(self.sanity_held, snapshot.agents, now)
             self.query_one("#sanity-list", Static).update(sanity)
             self.query_one("#sanity-errors", Static).update(errors)
+            quality_note = quality_notes(self.open_quality_held, self.closed_quality_held, now)
             quality_error = self.query_one("#quality-error", Static)
-            quality_message = self._quality_error or self.runs_error
-            quality_error.update(Text(f"Unable to load runs: {quality_message}", style="red") if quality_message else "")
-            quality_error.display = bool(quality_message)
+            quality_error.update(Text(quality_note, style="red") if quality_note else "")
+            quality_error.display = bool(quality_note)
             quality = self.query_one("#quality-runs", OptionList)
             quality_header = self.query_one("#quality-runs-header", Static)
             highlighted = quality.highlighted
@@ -726,9 +798,13 @@ class ConsoleApp(App[int]):
         details = "No errors recorded."
         if self.query_one(TabbedContent).active == "diagnostics":
             logger = create_console_logger(self.config.repo_root)
-            if isinstance(logger, Ok):
+            if isinstance(logger, Err):
+                details = f"Unable to open the console log: {error_text(logger.error)}"
+            else:
                 queried = logger.value.query(levels=("warn", "error"), limit=20, order="newest_first")
-                if isinstance(queried, Ok):
+                if isinstance(queried, Err):
+                    details = f"Unable to read the console log: {error_text(queried.error)}"
+                else:
                     lines = [_diagnostic_line(event) for event in queried.value]
                     details = "\n".join(lines) or details
         agent_details = []
@@ -739,7 +815,7 @@ class ConsoleApp(App[int]):
             f"Build: {display_identity()}\nInput trace: {self.input_log_path}\n{agents}\n\n{details}")
 
 
-RunnerStep = Callable[[Config, State, bool, StateStore], StepResult]
+RunnerStep = Callable[..., StepResult]
 
 
 def run(config: Config, step: StepFn | None, state: State, startup_error: Error | None = None, *, runner_step: RunnerStep | None = None) -> int:
@@ -753,7 +829,8 @@ def run(config: Config, step: StepFn | None, state: State, startup_error: Error 
         if runner_step is not None:
             saved = lock.value.load_state()
             state = saved.value if isinstance(saved, Ok) else INITIAL_STATE
-        bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value)
+        closed = ClosedBeads.load(lock.value.directory)
+        bound_step = step if runner_step is None else lambda current, current_state, force: runner_step(current, current_state, force, lock.value, closed)
         assert bound_step is not None
-        result = ConsoleApp(config, bound_step, state, startup_error).run()
+        result = ConsoleApp(config, bound_step, state, startup_error, closed).run()
     return result or 0

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from rich.cells import cell_len
 from atm_bd_console.ci import ci_failure_key
 from atm_bd_console.codec import from_json
 from atm_bd_console.enums import CiState, MergeState, PrState
+from atm_bd_console.error_text import error_text
 from atm_bd_console.icons import icon
 from atm_bd_console.prs import render_prs
 from atm_bd_console.result import Ok, Timeout
@@ -53,7 +54,7 @@ def test_merge_error_uses_the_failure_glyph_without_a_file_list() -> None:
     failed = PrRow(lower, 1, "atm-bh-1.group-dev", False,
                    Merge("branch-1", "base", MergeState.ERROR, (), ("merge-tree failed",), NOW))
     line = render_prs(replace(snapshot(), prs=(failed,)), 120).plain
-    assert "merge \U000f062d  CI \U000f062c" in line
+    assert "merge \U000f062d merge-tree failed  CI \U000f062c" in line  # the error's own message, never just an icon
 
 
 @pytest.mark.parametrize(
@@ -113,7 +114,21 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
     empty = replace(snapshot(), prs=())
     assert render_prs(replace(empty, gh=GhStatus("off", None, None, None, False)), 120).plain == "GitHub checks are off"
     failed = GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, False)
-    assert render_prs(replace(empty, gh=failed), 120).plain == "GitHub read failed: timeout"
+    assert render_prs(replace(empty, gh=failed), 120).plain == f"GitHub read failed: {error_text(failed.error)}"
+    never = GhStatus("graphql", None, None, None, False)
+    assert render_prs(replace(empty, gh=never), 120).plain == "PRs not yet read"  # no data is not "no open PR"
+
+
+def test_cached_rows_after_a_failed_read_are_marked_stale_with_the_read_time_and_typed_error() -> None:
+    value = snapshot()
+    failed = GhStatus("graphql", False, Timeout("timeout", ("gh", "api"), 5, "retry"), NOW, False)
+    read_at = NOW - timedelta(minutes=7)
+    lines = render_prs(replace(value, gh=failed), 200, read_at=read_at).plain.splitlines()
+    assert lines[0] == f"stale since {read_at.astimezone().strftime('%H:%M')}: {error_text(failed.error)}"
+    assert "#11" in lines[1]
+    assert "stale" not in render_prs(value, 200).plain
+    unknown = render_prs(replace(value, gh=failed), 200).plain.splitlines()[0]
+    assert unknown.startswith("stale (read time unknown): ")
 
 
 @pytest.mark.parametrize("cached", ("rows", "empty", "none"))

@@ -151,10 +151,12 @@ def github_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def test_tick_reports_open_read_failure_without_collecting_runs(monkeypatch, github_runtime):
     store, _, _, _ = github_runtime
     monkeypatch.setattr(runner.beads_source, "open_rows", lambda *_: Err(TIMEOUT))
-    monkeypatch.setattr(runner.ledger_source, "collect", lambda *_: pytest.fail("must not collect incomplete rows"))
+    monkeypatch.setattr(runner.ledger_source, "open_quality", lambda *_: pytest.fail("must not collect incomplete rows"))
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
-    assert result.run_data is None
-    assert result.runs_error == str(TIMEOUT)
+    assert result.quality == Err(TIMEOUT)
+    # The sanity ledger is a file: a failed bd read does not block it.
+    assert result.sanity == Ok([])
 
 
 @pytest.mark.parametrize("open_failed", [False, True])
@@ -171,17 +173,20 @@ def test_tick_owns_exactly_one_open_and_never_reads_closed(monkeypatch, github_r
     monkeypatch.setattr(runner.beads_source, "open_rows", open_rows)
     monkeypatch.setattr(runner.beads_source.command, "run", run)
 
-    def collect(*_args):
+    def open_quality(*_args):
         assert not open_failed, "must not collect incomplete rows"
-        return [], [], []
+        return [], []
 
-    monkeypatch.setattr(runner.ledger_source, "collect", collect)
+    monkeypatch.setattr(runner.ledger_source, "open_quality", open_quality)
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
-    assert result.runs_error == (str(TIMEOUT) if open_failed else None)
+    if open_failed:
+        assert isinstance(result.quality, Err) and result.quality.error.kind == "timeout"
+        assert "waited 20s" in result.quality.error.fix and "bd list -l phase:bh -n 0 --json" in result.quality.error.fix
+    else:
+        assert result.quality == Ok(([], []))
     expected = [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"]]
     assert calls == expected
-    if open_failed:
-        assert result.run_data is None
     assert all("--all" not in argv for argv in calls)
 
 
@@ -201,6 +206,7 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
     monkeypatch.setattr(runner.atm_bd, "repo_config", lambda *_: initial_read(REPO_CONFIG))
     monkeypatch.setattr(runner.beads_source, "show", show)
     monkeypatch.setattr(runner.atm_bd, "phase", lambda *_: Ok(PHASE))
+    monkeypatch.setattr(runner.ledger_source, "read_ledger", lambda *_: [])
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("stopped history must not dispatch or fetch")
@@ -217,7 +223,10 @@ def test_closed_root_hydrates_history_without_dispatch_or_fetch(monkeypatch) -> 
         (store, "append_action"), (store, "write_merges"), (store, "write_prs"),
     ):
         monkeypatch.setattr(source, name, forbidden)
-    snapshot, _ = runner.step(CONFIG, STATE, False, store)
+    result = runner.step(CONFIG, STATE, False, store)
+    snapshot = result[0]
+    # No open rows were read, so no quality result that could overwrite the held rows with empty ones.
+    assert result.quality is None and result.sanity == Ok([])
     assert shown == [(PHASE_FILE.root_id,), (
         "atm-bh-1", "atm-bh-1.group-dev", "atm-bh-1.group-sanity", "atm-bh-1.group-qa",
         "atm-bh-6", "atm-bh-6.group-dev", "atm-bh-6.group-sanity", "atm-bh-6.group-qa",
@@ -759,7 +768,9 @@ def test_failed_github_refresh_retains_cached_prs_and_age(github_runtime, monkey
         return model_tick(value, state, now, spec)
 
     monkeypatch.setattr(runner.model, "tick", tick)
-    snapshot, _ = runner.step(CONFIG, RUNNING_STATE, True, store)
+    result = runner.step(CONFIG, RUNNING_STATE, True, store)
+    snapshot = result[0]
+    assert result.prs_read_at == EARLIER  # the rows on screen are the cached ones, last read EARLIER
 
     assert inputs[0].prs == Ok(cached.prs)
     assert tuple(row.pr for row in snapshot.prs) == cached.prs
@@ -1465,6 +1476,12 @@ def test_failed_root_show_is_the_real_error_not_not_found(monkeypatch, github_ru
     assert logged and logged[0]["outcome"] == "failed" and logged[0]["error"] == asdict(ROOT_FAILED)
 
 
+def test_header_keeps_the_configured_phase_id_when_the_model_has_no_phase(monkeypatch, github_runtime) -> None:
+    store, _, _, _ = github_runtime
+    monkeypatch.setattr(runner.model, "tick", lambda value, state, *_: (replace(SNAPSHOT, phase="", phase_data=None), (), state))
+    assert runner.step(CONFIG, RUNNING_STATE, False, store)[0].phase == CONFIG.phase == "bh"
+
+
 def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, github_runtime) -> None:
     store, _, _, inputs = github_runtime
     root = replace(BEAD, id=PHASE_FILE.root_id, labels=(PHASE_FILE.label,), parent=None)
@@ -1478,3 +1495,19 @@ def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, gith
     assert isinstance(inputs[-1].phase.error, CommandFailed) and "beads.show_root" in failed.failed_reads
     recovered = runner.step(CONFIG, RUNNING_STATE, True, store)
     assert isinstance(inputs[-1].phase, Ok) and "beads.show_root" not in recovered.failed_reads
+
+
+def test_a_failed_merge_check_is_one_errors_row_and_one_error_merge_row(github_runtime, monkeypatch):
+    store, _, _, inputs = github_runtime
+    monkeypatch.setattr(runner.model, "due", lambda *_: Due(True, (("topic", "base"), ("topic2", "base")), False))
+    monkeypatch.setattr(runner.git_source, "fetch", lambda *_: Ok(None))
+    monkeypatch.setattr(runner.git_source, "remote_refs",
+                        lambda *_: Ok(tuple(RemoteRef(branch, REMOTE_REF.sha) for branch in ("topic", "topic2", "base"))))
+    monkeypatch.setattr(runner.git_source, "merge", lambda *_: Err(COMMAND_FAILED))
+
+    runner.step(replace(CONFIG, no_fetch=False), RUNNING_STATE, False, store)
+
+    snapshot, _, _ = model_tick(inputs[0], RUNNING_STATE, NOW, lambda _context: Err(COMMAND_FAILED))
+    assert snapshot.errors.count(COMMAND_FAILED) == 1
+    merges = [result.value for result in inputs[0].merges if isinstance(result, Ok)]
+    assert [merge.state for merge in merges] == [MergeState.ERROR, MergeState.ERROR]

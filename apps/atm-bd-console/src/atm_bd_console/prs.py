@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from rich.text import Text
 
 from .enums import FAILING_CI, MergeState, PrState
+from .error_text import error_text
 from .icons import icon, merge_icon
 from .ids import short_id
 from .render import _fit, clock, github_pause, render_agent
@@ -31,24 +34,34 @@ def _row(value: PrRow, snapshot: Snapshot) -> Text:
     else:
         glyph, style = merge_icon(value.merge.state)
         files = f" {', '.join(value.merge.files)}" if value.merge.files and value.merge.state != MergeState.CLEAN else ""
-        line.append(f"  merge {glyph}{files}", style=style)
+        reason = f" {'; '.join(value.merge.messages)}" if value.merge.state == MergeState.ERROR and value.merge.messages else ""
+        line.append(f"  merge {glyph}{files}{reason}", style=style)
     glyph, style = icon(value.pr.ci)
     checks = f" {', '.join(value.pr.failed_checks)}" if value.pr.failed_checks and value.pr.ci in FAILING_CI else ""
     line.append(f"  CI {glyph}{checks}", style=style)
     return line
 
 
-def render_prs(snapshot: Snapshot, width: int, include_history: bool = False) -> Text:
+def render_prs(snapshot: Snapshot, width: int, include_history: bool = False, read_at: datetime | None = None) -> Text:
     rows = snapshot.prs if include_history else tuple(row for row in snapshot.prs if active_pr(row.pr))
     lines = [_fit(Text(github_pause(snapshot.gh, compact=width < 100)), width)] if snapshot.gh.paused else []
+    gh = snapshot.gh
     if not rows:
-        if snapshot.gh.mode == "off":
+        if gh.mode == "off":
             lines.append(Text("GitHub checks are off"))
-        elif snapshot.gh.error is not None:
-            lines.append(Text(f"GitHub read failed: {snapshot.gh.error.kind}"))
-        elif not snapshot.gh.paused or snapshot.gh.at is not None:
-            checked = clock(snapshot.gh.at) if snapshot.gh.at else "unknown time"
-            lines.append(Text(f"No open PR for phase {snapshot.phase} (checked {checked})"))
+        elif gh.error is not None:
+            lines.append(Text(f"GitHub read failed: {error_text(gh.error)}", style="red"))
+        elif gh.ok is False:
+            lines.append(Text("GitHub read failed: no reason was recorded; press r to read again", style="red"))
+        elif gh.at is None:
+            if not gh.paused:
+                lines.append(Text("PRs not yet read"))
+        else:
+            lines.append(Text(f"No open PR for phase {snapshot.phase} (checked {clock(gh.at)})"))
     else:
+        if gh.mode != "off" and (gh.error is not None or gh.ok is False):
+            since = f"since {clock(read_at)}" if read_at else "(read time unknown)"
+            reason = error_text(gh.error) if gh.error is not None else "no reason was recorded"
+            lines.append(Text(f"stale {since}: {reason}", style="yellow"))
         lines.extend(_fit(_row(value, snapshot), width) for value in rows)
     return Text("\n").join(lines)

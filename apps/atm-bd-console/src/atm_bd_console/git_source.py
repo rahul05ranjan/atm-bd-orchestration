@@ -1,12 +1,13 @@
 """Git reads for the console; every command result is converted at this boundary."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from . import command
 from .enums import MergeState
-from .result import Err, NotFound, Ok, Result
+from .result import CommandFailed, Err, NotFound, Ok, Result, Timeout
 from .types import Merge, RemoteRef, Worktree
 
 # git fetch talks to the remote; local reads get the default timeout.
@@ -16,7 +17,16 @@ FIX = "check the git repository and retry"
 
 def _run(repo: str | Path, *args: str, timeout_s: int = command.DEFAULT_TIMEOUT_S,
          ok_codes: tuple[int, ...] = (0,)) -> Result[command.Output]:
-    return command.run(("git", *args), FIX, cwd=repo, timeout_s=timeout_s, ok_codes=ok_codes)
+    argv = ("git", *args)
+    result = command.run(argv, FIX, cwd=repo, timeout_s=timeout_s, ok_codes=ok_codes)
+    if isinstance(result, Err) and isinstance(result.error, Timeout):
+        fix = (f"git or the remote is slow or the host is loaded; the call waited {result.error.seconds}s; "
+               f"run `git -C {repo} {' '.join(args)}` by hand to see how long it takes")
+        return Err(replace(result.error, fix=fix))
+    if isinstance(result, Err) and isinstance(result.error, CommandFailed):
+        fix = f"`git {' '.join(args)}` exited {result.error.code}; repair what its stderr reports in {repo}, then rerun it by hand"
+        return Err(replace(result.error, fix=fix))
+    return result
 
 
 def fetch(repo: str | Path) -> Result[None]:

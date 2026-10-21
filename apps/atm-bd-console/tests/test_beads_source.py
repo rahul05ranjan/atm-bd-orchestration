@@ -9,7 +9,7 @@ import pytest
 
 from atm_bd_console import beads_source
 from atm_bd_console.enums import SprintState
-from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed
+from atm_bd_console.result import CommandFailed, Err, Ok, ParseFailed, Timeout
 from atm_bd_console.types import Bead
 
 NOW = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
@@ -114,3 +114,23 @@ def test_unparseable_reply_is_parse_failed(fake_bin, reply: str) -> None:
     result = beads_source.ancestors((leaf("atm-bh-4.group-dev", "atm-bh-4"),))
     assert isinstance(result, Err) and isinstance(result.error, ParseFailed)
     assert result.error.kind == "parse_failed"
+
+
+def test_timeout_fix_names_the_wait_and_the_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    argv = ["bd", "list", "-l", "phase-bh", "-n", "0", "--json"]
+    monkeypatch.setattr(beads_source.command, "run", lambda *_a, **_k: Err(Timeout("timeout", tuple(argv), 20, "stub")))
+    result = beads_source._raw(argv)
+    assert isinstance(result, Err) and isinstance(result.error, Timeout)
+    assert result.error.argv == tuple(argv) and result.error.seconds == 20
+    assert "waited 20s" in result.error.fix and "host is loaded" in result.error.fix
+    assert "bd list -l phase-bh -n 0 --json" in result.error.fix and "inspect bd output" not in result.error.fix
+
+
+def test_command_failed_fix_names_exit_code_and_keeps_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    argv = ["bd", "ready", "--json"]
+    failed = CommandFailed("command_failed", tuple(argv), 3, "dolt down", "stub")
+    monkeypatch.setattr(beads_source.command, "run", lambda *_a, **_k: Err(failed))
+    result = beads_source._raw(argv)
+    assert isinstance(result, Err) and isinstance(result.error, CommandFailed)
+    assert result.error.code == 3 and result.error.stderr == "dolt down"
+    assert "exited 3" in result.error.fix and "Dolt" in result.error.fix

@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .enums import MergeState, SprintState
+from .error_text import error_text
 from .ids import short_id
 from .prs import active_pr
-from .result import CommandFailed, Err, Error, NotFound, Timeout
+from .result import Err, Error, NotFound
 from .types import (
     Action,
     DispatchContext,
@@ -31,16 +32,7 @@ class DispatchOutcome:
     errors: tuple[Error, ...]
 
 
-def verification_reason(error: Error) -> str:
-    if isinstance(error, NotFound):
-        detail = error.what
-    elif isinstance(error, Timeout):
-        detail = f"{' '.join(error.argv)} timed out after {error.seconds}s"
-    elif isinstance(error, CommandFailed):
-        detail = f"{' '.join(error.argv)} (exit {error.code}): {error.stderr.strip()}"
-    else:
-        detail = error.kind
-    return f"{error.kind}: {detail}; {error.fix}"
+verification_reason = error_text
 
 
 def sprint_of(step: Step, phase: Phase, bead_prefix: str) -> Sprint | None:

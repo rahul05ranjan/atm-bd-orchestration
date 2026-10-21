@@ -12,7 +12,7 @@ from .step_result import StepResult
 
 Presence: TypeAlias = Literal["active", "idle", "offline", "blocked", "unknown"]
 StepKind: TypeAlias = Literal["dev", "fix", "sanity", "qa", "finding", "plan_review", "container", "other"]
-AgentStatus: TypeAlias = Literal["busy", "stalling", "blocked", "offline", "idle"]
+AgentStatus: TypeAlias = Literal["busy", "stalling", "blocked", "offline", "idle", "unknown"]
 
 _LEGACY_CI = {"success": CiState.PASS, "pending": CiState.RUNNING, "failure": CiState.FAIL_BUG}
 

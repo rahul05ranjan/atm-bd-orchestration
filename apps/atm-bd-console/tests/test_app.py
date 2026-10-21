@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,9 +28,11 @@ from atm_bd_console.app import (
 )
 from atm_bd_console.build import display_identity
 from atm_bd_console.enums import SprintState
+from atm_bd_console.error_text import error_text
+from atm_bd_console.held import Held
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.poll_health import PollHealth
-from atm_bd_console.result import Ok
+from atm_bd_console.result import Err, Ok
 from atm_bd_console.state import acquire_lock
 from atm_bd_console.types import Config, GhStatus, Snapshot, SprintView, State, StepResult, StepView
 
@@ -66,7 +68,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
         return nodes.setdefault(selector, Node())
 
     dummy = SimpleNamespace(snapshot=RUNNING, tick_error=None, size=Node.size, query_one=query,
-                            config=replace(CONFIG, repo_root=str(tmp_path)), sanity_runs=[], quality_runs=[], runs_error=None, _quality_error=None, health=PollHealth(),
+                            config=replace(CONFIG, repo_root=str(tmp_path)), prs_read_at=None, sanity_held=Held(), open_quality_held=Held(), closed_quality_held=Held(), quality_runs=[], health=PollHealth(),
                             show_pr_history=False, status_error=None, status_text="",
                             input_log_path="input", call_after_refresh=lambda *_: None,
                             _refresh_status_viewport=lambda: None)
@@ -78,18 +80,22 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     assert nodes["#status-table"].display is True
     dummy.snapshot = replace(RUNNING, phase_data=None, errors=(TIMEOUT,))
     ConsoleApp.refresh_views(dummy)
-    assert nodes["#status-table"].display is False
-    assert f"beads unavailable: {TIMEOUT.kind}; {TIMEOUT.fix}" in nodes["#dashboard"].value.plain
+    assert nodes["#status-table"].display is True  # a labelled placeholder, never hidden
+    assert nodes["#status-table"].value.plain == f"Sprint status: unavailable - {error_text(TIMEOUT)}"
+    assert f"beads unavailable: {error_text(TIMEOUT)}" in nodes["#dashboard"].value.plain
     assert seen == [RUNNING]
     dummy.snapshot = RUNNING
     ConsoleApp.refresh_views(dummy)
     assert nodes["#status-table"].display is True
     assert seen == [RUNNING, RUNNING]
-    dummy.runs_error = "open bead read failed"
+    dummy.sanity_held = Held().apply(Err(TIMEOUT), datetime.now(UTC))
+    dummy.open_quality_held = Held().apply(Err(TIMEOUT), datetime.now(UTC))
     ConsoleApp.refresh_views(dummy)
     assert nodes["#quality-error"].display is True
-    assert "open bead read failed" in nodes["#quality-error"].value.plain
-    assert "open bead read failed" in nodes["#sanity-list"].value.plain
+    assert error_text(TIMEOUT) in nodes["#quality-error"].value.plain
+    assert "Sanity runs: not loaded" in nodes["#sanity-list"].value.plain
+    assert error_text(TIMEOUT) in nodes["#sanity-list"].value.plain
+    assert "Timeout(" not in nodes["#sanity-list"].value.plain
 
 
 def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
@@ -100,16 +106,17 @@ def test_quality_reads_are_requested_only_on_open_or_explicit_refresh() -> None:
         _load_closed_quality=lambda: calls.append("quality"),
         tick=lambda force: calls.append(("tick", force)),
         query_one=lambda *_: active,
+        closed=SimpleNamespace(drop_stage_lists=lambda: calls.append("relist")),
     )
     ConsoleApp.on_tabbed_content_tab_activated(dummy, SimpleNamespace(pane=SimpleNamespace(id="quality")))
     assert calls == ["quality"]
     calls.clear()
     ConsoleApp.action_refresh(dummy)
-    assert calls == [("tick", True)]
+    assert calls == [("tick", True), "relist"]
     calls.clear()
     active.active = "quality"
     ConsoleApp.action_refresh(dummy)
-    assert calls == [("tick", True), "quality"]
+    assert calls == [("tick", True), "relist", "quality"]
 
 
 @pytest.mark.parametrize("size", [(100, 40), (160, 40)])
@@ -732,3 +739,93 @@ def test_off_screen_presses_are_traced_without_raising(tmp_path: Path) -> None:
         assert not (tmp_path / "state" / "diagnostics.log").exists()
 
     run_scenario(scenario())
+
+
+def test_build_line_for_a_release_install_is_the_package_version(monkeypatch) -> None:
+    from atm_bd_console import __version__
+    from atm_bd_console import build as build_module
+
+    monkeypatch.setattr(build_module, "BUILT_IDENTITY", f"{__version__}+g846527b")
+    monkeypatch.setattr(build_module, "_checkout_identity", lambda root: None)
+
+    async def scenario() -> None:
+        app = ConsoleApp(CONFIG, FakeStep(RUNNING), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            assert app.query_one("#build").render().plain == f"atm-bd console {__version__}"
+
+    asyncio.run(scenario())
+
+
+def test_startup_atm_members_error_is_not_repeated_by_the_tick_that_reads_the_same_command() -> None:
+    from atm_bd_console.app import startup_error_applies
+    from atm_bd_console.result import CommandFailed, NotFound
+
+    startup = CommandFailed("command_failed", ("atm", "members", "--team", "t", "--json"), 1, "daemon down", "could not verify the sender; start the daemon")
+    tick_error = replace(startup, fix="start the daemon")
+    sender_missing = NotFound("not_found", "atm-bd@tool", "run atm teams add-member")
+    live = RUNNING
+    stopped = replace(RUNNING, stopped="closed")
+    assert not startup_error_applies(startup, replace(live, errors=(tick_error,)))  # same argv: the tick shows it
+    assert not startup_error_applies(startup, replace(live, errors=()))  # a live tick read members: resolved
+    assert not startup_error_applies(startup, replace(stopped, errors=(tick_error,)))
+    assert startup_error_applies(startup, replace(stopped, errors=()))  # a stopped tick reads no members
+    assert startup_error_applies(sender_missing, replace(live, errors=(tick_error,)))  # a finding the tick never repeats
+
+    async def scenario() -> None:
+        shown = replace(SNAPSHOT, errors=(tick_error,))
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(shown), STATE, startup)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await settle(pilot)
+            assert app.snapshot.errors == (tick_error,)
+
+    run_scenario(scenario())
+
+
+class _QueryLogger:
+    """A logger whose query result is scripted; the other calls a tick makes are accepted and ignored."""
+
+    def __init__(self, queried) -> None:
+        self.queried = queried
+
+    def query(self, **_kwargs):
+        return self.queried
+
+    def event(self, *_args, **_kwargs):
+        return Ok(None)
+
+    def flush(self):
+        return Ok(None)
+
+
+def _diagnostics_text(monkeypatch, tmp_path, logger_result) -> str:
+    monkeypatch.setattr(console, "create_console_logger", lambda *_: logger_result)
+    shown = []
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600, state_dir=str(tmp_path / "state")), FakeStep(RUNNING), STATE)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("TabbedContent").active = "diagnostics"
+            app.refresh_views()
+            await settle(pilot)
+            shown.append(app.query_one("#diagnostics-text").render().plain)
+
+    run_scenario(scenario())
+    return shown[0]
+
+
+def test_diagnostics_shows_the_typed_error_of_a_failed_log_query_not_no_errors(monkeypatch, tmp_path) -> None:
+    from atm_bd_console.result import IoFailed
+
+    failure = IoFailed("io_failed", "logs", "disk unreadable", "inspect the console log directory")
+    text = _diagnostics_text(monkeypatch, tmp_path, Ok(_QueryLogger(Err(failure))))
+    assert f"Unable to read the console log: {error_text(failure)}" in text and "No errors recorded." not in text
+    text = _diagnostics_text(monkeypatch, tmp_path, Err(failure))
+    assert f"Unable to open the console log: {error_text(failure)}" in text and "No errors recorded." not in text
+    assert "No errors recorded." in _diagnostics_text(monkeypatch, tmp_path, Ok(_QueryLogger(Ok(()))))
+
+
+def test_diagnostics_line_survives_a_malformed_stored_timestamp() -> None:
+    event = SimpleNamespace(timestamp="not-a-time", level="error", message="boom")
+    assert console._diagnostic_line(event) == "not-a-time error: boom"

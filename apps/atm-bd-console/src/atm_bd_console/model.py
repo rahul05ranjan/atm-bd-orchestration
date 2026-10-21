@@ -123,8 +123,9 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
 
     held = ()
     assigned: tuple[Action, ...] = ()
-    if (phase is not None and stopped is None and isinstance(inputs.tasks, Ok) and isinstance(inputs.closed_tasks, Ok)
-            and isinstance(inputs.worktrees, Ok)):
+    # No action is built from a failed read: a failed roster would route every assignment to a made-up member.
+    if (phase is not None and stopped is None and isinstance(inputs.members, Ok) and isinstance(inputs.tasks, Ok)
+            and isinstance(inputs.closed_tasks, Ok) and isinstance(inputs.worktrees, Ok)):
         outcome = dispatch(
             phase, tasks, worktrees, remotes, merges, prs, inputs.repo, inputs.lead, now, spec,
             inputs.remotes.error if isinstance(inputs.remotes, Err) else None,
@@ -137,7 +138,8 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
     pr_rows, top_pr = _pr_rows(phase, prs, merges)
     top_ci = top_pr.ci if top_pr else None
     proposed = _problems(phase, held, merges, prs, top_pr, inputs, state, now) if stopped is None else ()
-    agents = _agent_views(members, tasks, phase, inputs.task_beads, now, inputs.repo.bead_prefix)
+    agents = _agent_views(members, tasks, phase, inputs.task_beads, now, inputs.repo.bead_prefix,
+                          tasks_known=isinstance(inputs.tasks, Ok))
     sprint_views, mermaid = _sprint_views(phase, inputs.repo.bead_prefix, agents)
     sections = (Section("Held", held),) if held else ()
     snapshot = Snapshot(
@@ -149,7 +151,7 @@ def tick(inputs: Inputs, state: State, now: datetime, spec: SpecFn) -> tuple[Sna
         agents=agents,
         sections=sections,
         problems=(),
-        errors=tuple(errors),
+        errors=tuple(dict.fromkeys(errors)),  # one row per distinct error, however many reads raised it
         metrics=_metrics(phase, now),
         gh=inputs.gh,
         top_pr=top_pr.number if top_pr else None,
@@ -234,7 +236,7 @@ def _row_prefix(step: Step, bead_prefix: str) -> str:
 
 def _agent_views(
     members, tasks: tuple[Task, ...], phase: Phase | None,
-    task_beads: Result[tuple[Bead, ...]], now: datetime, bead_prefix: str,
+    task_beads: Result[tuple[Bead, ...]], now: datetime, bead_prefix: str, *, tasks_known: bool = True,
 ) -> tuple[AgentView, ...]:
     steps = {step.bead_id: step for step in phase.steps} if phase else {}
     root_id = phase.root_id if phase else None
@@ -249,6 +251,8 @@ def _agent_views(
             status = "offline"
         elif mine:
             status = "busy" if member.presence == "active" else "stalling"
+        elif not tasks_known:
+            status = "unknown"  # the task read failed: nobody is shown idle from data that was never read
         else:
             status = "idle"
         rows: list[Row] = []

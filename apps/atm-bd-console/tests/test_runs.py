@@ -8,6 +8,7 @@ import pytest
 import sc_compose
 
 from atm_bd_console import beads_source, command, findings_renderer, ledger_source, runs, skill_loader
+from atm_bd_console.closed_cache import ClosedBeads
 from atm_bd_console.enums import QaState
 from atm_bd_console.result import Ok
 
@@ -30,7 +31,7 @@ def test_closed_quality_reads_only_relevant_stages_and_checked_ids(monkeypatch) 
         return Ok(command.Output(0, json.dumps(rows)))
 
     monkeypatch.setattr(beads_source.command, "run", run)
-    result = ledger_source.closed_quality("/repo", "bj")
+    result = ledger_source.closed_quality("/repo", "bj", ClosedBeads())
     assert isinstance(result, Ok)
     assert result.value[0][0].pr_number == 42
     assert result.value[1][0]["id"] == "f1"
@@ -49,8 +50,7 @@ def test_run_data_combines_tick_beads_without_mutating_bead_rows(monkeypatch) ->
     finding = {"id": "f1", "labels": ["phase-bj", "stage:finding"], "description": "issue", "design": "fix",
                "dependencies": [{"type": "discovered-from", "depends_on_id": "qa-1"}]}
     opened = ({**dev, "status": "open", "created_at": "2026-10-02T00:00:00Z"},)
-    monkeypatch.setattr(ledger_source, "read_ledger", lambda *_: [])
-    _, quality, findings = ledger_source.collect("/repo", "bj", opened, [qa, finding])
+    quality, findings = ledger_source.open_quality("bj", (*opened, qa, finding))
     assert quality[0].pr_number == 42 and quality[0].verdict is QaState.PASS
     assert findings == [finding]
     assert "checked_bead_data" not in qa

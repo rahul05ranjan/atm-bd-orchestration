@@ -12,6 +12,7 @@ from textual.widgets import OptionList
 from atm_bd_console.app import ConsoleApp
 from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.result import IoFailed
+from atm_bd_console.timefmt import clock
 from atm_bd_console.types import Metrics, StepResult
 
 LATER = RUNNING.generated_at + timedelta(seconds=60)
@@ -35,8 +36,11 @@ def test_phase_failure_keeps_every_phase_part_and_shows_one_indicator() -> None:
     for part in ("phase_data", "sprints", "sections", "agents", "problems", "prs", "metrics", "mermaid", "phase", "top_pr"):
         assert getattr(shown, part) == getattr(RUNNING, part), part
     assert shown.generated_at == LATER
-    assert TIMEOUT not in shown.errors
-    assert health.indicator() == f"! beads.open failed since {LATER:%H:%M:%S}"
+    assert TIMEOUT in shown.errors  # kept, tagged `carried since T` by the renderers
+    assert health.carried_since(TIMEOUT) == LATER
+    assert health.phase_error() == TIMEOUT
+    assert health.indicator(LATER) == (
+        f"! beads.open failed since {clock(LATER, seconds=True)} · showing data from {clock(RUNNING.generated_at, seconds=True)} (1m old)")
 
 
 def test_failure_since_is_kept_while_it_persists_and_clears_on_success() -> None:
@@ -44,10 +48,10 @@ def test_failure_since_is_kept_while_it_persists_and_clears_on_success() -> None
     health.apply(RUNNING, {})
     health.apply(blanked(), {"beads.open": TIMEOUT})
     health.apply(replace(blanked(), generated_at=LATEST), {"beads.open": TIMEOUT})
-    assert f"since {LATER:%H:%M:%S}" in (health.indicator() or "")
+    assert f"since {clock(LATER, seconds=True)}" in (health.indicator(LATEST) or "")
     recovered = replace(RUNNING, generated_at=LATEST + timedelta(seconds=60))
     assert health.apply(recovered, {}) is recovered
-    assert health.indicator() is None
+    assert health.indicator(LATEST) is None
 
 
 @pytest.mark.parametrize("source", ["atm.members", "atm.tasks", "beads.show_tasks", "beads.task_ancestors"])
@@ -61,8 +65,8 @@ def test_agent_source_failure_keeps_agents_and_held_but_takes_fresh_phase(source
     assert shown.task_data == RUNNING.task_data and shown.sections == RUNNING.sections
     assert shown.problems == RUNNING.problems
     assert shown.metrics == Metrics(9, 9, 100, 1)
-    assert shown.errors == ()
-    assert source in (health.indicator() or "")
+    assert shown.errors == (TIMEOUT,)
+    assert source in (health.indicator(LATEST) or "")
 
 
 @pytest.mark.parametrize("source", ["git.worktrees", "atm.task_events"])
@@ -87,7 +91,7 @@ def test_unrelated_source_failure_changes_nothing() -> None:
     health.apply(RUNNING, {})
     fresh = replace(RUNNING, generated_at=LATER, errors=(TIMEOUT,))
     assert health.apply(fresh, {"git.fetch": TIMEOUT}) == fresh
-    assert health.indicator() is None
+    assert health.indicator(LATEST) is None
 
 
 def test_tick_failure_leaves_data_and_clears_on_next_success() -> None:
@@ -96,9 +100,10 @@ def test_tick_failure_leaves_data_and_clears_on_next_success() -> None:
     health.tick_failed(IoFailed("io_failed", "console tick", "boom", "retry"), LATER)
     health.tick_failed(IoFailed("io_failed", "console tick", "boom", "retry"), LATEST)
     assert health.last_good is RUNNING
-    assert health.indicator() == f"! tick failed since {LATER:%H:%M:%S}"
+    assert health.indicator(LATER) == (
+        f"! tick failed since {clock(LATER, seconds=True)} · showing data from {clock(RUNNING.generated_at, seconds=True)} (1m old)")
     health.apply(replace(RUNNING, generated_at=LATEST), {})
-    assert health.indicator() is None
+    assert health.indicator(LATEST) is None
 
 
 class ScriptedStep:
@@ -153,8 +158,13 @@ def _drive(script) -> tuple[dict, dict, dict]:
 def test_every_screen_keeps_its_data_through_a_failed_poll_and_recovers(failure) -> None:
     good = StepResult(RUNNING, STATE)
     before, during, after = _drive((good, failure, good))
-    for screen in ("sprints", "table", "dashboard", "prs", "status-bar"):
+    for screen in ("sprints", "table", "prs", "status-bar"):
         assert during[screen] == before[screen], screen
+    # The dashboard keeps every line it had and adds the stale indicator, which says how old the content is.
+    assert set(before["dashboard"].splitlines()) <= set(during["dashboard"].splitlines()) | {
+        line for line in before["dashboard"].splitlines() if line.startswith("== Errors")}
+    assert "failed since" in during["dashboard"] and "showing data from" in during["dashboard"]
+    assert "failed since" not in before["dashboard"] and "failed since" not in after["dashboard"]
     assert "failed since" in during["header"]
     assert "failed since" not in before["header"] and "failed since" not in after["header"]
     assert after == before

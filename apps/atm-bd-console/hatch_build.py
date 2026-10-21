@@ -51,12 +51,10 @@ class CustomBuildHook(BuildHookInterface):
                 raise RuntimeError("cannot build console identity: checkout is shallow")
             revision = subprocess.check_output(["git", "-C", root, "rev-parse", "--short", "HEAD"], text=True).strip()
             commit = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip()
-            count = subprocess.check_output(["git", "-C", root, "rev-list", "--count", "HEAD"], text=True).strip()
             dirty = subprocess.check_output(["git", "-C", root, "status", "--porcelain", "--", ".", ":!.ok"], text=True).strip()
         except (OSError, subprocess.CalledProcessError) as error:
             raise RuntimeError("cannot build console identity: git command failed") from error
-        major, minor, _patch = package_version.split(".", 2)
-        identity = f"{major}.{minor}.{count}+g{revision}{'-dirty' if dirty else ''}"
+        identity = f"{package_version}+g{revision}{'-dirty' if dirty else ''}"
         self._include_skills(package, root, build_data, package_version)
         output = self._managed_build_dir() / "_build_identity.py"
         output.write_text(f'IDENTITY = {identity!r}\nCOMMIT = {commit!r}\n')

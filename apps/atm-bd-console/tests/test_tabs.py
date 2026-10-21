@@ -571,3 +571,41 @@ def test_resizing_to_80_columns_rerenders_without_wide_lines() -> None:
             assert app.query_one("#status-panel").max_scroll_x > 0
 
     run_scenario(scenario())
+
+
+def test_status_header_is_unavailable_not_zero_of_zero_when_the_phase_has_no_data() -> None:
+    from contract_samples import TIMEOUT
+
+    from atm_bd_console.app import phase_unavailable
+    from atm_bd_console.error_text import error_text
+    from atm_bd_console.poll_health import PollHealth
+
+    failed = replace(RUNNING, phase_data=None, sprints=(), errors=(TIMEOUT,))
+    assert status_header(failed).plain == f"sprints: unavailable - {error_text(TIMEOUT)}"
+    assert "0/0" not in status_header(failed).plain
+    assert phase_unavailable(replace(failed, errors=()), PollHealth()) == "unavailable - the phase has not been read"
+    assert phase_unavailable(RUNNING) is None
+    assert status_header(RUNNING).plain.startswith("sprints ")
+
+
+def test_sprint_tab_shows_placeholders_when_the_phase_failed_and_nothing_was_carried() -> None:
+    from contract_samples import TIMEOUT
+
+    from atm_bd_console.error_text import error_text
+
+    failed = replace(RUNNING, phase_data=None, sprints=(), errors=(TIMEOUT,))
+
+    async def scenario() -> None:
+        app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(failed), STATE)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await settle(pilot)
+            reason = f"unavailable - {error_text(TIMEOUT)}"
+            assert app.query_one("#status-table").display is True
+            assert reason in str(app.query_one("#status-table").render())
+            assert str(app.query_one("#status-header").render()).startswith("sprints: unavailable")
+            sprints = app.query_one("#sprints")
+            assert sprints.option_count == 1 and reason in sprints.get_option_at_index(0).prompt.plain
+            app._show_sprint("none")
+            assert reason in str(app.query_one("#sprint-steps-text").render())
+
+    run_scenario(scenario())
