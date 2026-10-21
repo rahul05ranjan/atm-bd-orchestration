@@ -45,9 +45,9 @@ runs it.
 
 ## Command timeouts, retries and diagnostics
 
-Each `bd`, `git` and `gh` call is bounded by `COMMAND_TIMEOUT` seconds (30 on `main`; 180 once `ATM_BD_GATE_TIMEOUT_S` lands). A call that times out is not retried: it fails the close with `COMMAND.FAILED` after one `COMMAND_TIMEOUT`. A `bd` call that fails with a dropped Dolt connection (output matching `invalid connection` or `i/o timeout`, seen at host load 40-55) is retried `DOLT_RETRIES = 3` times, sleeping `DOLT_RETRY_SLEEP_S = 10` seconds between attempts.
+Each `bd`, `git` and `gh` call is bounded by `COMMAND_TIMEOUT` seconds (default 180, overridable with the `ATM_BD_GATE_TIMEOUT_S` environment variable). A call that times out is not retried: it fails the close with `COMMAND.FAILED` after one `COMMAND_TIMEOUT`. A `bd` call that fails with a dropped Dolt connection (output matching `invalid connection` or `i/o timeout`, seen at host load 40-55) is retried `DOLT_RETRIES = 3` times, sleeping `DOLT_RETRY_SLEEP_S = 10` seconds between attempts.
 
-Worst case for one `bd` call that keeps dropping: `(3 + 1) x COMMAND_TIMEOUT + 3 x 10`. That is 150s at the 30s timeout and 750s at the 180s timeout. A close makes several `bd` calls, so a fully starved close can wait that long per call. A close that times out waits one `COMMAND_TIMEOUT` (30s or 180s) before failing.
+Worst case for one `bd` call that keeps dropping: `(3 + 1) x COMMAND_TIMEOUT + 3 x 10`. That is 750s at the default 180s timeout. A close makes several `bd` calls, so a fully starved close can wait that long per call. A close that times out waits one `COMMAND_TIMEOUT` (180s by default) before failing.
 
 The hook records every attempt that was not a clean first-try success, and a success that needed a retry, under `attempts` in its JSON output: `command`, `attempt`, `timeout_s`, `elapsed_s`, `outcome` (`ok`, `dolt_drop_retry`, `failed`, `timeout`, `error`), `retries_until_now`, `total_elapsed_s`, `load_avg` (1, 5 and 15 minute `os.getloadavg`) and `cpu_pct` (1 minute load as a percentage of CPU count; `null` where `os.getloadavg` is unavailable).
 

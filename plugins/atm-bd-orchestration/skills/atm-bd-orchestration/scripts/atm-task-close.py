@@ -24,7 +24,7 @@ from stack_top import select_stack_top
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 ROLES = ("dev", "fix", "sanity", "qa")
-COMMAND_TIMEOUT = 30
+COMMAND_TIMEOUT = int(os.environ.get("ATM_BD_GATE_TIMEOUT_S", "180"))
 ASSIGNMENT_EVENTS = frozenset(("assigned", "reassigned", "reopened"))
 TERMINAL_STATES = frozenset(("complete",))
 COMPLETED = "completed"

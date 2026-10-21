@@ -233,7 +233,8 @@ def test_deadline_injection_convention_matches_assignment_gates(world, monkeypat
     spec = importlib.util.spec_from_file_location("assignment_gates_deadline_contract", SCRIPTS / "assignment-gates.py")
     gates = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gates)
-    assert hook.COMMAND_TIMEOUT == gates.COMMAND_TIMEOUT == 30
+    assert hook.COMMAND_TIMEOUT == 180
+    assert gates.COMMAND_TIMEOUT == 30
     for entry_point in (hook.main, hook.Hook.__init__, gates.main):
         assert "command_timeout" not in inspect.signature(entry_point).parameters
     instance = hook.Hook("dev", world.values, world.path, world, lambda: 42)
