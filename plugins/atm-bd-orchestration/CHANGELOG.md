@@ -12,6 +12,8 @@
 - The close hook closes the dev's task at dev complete (after assigning sanity), so the dev starts its next queued task at once; sanity PASS no longer closes it, and a sanity FAIL re-assigns the same task id. `dev-template`, `fix-assignment`, `dev-complete` and `fix-complete` say so (#467, PR #519).
 - The close hook retries a `bd` call that fails with a dropped Dolt connection (`invalid connection` or `i/o timeout`) 3 times, 10 seconds apart, and records each non-clean attempt under `attempts` in its JSON output with timeout, elapsed time, load average and CPU percentage. A real timeout is not retried. `COMMAND_TIMEOUT` defaults to 180 seconds and is read from `ATM_BD_GATE_TIMEOUT_S` (#514, PR #521).
 - A failed bead, ATM or git read in the console keeps the last good phase, agents, held rows, problems and worktrees on screen and shows `source failed since HH:MM:SS` in the header until the next poll succeeds (#515, PR #520).
+- A failed `bd` read keeps its original typed error end to end; `not_found` is reported only for a successful empty read. This also fixes two further sites that collapsed an `Err` into a missing value, `config.code_repository` and `queues._local_issues` (#524, PR #525).
+- #215 is fixed for real phase epics: `bead-groups` recognizes the real phase epic shape for phase-end finding pours (#215, PR #526).
 
 ## [0.18.2] - 2026-10-20
 
