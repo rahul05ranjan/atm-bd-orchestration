@@ -43,6 +43,7 @@ from .terminal import CONSOLE_DRIVER_CLASS
 from .types import INITIAL_STATE, AgentView, Config, Snapshot, SprintView, State, StepFn, StepResult
 
 STEP_KINDS = ("dev", "sanity", "qa", "fix")
+STEPS_PLACEHOLDER = "unavailable - the phase has not been read"
 FINDINGS_PLACEHOLDER = "*Select a run to see its findings.*"
 
 
@@ -413,7 +414,7 @@ class ConsoleApp(App[int]):
                 with Horizontal(id="sprint-details"):
                     yield SprintList(id="sprints")
                     with VerticalScroll(id="sprint-steps"):
-                        yield Static(id="sprint-steps-text")
+                        yield Static(Text(STEPS_PLACEHOLDER, style="dim"), id="sprint-steps-text")
             with TabPane("PRs", id="prs"), VerticalScroll():
                 yield Static(id="prs-text")
             with TabPane("Sanity", id="sanity"), VerticalScroll():
@@ -617,6 +618,8 @@ class ConsoleApp(App[int]):
             self.health.tick_failed(error, datetime.now(UTC))
         else:
             self.tick_error = error
+            self.query_one("#sprint-steps-text", Static).update(
+                Text(f"unavailable - {error_text(error)}", style="dim"))
         logger = create_console_logger(self.config.repo_root)
         if isinstance(logger, Ok):
             logger.value.event("error", level="error", message=error_message(asdict(error)), error=asdict(error))
