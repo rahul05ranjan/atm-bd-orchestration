@@ -281,3 +281,16 @@ def test_quality_stage_lists_survive_a_restart(monkeypatch, tmp_path):
     assert isinstance(result, Ok) and [run.bead["id"] for run in result.value[0]] == ["qa-1", "qa-2"]
     assert fake.lists == ["qa", "finding"]  # no list after the restart
     assert fake.shows == [("dev-1",), ("qa-2",), ("dev-2",)]
+
+
+def test_forget_beads_evicts_the_closed_rows_and_stage_rows_too() -> None:
+    cache = ClosedBeads()
+    row = {"id": "qa-1", "status": "closed"}
+    cache.store_beads([bead("qa-1")])
+    cache.set_stage_rows("phase-bh", "qa", [row, {"id": "qa-2", "status": "closed"}])
+
+    cache.forget_beads(["qa-1"])
+
+    assert cache.missing_rows(["qa-1"]) == ("qa-1",)
+    assert cache.cached_rows(["qa-1"]) == []
+    assert [r["id"] for r in cache.stage_rows("phase-bh", "qa") or []] == ["qa-2"]

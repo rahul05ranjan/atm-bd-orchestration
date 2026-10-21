@@ -8,6 +8,7 @@ from pathlib import Path
 from atm_bd_console.codec import from_json
 from atm_bd_console.command import Output
 from atm_bd_console.enums import SprintState
+from atm_bd_console.error_text import error_text
 from atm_bd_console.icons import SPRINT_ICONS
 from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, NotFound, Ok, Timeout
 from atm_bd_console.status import DagPane, _fallback, status_text
@@ -246,3 +247,14 @@ def test_stale_reason_prints_a_many_id_bd_argv_as_a_count_and_the_error_keeps_th
 
     assert "bd show (28 ids) timed out after 20s" in text and "atm-bk-0" not in text
     assert error is beads and error.argv == ("bd", "show", *ids)
+
+
+def test_dag_reason_uses_the_shared_error_text_not_the_backticked_log_format() -> None:
+    error = Timeout("timeout", ("gh", "api", "graphql"), 10, "retry")
+    pane = DagPane()
+
+    text, shown = pane_show(pane, FakeMmdflux(), replace(snapshot(), sprints=(), mermaid="graph TD", errors=(error,)))
+
+    assert shown is error
+    assert error_text(error) in text
+    assert "`retry`" not in text

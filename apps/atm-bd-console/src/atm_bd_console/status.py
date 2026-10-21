@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from . import command
@@ -10,7 +10,6 @@ from .enums import SprintState
 from .error_text import error_text
 from .icons import SPRINT_ICONS
 from .ids import short_id
-from .log import error_message
 from .render import render_agent
 from .result import CommandFailed, ConfigInvalid, Err, Error, NotFound, Result, Timeout
 from .types import Snapshot, SprintView
@@ -110,9 +109,7 @@ def _reason(error: Error) -> str:
     argv = getattr(error, "argv", None)
     if argv and argv[0] == "bd" and _short_argv(tuple(argv)) != tuple(argv):
         return error_text(replace(error, argv=_short_argv(tuple(argv))))  # type: ignore[type-var]
-    if isinstance(error, CommandFailed):
-        return f"{error.kind}: {' '.join(error.argv)} exit {error.code}: {error.stderr or 'no stderr'}\nfix: {error.fix}"
-    return error_message(asdict(error))
+    return error_text(error)
 
 
 @dataclass
