@@ -286,23 +286,32 @@ def _worktrees(repo_root: Path, runner=command.run) -> dict[str, str]:
     return found
 
 
-def _stack_view(trunk: str, candidates: list[str], paths: dict[str, str], runner=command.run) -> dict[str, Any] | None:
+def _stack_view(trunk: str, candidates: list[str], paths: dict[str, str], runner=command.run) -> tuple[dict[str, Any] | None, list[str]]:
     """The one `gh stack view --json` of the phase stack, read from the trunk worktree or, failing that, a layer worktree.
-    None when no worktree can produce it (gh missing, no API, not a stack): the caller then reads git locally."""
+    Returns (view, reasons). The view is None when no worktree can produce it (gh missing, no API, not a stack); the reasons then
+    carry every attempt's verbatim error so the caller can announce the fallback to local git."""
+    reasons: list[str] = []
     for branch in list(dict.fromkeys([trunk, *candidates]))[:5]:
         worktree = paths.get(branch)
         if worktree is None:
             continue
         result = runner(["gh", "stack", "view", "--json"], "run `gh stack view --json` in a worktree of the phase stack", cwd=worktree)
         if isinstance(result, Err):
+            reasons.append(f"{branch} ({worktree}): {error_message(asdict(result.error))}")
             continue
         try:
             view = json.loads(result.value.stdout)
-        except ValueError:
+        except ValueError as error:
+            reasons.append(f"{branch} ({worktree}): `gh stack view --json` output is not JSON: {error}")
             continue
         if isinstance(view, dict) and view.get("trunk") == trunk and isinstance(view.get("branches"), list):
-            return view
-    return None
+            return view, reasons
+        got = view.get("trunk") if isinstance(view, dict) else type(view).__name__
+        reasons.append(f"{branch} ({worktree}): `gh stack view --json` is for trunk {got!r} (expected {trunk!r}) "
+                       f"or has no `branches` list")
+    if not reasons:
+        reasons.append(f"no worktree of {trunk} or its layers to run `gh stack view --json` in")
+    return None, reasons
 
 
 def _sha(value: Any) -> str:
@@ -347,19 +356,27 @@ def _local_issues(trunk: str, layers: list[str], paths: dict[str, str], repo_roo
     return issues
 
 
+def _stack_row(row_id: str, title: str, detail: str, now: datetime) -> dict[str, Any]:
+    return {"queue": "stack_incoherent", "id": row_id, "stage": "stack", "status": "open", "assignee": "-",
+            "priority": None, "since": None, "age": age(None, now), "title": title, "detail": detail}
+
+
 def stacks(trunk: str, queues: dict[str, list[dict[str, Any]]], now: datetime, repo_root: Path, runner=command.run,
            layers: tuple[str, ...] = ()) -> str:
     """One stack check: one `gh stack view --json`, or the local read-only fallback, producing at most one queue row."""
     paths = _worktrees(repo_root, runner)
-    view = _stack_view(trunk, list(reversed(layers)), paths, runner)
+    view, reasons = _stack_view(trunk, list(reversed(layers)), paths, runner)
     if view is not None:
         issues, source = _view_issues(view, trunk, paths), "gh stack view"
     else:
         issues, source = _local_issues(trunk, list(layers), paths, repo_root, runner), "local git"
+        degraded = ("gh stack view unavailable, fell back to local git, which cannot see needsRebase or missing-PR faults: "
+                    + "; ".join(reasons))
+        print(f"atm-bd queues: {degraded}", file=sys.stderr)
+        source += ": " + "; ".join(reasons)
+        queues["stack_incoherent"].append(_stack_row(f"stack:{trunk}:gh-unavailable", f"stack on {trunk} (degraded)", degraded, now))
     if issues:
-        queues["stack_incoherent"].append({
-            "queue": "stack_incoherent", "id": f"stack:{trunk}", "stage": "stack", "status": "open", "assignee": "-",
-            "priority": None, "since": None, "age": age(None, now), "title": f"stack on {trunk}", "detail": "; ".join(issues)})
+        queues["stack_incoherent"].append(_stack_row(f"stack:{trunk}", f"stack on {trunk}", "; ".join(issues), now))
     return f"{len(issues)} stack issue(s) on {trunk} ({source})"
 
 

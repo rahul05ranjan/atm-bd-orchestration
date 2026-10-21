@@ -398,13 +398,13 @@ def test_merged_layers_are_skipped_and_the_next_layer_is_checked_against_them():
     assert rows["stack_incoherent"] == []
 
 
-def test_local_fallback_is_silent_when_gh_is_unavailable_and_the_chain_is_coherent():
+def test_local_fallback_with_a_coherent_chain_reports_only_the_degraded_row(capsys):
     run, calls = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
 
     note, rows = check(run)
 
-    assert all(not value for value in rows.values())
-    assert note == f"0 stack issue(s) on {TRUNK} (local git)"
+    assert [row["id"] for row in rows["stack_incoherent"]] == [f"stack:{TRUNK}:gh-unavailable"]
+    assert note.startswith(f"0 stack issue(s) on {TRUNK} (local git: ")
     assert [argv for argv, _ in calls if argv[:2] == ["git", "merge-base"]] == [
         ["git", "merge-base", "--is-ancestor", TRUNK, "layer-a"], ["git", "merge-base", "--is-ancestor", "layer-a", "layer-b"]]
 
@@ -414,17 +414,57 @@ def test_local_fallback_reports_a_broken_chain_read_only_without_calling_gh_for_
 
     _, rows = check(run)
 
-    assert rows["stack_incoherent"][0]["detail"] == (
+    fault = next(row for row in rows["stack_incoherent"] if row["id"] == f"stack:{TRUNK}")
+    assert fault["detail"] == (
         "layer-b does not contain the head of layer-a (`git merge-base --is-ancestor layer-a layer-b` exited 1); "
         "the stack writer rebases it onto layer-a in /fixture/code/b")
     assert not any(argv[0] == "git" and argv[1] in ("rebase", "merge", "reset", "push") for argv, _ in calls)
     assert not any(row for key, value in rows.items() if key != "stack_incoherent" for row in value)
 
 
-def test_gh_failure_is_never_reported_as_a_stack_fault():
+def test_gh_failure_is_a_degraded_row_with_the_verbatim_error_and_never_a_stack_fault(capsys):
     run, _ = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
+
+    note, rows = check(run)
+
+    assert [row["id"] for row in rows["stack_incoherent"]] == [f"stack:{TRUNK}:gh-unavailable"]
+    detail = rows["stack_incoherent"][0]["detail"]
+    assert "fell back to local git" in detail and "needsRebase" in detail
+    assert "gh stack view --json" in detail and "[1] current branch is not part of a stack" in detail
+    assert detail in capsys.readouterr().err and "current branch is not part of a stack" in note
+
+
+def test_unparseable_gh_json_falls_back_announcing_the_parse_error(capsys):
+    run, _ = stack_runner(ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
+
+    def garbled(argv, fix, **kwargs):
+        return Ok(Output(0, "{not json")) if argv == ["gh", "stack", "view", "--json"] else run(argv, fix, **kwargs)
+
+    note, rows = check(garbled)
+
+    detail = rows["stack_incoherent"][0]["detail"]
+    assert rows["stack_incoherent"][0]["id"] == f"stack:{TRUNK}:gh-unavailable"
+    assert "output is not JSON: Expecting property name enclosed in double quotes" in detail
+    assert "(local git: " in note and detail in capsys.readouterr().err
+
+
+def test_view_for_another_trunk_falls_back_saying_why(capsys):
+    other = {"trunk": "main", "branches": []}
+    run, _ = stack_runner(other, ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
+
     _, rows = check(run)
-    assert not any("gh" in row["detail"] for value in rows.values() for row in value)
+
+    detail = rows["stack_incoherent"][0]["detail"]
+    assert "is for trunk 'main' (expected 'integrate/phase-bj')" in detail
+    assert detail in capsys.readouterr().err
+
+
+def test_degraded_row_and_real_local_fault_are_both_reported():
+    run, _ = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a")})
+
+    _, rows = check(run)
+
+    assert [row["id"] for row in rows["stack_incoherent"]] == [f"stack:{TRUNK}:gh-unavailable", f"stack:{TRUNK}"]
 
 
 def test_failed_merge_base_read_is_reported_not_treated_as_no_issue() -> None:
