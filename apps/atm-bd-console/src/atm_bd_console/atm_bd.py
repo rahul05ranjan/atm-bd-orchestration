@@ -156,7 +156,10 @@ def _phase_templates(root: Path, raw: object) -> Result[Mapping[str, str]]:
                 and (root / path).resolve().is_relative_to((root / TEMPLATE_DIRECTORY).resolve())
                 and os.path.isfile(os.path.join(root, value))
             )
-        except (OSError, RuntimeError, ValueError):
+        except OSError as error:
+            return Err(IoFailed("io_failed", str(root / path), str(error),
+                                f"make {root / path} and {root / TEMPLATE_DIRECTORY} readable and resolvable"))
+        except (RuntimeError, ValueError):
             valid = False
         if not valid:
             return Err(ConfigInvalid("config_invalid", key, repr(value), fix))
