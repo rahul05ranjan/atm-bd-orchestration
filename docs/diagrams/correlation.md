@@ -29,7 +29,7 @@ picks the agent at dispatch.
 
 | Bead | ATM task held by | Template |
 | --- | --- | --- |
-| dev | a dev, by `difficulty` | `dev-template.xml.j2` (`dev-fix.xml.j2` after a sanity FAIL) |
+| dev | a dev, by `difficulty` | `dev-template.xml.j2` (a sanity FAIL reopens the same bead; `sanity-fail.xml.j2` goes to its assignee) |
 | fix | a dev, by `difficulty` | `fix-assignment.xml.j2` |
 | sanity | dev-sanity | `dev-sanity-template.xml.j2` |
 | qa | quality-mgr | `qa-template.xml.j2` |
