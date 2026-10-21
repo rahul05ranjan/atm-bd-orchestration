@@ -80,14 +80,31 @@ def test_missing_phase_shows_error_in_dashboard_and_status_bar() -> None:
                     sections=(Section("Held", (SectionRow("atm-bh-6", 180, "conflict", None),)),))
     dashboard_text = dashboard(value, 120, 40).plain
     status_text = status_bar(value, 120).plain
-    assert "beads unavailable: timeout; retry the bd read" in dashboard_text
+    assert "beads unavailable: timeout: bd show timed out after 20s; retry the bd read" in dashboard_text
     assert "busy" in dashboard_text and "== Held (1)" in dashboard_text
     assert "beads ⛔ timeout" in status_text and "0/0" not in status_text
 
 
+def test_timeout_headline_names_command_seconds_and_fix() -> None:
+    error = Timeout("timeout", ("bd", "list", "-l", "phase-bh"), 20, "bd or Dolt is slow; check the host load")
+    value = replace(snapshot(), phase_data=None, errors=(error,), metrics=Metrics(0, 0, 0, 0))
+    headline = next(line for line in dashboard(value, 160, 40).plain.splitlines() if line.startswith("beads unavailable"))
+    assert headline == ("beads unavailable: timeout: bd list -l phase-bh timed out after 20s; "
+                        "bd or Dolt is slow; check the host load")
+
+
+def test_command_failed_headline_names_exit_code_and_stderr() -> None:
+    error = CommandFailed("command_failed", ("bd", "ready"), 3, "dolt: connection refused\n", "start dolt")
+    second = Timeout("timeout", ("git", "fetch"), 60, "retry")
+    value = replace(snapshot(), phase_data=None, errors=(error, second), metrics=Metrics(0, 0, 0, 0))
+    text = dashboard(value, 160, 40).plain
+    assert "beads unavailable: command_failed: bd ready (exit 3): dolt: connection refused; start dolt" in text
+    assert "== Errors (2)" in text and "git fetch timed out after 60s" in text
+
+
 def test_missing_phase_without_error_has_fallback_diagnostics() -> None:
     value = replace(snapshot(), phase_data=None, errors=(), metrics=Metrics(0, 0, 0, 0))
-    assert "beads unavailable: unavailable; retry the phase read" in dashboard(value, 120, 40).plain
+    assert "beads unavailable: unavailable: retry the phase read" in dashboard(value, 120, 40).plain
     assert "beads ⛔ unavailable" in status_bar(value, 120).plain
 
 

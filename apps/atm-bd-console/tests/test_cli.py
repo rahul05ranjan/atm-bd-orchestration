@@ -35,6 +35,7 @@ from rich.text import Text
 from atm_bd_console import app, cli, runner
 from atm_bd_console.build import identity
 from atm_bd_console.enums import MergeState, SprintState
+from atm_bd_console.error_text import error_text
 from atm_bd_console.result import CommandFailed, Err, IoFailed, LockHeld, NotFound, Ok
 from atm_bd_console.state import acquire_lock, load_snapshot, load_state
 from atm_bd_console.status_table import markdown, rows
@@ -253,7 +254,7 @@ def test_show_returns_failure_for_missing_phase(monkeypatch, capsys, stopped) ->
     monkeypatch.setattr(cli, "now", lambda: FIXED_NOW)
     assert cli.main(["show", "--phase", "bh"]) == 2
     output = capsys.readouterr().out
-    assert f"beads unavailable: {TIMEOUT.kind}; {TIMEOUT.fix}" in output
+    assert f"beads unavailable: {error_text(TIMEOUT)}" in output
     if stopped is None:
         assert f"beads ⛔ {TIMEOUT.kind}" in output
 

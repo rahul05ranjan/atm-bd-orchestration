@@ -7,6 +7,7 @@ from rich.text import Text
 
 from .agent_roles import AGENT_GROUPS, agent_group
 from .enums import SprintState
+from .error_text import error_text as _error_text
 from .icons import (
     MARKER_FAST,
     MARKER_FIX_QA,
@@ -21,18 +22,7 @@ from .icons import (
     icon_for,
 )
 from .ids import short_id
-from .result import (
-    CommandFailed,
-    ConfigInvalid,
-    Error,
-    IoFailed,
-    LockHeld,
-    NotFound,
-    ParseFailed,
-    Rejected,
-    Timeout,
-    Unreachable,
-)
+from .result import Error
 from .types import Action, AgentView, GhStatus, Member, Row, Snapshot
 
 _STATUSES = {
@@ -151,32 +141,6 @@ def _agent_lines(agent: AgentView, prefix: str) -> list[Text]:
     return lines
 
 
-def _error_text(error: Error) -> str:
-    if isinstance(error, CommandFailed):
-        detail = f"{' '.join(error.argv)} (exit {error.code}): {error.stderr}"
-    elif isinstance(error, Timeout):
-        detail = f"{' '.join(error.argv)} timed out after {error.seconds}s"
-    elif isinstance(error, Rejected):
-        detail = f"{' '.join(error.argv)} (status {error.status}): {error.message}"
-    elif isinstance(error, Unreachable):
-        detail = f"{' '.join(error.argv)}: {error.message}"
-    elif isinstance(error, ParseFailed):
-        detail = f"{error.source}: {error.message}"
-    elif isinstance(error, NotFound):
-        detail = error.what
-    elif isinstance(error, ConfigInvalid):
-        detail = f"{error.key}={error.value}"
-    elif isinstance(error, LockHeld):
-        age = "unknown" if error.snapshot_age_s is None else f"{error.snapshot_age_s}s"
-        detail = f"snapshot age {age}"
-    elif isinstance(error, IoFailed):
-        detail = f"{error.path}: {error.message}"
-    else:
-        # A new Error variant must get its own branch here; never fall through to an unset detail.
-        raise TypeError(f"unknown error variant {type(error).__name__}; add it to _error_text")
-    return f"{error.kind}: {detail}; {error.fix}"
-
-
 def _pr_link(line: Text, number: int, snapshot: Snapshot) -> None:
     match = next((row for row in snapshot.prs if row.pr.number == number), None)
     line.append(f" PR #{number}", style=f"link {match.pr.url}" if match else None)
@@ -195,8 +159,8 @@ def _sent_line(action: Action, snapshot: Snapshot) -> Text:
 
 def _beads_error(snapshot: Snapshot) -> tuple[str, str]:
     if snapshot.errors:
-        return snapshot.errors[0].kind, snapshot.errors[0].fix
-    return "unavailable", "retry the phase read"
+        return snapshot.errors[0].kind, _error_text(snapshot.errors[0])
+    return "unavailable", "unavailable: retry the phase read"
 
 
 def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
@@ -206,8 +170,8 @@ def dashboard(snapshot: Snapshot, width: int, height: int) -> Text:
     elif snapshot.stopped == "idle":
         lines.append(Text("stopped: idle 60 min"))
     if snapshot.phase_data is None:
-        kind, fix = _beads_error(snapshot)
-        lines.append(Text(f"beads unavailable: {kind}; {fix}", style="red"))
+        _, text = _beads_error(snapshot)
+        lines.append(Text(f"beads unavailable: {text}", style="red"))
     lines.append(Text())
     for agent in sorted(snapshot.agents, key=lambda member: (
         AGENT_GROUPS.index(agent_group(member.agent_type)), member.name,

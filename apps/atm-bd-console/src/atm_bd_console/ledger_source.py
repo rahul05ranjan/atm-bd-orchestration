@@ -13,7 +13,7 @@ def read_ledger(repo_root: str, phase: str) -> list[dict[str, Any]]:
     shared, _ = load_skill(repo_root, "atm-beads/scripts/sanity_shared.py")
 
     def run_git(argv, **kwargs):
-        result = command.run(argv, "locate sanity ledger", cwd=kwargs.get("cwd"))
+        result = command.run(argv, "run the git command by hand in the repo root and repair what it reports, then re-read the ledger", cwd=kwargs.get("cwd"))
         if isinstance(result, Err):
             raise RuntimeError(f"cannot locate sanity ledger: {result.error}")  # noqa: TRY004
         return result.value

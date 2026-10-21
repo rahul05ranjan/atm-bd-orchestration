@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
 from . import command
 from .atm_source import sprint_state_of
-from .result import Err, Ok, ParseFailed, Result
+from .result import CommandFailed, Err, Ok, ParseFailed, Result, Timeout
 from .types import Bead
 
 
@@ -33,8 +33,18 @@ def _bead(raw: dict[str, Any]) -> Bead:
 
 
 def _raw(argv: list[str], *, cwd: str | None = None) -> Result[list[dict[str, Any]]]:
-    completed = command.run(argv, "inspect bd output", cwd=cwd)
+    line = " ".join(argv)
+    completed = command.run(argv, f"run `{line}` by hand and repair what it reports", cwd=cwd)
     if isinstance(completed, Err):
+        error = completed.error
+        if isinstance(error, Timeout):
+            fix = (f"bd or Dolt is slow or the host is loaded; the call waited {error.seconds}s; "
+                   f"check the host load, then run `{line}` by hand to see how long it takes")
+            return Err(replace(error, fix=fix))
+        if isinstance(error, CommandFailed):
+            fix = (f"`{line}` exited {error.code}; read its stderr above and repair that "
+                   f"(is bd installed and the Dolt server up?), then run it by hand to confirm")
+            return Err(replace(error, fix=fix))
         return completed
     try:
         raw = json.loads(completed.value.stdout)
@@ -42,7 +52,7 @@ def _raw(argv: list[str], *, cwd: str | None = None) -> Result[list[dict[str, An
             raise ValueError("expected an array of bead objects")
         return Ok(raw)
     except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        return Err(ParseFailed("parse_failed", "bd", str(error), "repair bd JSON"))
+        return Err(ParseFailed("parse_failed", "bd", str(error), f"run `{line}` by hand; its JSON is not the expected array of bead objects, so upgrade or repair bd"))
 
 
 def _run(argv: list[str], *, cwd: str | None = None) -> Result[tuple[Bead, ...]]:

@@ -177,7 +177,11 @@ def test_tick_owns_exactly_one_open_and_never_reads_closed(monkeypatch, github_r
 
     monkeypatch.setattr(runner.ledger_source, "collect", collect)
     result = runner.step(CONFIG, RUNNING_STATE, False, store)
-    assert result.runs_error == (str(TIMEOUT) if open_failed else None)
+    if open_failed:
+        assert result.runs_error is not None and "timeout" in result.runs_error
+        assert "waited 20s" in result.runs_error and "bd list -l phase:bh -n 0 --json" in result.runs_error
+    else:
+        assert result.runs_error is None
     expected = [["bd", "list", "-l", PHASE_FILE.label, "-n", "0", "--json"]]
     assert calls == expected
     if open_failed:
@@ -1463,6 +1467,12 @@ def test_failed_root_show_is_the_real_error_not_not_found(monkeypatch, github_ru
     assert "fix root in the phase file" not in message
     logged = [f for action, f in events if action == "read" and f["source"] == "beads.show_root"]
     assert logged and logged[0]["outcome"] == "failed" and logged[0]["error"] == asdict(ROOT_FAILED)
+
+
+def test_header_keeps_the_configured_phase_id_when_the_model_has_no_phase(monkeypatch, github_runtime) -> None:
+    store, _, _, _ = github_runtime
+    monkeypatch.setattr(runner.model, "tick", lambda value, state, *_: (replace(SNAPSHOT, phase="", phase_data=None), (), state))
+    assert runner.step(CONFIG, RUNNING_STATE, False, store)[0].phase == CONFIG.phase == "bh"
 
 
 def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, github_runtime) -> None:

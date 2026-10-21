@@ -164,6 +164,8 @@ def _stopped_tick(config: Config, state: State, now: datetime, store: StateStore
         now,
         partial(atm_bd.dispatch_spec, templates=file.templates),
     )
+    if not snapshot.phase:
+        snapshot = replace(snapshot, phase=config.phase)
     if isinstance(cached_snapshot, Ok):
         snapshot = replace(snapshot, agents=cached_snapshot.value.agents)
     snapshot = replace(snapshot, sent=sent)
@@ -353,6 +355,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
                 merge_results.append(Ok(unavailable))
     inputs = Inputs(now, config.lead, repo.value, config.interval_s, phase, members, tasks, worktrees, remotes, tuple(merge_results) if due else tuple(Ok(item) for item in merges.values()), prs_input, gh, task_beads, closed_tasks)
     snapshot, actions, next_state = model.tick(inputs, state, now, partial(atm_bd.dispatch_spec, templates=file.value.templates))
+    if not snapshot.phase:
+        snapshot = replace(snapshot, phase=config.phase)  # the header keeps the configured id when the phase read failed
     steps = {item.bead_id: item for item in phase.value.steps} if isinstance(phase, Ok) else {}
     for section in snapshot.sections:
         if section.label == "Held":

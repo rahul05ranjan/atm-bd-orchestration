@@ -28,6 +28,7 @@ from atm_bd_console.app import (
 )
 from atm_bd_console.build import display_identity
 from atm_bd_console.enums import SprintState
+from atm_bd_console.error_text import error_text
 from atm_bd_console.log import create_console_logger
 from atm_bd_console.poll_health import PollHealth
 from atm_bd_console.result import Ok
@@ -79,7 +80,7 @@ def test_dispatch_uses_shared_status_rows(monkeypatch, tmp_path: Path):
     dummy.snapshot = replace(RUNNING, phase_data=None, errors=(TIMEOUT,))
     ConsoleApp.refresh_views(dummy)
     assert nodes["#status-table"].display is False
-    assert f"beads unavailable: {TIMEOUT.kind}; {TIMEOUT.fix}" in nodes["#dashboard"].value.plain
+    assert f"beads unavailable: {error_text(TIMEOUT)}" in nodes["#dashboard"].value.plain
     assert seen == [RUNNING]
     dummy.snapshot = RUNNING
     ConsoleApp.refresh_views(dummy)

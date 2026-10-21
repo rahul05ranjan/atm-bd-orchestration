@@ -800,3 +800,4 @@ def test_pure_modules_contain_no_source_calls_or_imports() -> None:
         assert all(token not in source for token in forbidden)
         assert "_source import" not in source
         assert "import atm_bd" not in source
+
