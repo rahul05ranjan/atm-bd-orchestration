@@ -1,11 +1,13 @@
 """Build identity visible to operators and bug reports."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from importlib import import_module
 from pathlib import Path
 
 from . import __version__, git_source
-from .result import Err
+from .log import create_console_logger, error_message
+from .result import Err, Error
 
 try:
     BUILT_IDENTITY = import_module("._build_identity", __package__).IDENTITY
@@ -45,9 +47,31 @@ def _checkout_identity(root: Path | None) -> str | None:
         return None
     revision = git_source._run(root, "rev-parse", "--short", "HEAD")
     count = git_source._run(root, "rev-list", "--count", "HEAD")
-    if isinstance(revision, Err) or isinstance(count, Err) or not count.value.stdout.strip().isdigit():
+    if isinstance(revision, Err):
+        _log_failed_read(root, "rev-parse", revision.error)
+        return f"{__version__}+unknown"
+    if isinstance(count, Err):
+        _log_failed_read(root, "rev-list", count.error)
+        return f"{__version__}+unknown"
+    if not count.value.stdout.strip().isdigit():
         return f"{__version__}+unknown"
     major, minor, _patch = __version__.split(".", 2)
     dirty = git_source._run(root, "status", "--porcelain")
-    dirty_marker = "-dirty" if not isinstance(dirty, Err) and dirty.value.stdout.strip() else ""
+    if isinstance(dirty, Err):
+        # A failed status read is not a clean tree: show it as unknown and log why.
+        _log_failed_read(root, "status", dirty.error)
+        dirty_marker = "-dirty?"
+    else:
+        dirty_marker = "-dirty" if dirty.value.stdout.strip() else ""
     return f"{major}.{minor}.{count.value.stdout.strip()}+g{revision.value.stdout.strip()}{dirty_marker}"
+
+
+def _log_failed_read(root: Path, source: str, error: Error) -> None:
+    """Send the original git error (argv, code, stderr) to the console log; the display string carries only the marker."""
+    logger = create_console_logger(root)
+    if isinstance(logger, Err):
+        return
+    logger.value.event(
+        "error", level="error", message=f"build identity git {source} failed: {error_message(asdict(error))}",
+        source=f"build_identity.{source}", error=asdict(error),
+    )
