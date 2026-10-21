@@ -14,6 +14,7 @@
 - A failed bead, ATM or git read in the console keeps the last good phase, agents, held rows, problems and worktrees on screen and shows `source failed since HH:MM:SS` in the header until the next poll succeeds (#515, PR #520).
 - A failed `bd` read keeps its original typed error end to end; `not_found` is reported only for a successful empty read. This also fixes two further sites that collapsed an `Err` into a missing value, `config.code_repository` and `queues._local_issues` (#524, PR #525).
 - #215 is fixed for real phase epics: `bead-groups` recognizes the real phase epic shape for phase-end finding pours (#215, PR #526).
+- `assignment-gates.py` and `atm-task-close.py` bound each command by `ATM_BD_GATE_TIMEOUT_S` seconds (shared `scripts/command_timeout.py`; default 180, was a fixed 30; validate-plan keeps at least 300), and their timeout messages carry the fix: retry once, or raise `ATM_BD_GATE_TIMEOUT_S` on a loaded host. On 2026-10-20 (atm-core phase bk, load 45-55 with five developers building) the 30s bound refused three dispatches in a row with `GATE_CANNOT_RUN`. A non-positive or non-numeric value is `GATE_CANNOT_RUN` (exit 2) in the gates and a `CONFIG.INVALID` error in the close hook, each naming the value and the fix, never a traceback.
 
 ## [0.18.2] - 2026-10-20
 

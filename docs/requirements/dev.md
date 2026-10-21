@@ -49,7 +49,7 @@ Package sources: `atm-bd-orchestration` templates `dev-template`, `dev-fix`, `fi
 
 ### Scripts
 
-29. `assignment-gates.py dev` prints one code; exit 0 `READY`, 2 `GATE_CANNOT_RUN`, 5 otherwise. `stack-top --root <phase-root> --pr-target <b> --worktree <worktree>` prints the last layer's branch from `<phase-root>.stack` on exit 0. With no layers it resolves `origin/<b>` and prints `<b>`; unreadable or invalid ledger data or an unresolvable fallback returns `GATE_CANNOT_RUN` (2).
+29. `assignment-gates.py dev` prints one code; exit 0 `READY`, 2 `GATE_CANNOT_RUN`, 5 otherwise. Every command the gates run is bounded by `ATM_BD_GATE_TIMEOUT_S` seconds (default 180; validate-plan at least 300); a timeout is `GATE_CANNOT_RUN` whose stderr names the command and the fix (retry once, or raise `ATM_BD_GATE_TIMEOUT_S` on a loaded host). A value that is not a positive integer is also `GATE_CANNOT_RUN` whose stderr names the value and the fix. `stack-top --root <phase-root> --pr-target <b> --worktree <worktree>` prints the last layer's branch from `<phase-root>.stack` on exit 0. With no layers it resolves `origin/<b>` and prints `<b>`; unreadable or invalid ledger data or an unresolvable fallback returns `GATE_CANNOT_RUN` (2).
 30. Checks in order: `validate-plan` (`PLAN_INVALID`), in `bd ready` (`NOT_READY`), open and unassigned or self (`UNCLAIMABLE`), `pr_target` (the sprint container's for a poured dev bead) is `--pr-target` or its ancestor (`PR_TARGET_MISMATCH`), `origin/<pr_target>` ancestor of HEAD (`WRONG_BASE`).
 31. Difficulty models (substring): hard fable/opus/astra; normal terra/opus/sonnet; fast luna/haiku.
 

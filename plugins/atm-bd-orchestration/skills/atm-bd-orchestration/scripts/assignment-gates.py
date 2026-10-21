@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only, injectable pre-claim gates for dev, sanity, and QA work, and the read-only stack-top lookup."""
+"""Read-only, injectable pre-claim gates for dev, sanity, and QA work, and the read-only stack-top lookup.
+
+Every command the gates run (bd, git, gh, validate-plan) is bounded by `ATM_BD_GATE_TIMEOUT_S` seconds
+(default 180; validate-plan gets at least 300). A command that exceeds it is `GATE_CANNOT_RUN` (exit 2) with
+the command and the fix on stderr: retry once, or raise `ATM_BD_GATE_TIMEOUT_S` when the host is loaded.
+"""
 from __future__ import annotations
 
 import argparse
@@ -12,14 +17,16 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from command_timeout import DEFAULT_COMMAND_TIMEOUT, RAISE_FIX, TIMEOUT_ENV, command_timeout, import_timeout
 from stack_top import select_stack_top, stack_bead_id
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
 PRIMARY = Path(__file__).resolve().parents[4]
 VALIDATE_PLAN = str(PRIMARY / ".claude/skills/atm-beads/scripts/validate-plan")
-COMMAND_TIMEOUT = 30
-VALIDATE_PLAN_TIMEOUT = 300
+MIN_VALIDATE_PLAN_TIMEOUT = 300
+COMMAND_TIMEOUT = import_timeout()
+VALIDATE_PLAN_TIMEOUT = max(MIN_VALIDATE_PLAN_TIMEOUT, COMMAND_TIMEOUT)
 
 
 def invoke(runner: Runner, argv: list[str], *, timeout: float | None = None, **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -27,7 +34,8 @@ def invoke(runner: Runner, argv: list[str], *, timeout: float | None = None, **k
     try:
         return runner(argv, timeout=limit, **kwargs)
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"{argv!r} timed out after {limit}s") from error
+        raise RuntimeError(f"{argv!r} timed out after {limit}s; {RAISE_FIX} "
+                           f"(now {COMMAND_TIMEOUT}s per command, {VALIDATE_PLAN_TIMEOUT}s for validate-plan)") from error
 
 
 def run(runner: Runner, *args: str, cwd: str | None = None) -> str:
@@ -192,7 +200,9 @@ def evaluate(args: argparse.Namespace, runner: Runner = subprocess.run) -> str:
 
 
 def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        epilog=f"Each command the gate runs is bounded by {TIMEOUT_ENV} seconds (default {DEFAULT_COMMAND_TIMEOUT}; "
+               f"validate-plan at least {MIN_VALIDATE_PLAN_TIMEOUT}); a timeout is GATE_CANNOT_RUN, exit 2.")
     parser.add_argument("kind", choices=("dev", "sanity", "qa", "stack-top"))
     parser.add_argument("--root", default="")
     parser.add_argument("--bead", default="")
@@ -204,6 +214,12 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
     parser.add_argument("--worktree", default="")
     parser.add_argument("--base", default="", help="accepted for compatibility; sanity does not check PR bases")
     args = parser.parse_args(argv)
+    try:
+        command_timeout()
+    except ValueError as exc:
+        print(f"assignment-gates: {exc}", file=sys.stderr)
+        print("GATE_CANNOT_RUN")
+        return 2
     if args.kind != "sanity" and not args.pr_target:
         parser.error(f"{args.kind} needs --pr-target")
     if args.kind == "stack-top":

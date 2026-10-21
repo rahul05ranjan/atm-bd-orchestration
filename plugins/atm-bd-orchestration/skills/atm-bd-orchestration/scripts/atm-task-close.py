@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Close orchestration beads, hand off work, and close the dev task at dev complete."""
+"""Close orchestration beads, hand off work, and close the dev task at dev complete.
+
+Every bd, git and gh command is bounded by `ATM_BD_GATE_TIMEOUT_S` seconds (default 180, shared with
+assignment-gates.py); a timeout is `COMMAND.FAILED` whose fix says to retry once or raise the variable.
+"""
 from __future__ import annotations
 
 import argparse
@@ -20,11 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import repo_config
 import sc_render
+from command_timeout import TIMEOUT_ENV, command_timeout, import_timeout
 from stack_top import select_stack_top
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 ROLES = ("dev", "fix", "sanity", "qa")
-COMMAND_TIMEOUT = int(os.environ.get("ATM_BD_GATE_TIMEOUT_S", "180"))
+COMMAND_TIMEOUT = import_timeout()
 ASSIGNMENT_EVENTS = frozenset(("assigned", "reassigned", "reopened"))
 TERMINAL_STATES = frozenset(("complete",))
 COMPLETED = "completed"
@@ -349,7 +354,7 @@ class Hook:
                                timeout=COMMAND_TIMEOUT)
         except subprocess.TimeoutExpired as error:
             raise CloseError("COMMAND.FAILED", f"{list(argv)!r} timed out after {COMMAND_TIMEOUT}s",
-                             f"Repair {argv[0]} and rerun with the same vars file.") from error
+                             f"Retry once, or raise {TIMEOUT_ENV} if the host is loaded, then rerun with the same vars file.") from error
         except (OSError, subprocess.SubprocessError) as error:
             raise CloseError("COMMAND.FAILED", str(error), f"Repair {argv[0]} and rerun with the same vars file.") from error
 
@@ -777,6 +782,10 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, sleep=time.slee
     hook = None
     try:
         args = parser.parse_args(argv)
+        try:
+            command_timeout()
+        except ValueError as error:
+            raise CloseError("CONFIG.INVALID", str(error), f"Unset {TIMEOUT_ENV} or set it to a positive integer number of seconds, e.g. {TIMEOUT_ENV}=180.") from error
         values = read_vars(args.vars)
         if args.role in ("dev", "fix"):
             if args.result is None:

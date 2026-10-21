@@ -4,6 +4,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -107,7 +108,21 @@ class AssignmentGateTests(unittest.TestCase):
                 self.assertEqual((exit_code, stdout.getvalue().strip()), (2, "GATE_CANNOT_RUN"))
                 self.assertIn(timed_out[0], stderr.getvalue())
                 self.assertIn("7s", stderr.getvalue())
+                self.assertIn("retry once, or raise ATM_BD_GATE_TIMEOUT_S", stderr.getvalue())
                 self.assertTrue(seen and all(timeout == 7 for timeout in seen))
+
+    def test_invalid_timeout_env_is_gate_cannot_run_not_a_traceback(self):
+        for bad in ("abc", "0", "-3"):
+            with self.subTest(bad=bad):
+                runner = FakeRunner({})
+                stderr, stdout = io.StringIO(), io.StringIO()
+                with patch.dict(os.environ, {"ATM_BD_GATE_TIMEOUT_S": bad}), redirect_stderr(stderr), redirect_stdout(stdout):
+                    exit_code = gates.main(["dev", "--root", "r", "--bead", "b", "--pr-target", "t"], runner)
+                self.assertEqual((exit_code, stdout.getvalue().strip()), (2, "GATE_CANNOT_RUN"))
+                self.assertIn(f"ATM_BD_GATE_TIMEOUT_S={bad!r}", stderr.getvalue())
+                self.assertIn("ATM_BD_GATE_TIMEOUT_S=180", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                self.assertEqual(runner.calls, [])
 
     def test_stack_top_timeout_is_typed(self):
         def timeout(argv, **kwargs):
@@ -251,7 +266,26 @@ class AssignmentGateTests(unittest.TestCase):
             self.assertEqual(gates.evaluate(ns("dev"), spy), "READY")
         self.assertEqual(seen.pop(gates.VALIDATE_PLAN), 99)
         self.assertTrue(seen and set(seen.values()) == {7})
-        self.assertEqual((gates.COMMAND_TIMEOUT, gates.VALIDATE_PLAN_TIMEOUT), (30, 300))
+        self.assertEqual((gates.DEFAULT_COMMAND_TIMEOUT, gates.MIN_VALIDATE_PLAN_TIMEOUT), (180, 300))
+
+    def test_command_timeout_defaults_to_180_and_env_overrides_it(self):
+        self.assertEqual(gates.command_timeout({}), 180)
+        self.assertEqual(gates.command_timeout({"ATM_BD_GATE_TIMEOUT_S": ""}), 180)
+        self.assertEqual(gates.command_timeout({"ATM_BD_GATE_TIMEOUT_S": "45"}), 45)
+        for bad in ("0", "-5", "ninety", "1.5"):
+            with self.subTest(value=bad), self.assertRaises(ValueError) as caught:
+                gates.command_timeout({"ATM_BD_GATE_TIMEOUT_S": bad})
+            self.assertIn("ATM_BD_GATE_TIMEOUT_S=180", str(caught.exception))
+
+    def test_module_timeouts_follow_the_env_at_import(self):
+        for env, expected in (({}, (180, 300)), ({"ATM_BD_GATE_TIMEOUT_S": "45"}, (45, 300)),
+                              ({"ATM_BD_GATE_TIMEOUT_S": "600"}, (600, 600))):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=False):
+                if not env:
+                    os.environ.pop("ATM_BD_GATE_TIMEOUT_S", None)
+                fresh = importlib.util.module_from_spec(SPEC)
+                SPEC.loader.exec_module(fresh)
+                self.assertEqual((fresh.COMMAND_TIMEOUT, fresh.VALIDATE_PLAN_TIMEOUT), expected)
 
     def test_sanity_history_command_failure_cannot_run(self):
         runner = sanity_runner({("bd", "history", "bead", "--json"): (1, "", "database unavailable")})
