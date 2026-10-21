@@ -852,3 +852,24 @@ def test_sprint_steps_pane_is_never_blank_before_or_after_a_failed_first_tick() 
             assert "unavailable" in shown and "step exploded" in shown
 
     run_scenario(failed())
+
+
+def test_findings_render_failure_shows_the_typed_error_text(monkeypatch) -> None:
+    from atm_bd_console.result import IoFailed
+
+    def boom(_root, _rows):
+        raise ValueError("renderer exploded")
+
+    monkeypatch.setattr(console.findings_renderer, "render_findings", boom)
+    shown: list[tuple[str, dict]] = []
+    run = console.runs.qa_runs([{"id": "qa-1", "status": "closed", "close_reason": "FAIL",
+                                 "started_at": "2026-10-02T13:00:00Z", "closed_at": "2026-10-02T13:01:00Z",
+                                 "metadata": {"sprint": "bj-4", "round": 1}}])
+    dummy = SimpleNamespace(quality_runs=run, finding_beads=[], snapshot=None, config=CONFIG,
+                            _update_findings=lambda content, colors: shown.append((content, colors)))
+
+    ConsoleApp._show_findings(dummy, "qa-1")
+
+    expected = error_text(IoFailed("io_failed", "findings rendering", "renderer exploded",
+                                   "report the findings renderer as a defect; select the run again"))
+    assert shown == [(f"Unable to render findings: {expected}", {})]

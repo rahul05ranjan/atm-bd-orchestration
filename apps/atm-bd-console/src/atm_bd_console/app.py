@@ -692,7 +692,8 @@ class ConsoleApp(App[int]):
             content = findings_renderer.render_findings(self.config.repo_root, display_findings)
         except Exception as error:  # noqa: BLE001
             colors = {}
-            content = f"Unable to render findings: {error}"
+            content = "Unable to render findings: " + error_text(IoFailed(
+                "io_failed", "findings rendering", str(error), "report the findings renderer as a defect; select the run again"))
         self._update_findings(content, colors)
 
     def _update_findings(self, content: str, colors: dict[str, str]) -> None:

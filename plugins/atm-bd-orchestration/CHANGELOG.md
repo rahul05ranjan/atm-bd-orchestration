@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- The console findings pane renders a findings failure through the shared error formatter on a typed error, not `str(error)` (#533).
 - The console DAG pane reason uses the shared error formatter, not the backticked log format (`` `retry` gh api graphql timeout after 10s ``), so it reads like the rest of the console (#533).
 - The console closed-bead cache drops a reopened bead's cached closed row and closed-stage entries as well as the bead, so a reopened bead can no longer leave a stale closed row on screen (#533).
 - The console status bar says `gh: <mode> not read yet` before the first GitHub read instead of `gh: graphql ✅ --:--`, so a read that never happened is never shown as a success (#533).
