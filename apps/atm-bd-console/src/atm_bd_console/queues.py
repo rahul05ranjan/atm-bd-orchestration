@@ -5,11 +5,13 @@ import json
 import sys
 import tomllib
 from collections import Counter
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from . import atm_bd, command, config
+from .log import error_message
 from .result import CommandFailed, Err, Timeout
 
 SCHEMA = "atm-bd-orchestration/bead-queues/v1"
@@ -114,11 +116,10 @@ def _resolve(args, repo_root: Path) -> tuple[str, str | None, Path, str | None]:
     if args.phase:
         result = atm_bd.phase_file(str(repo_root), args.phase)
         if isinstance(result, Err):
-            raise QueueFailure(f"atm-bd queues --phase {args.phase}: {result.error.kind}: {result.error.fix}")
+            raise QueueFailure(f"atm-bd queues --phase {args.phase}: {error_message(asdict(result.error))}")
         code_repo = config.code_repository(repo_root, result.value.code_checkout)
         if isinstance(code_repo, Err):
-            error = code_repo.error
-            raise QueueFailure(f"atm-bd queues --phase {args.phase}: {error.kind}: {error.fix}")
+            raise QueueFailure(f"atm-bd queues --phase {args.phase}: {error_message(asdict(code_repo.error))}")
         phase_path = repo_root / ".atm-bd" / f"phase-{args.phase}.toml"
         try:
             integration_branch = tomllib.loads(phase_path.read_text(encoding="utf-8")).get("integration_branch")
@@ -338,7 +339,7 @@ def _local_issues(trunk: str, layers: list[str], paths: dict[str, str], repo_roo
         fix = f"inspect `git merge-base --is-ancestor {lower} {name}`"
         result = runner(["git", "merge-base", "--is-ancestor", lower, name], fix, cwd=repo_root, ok_codes=(0, 1))
         if isinstance(result, Err):
-            continue
+            raise QueueFailure(_command_error(result))
         if result.value.code == 1:
             issues.append(f"{name} does not contain the head of {lower} (`git merge-base --is-ancestor {lower} {name}` exited 1); "
                           f"the stack writer rebases it onto {lower} in {paths[name]}")

@@ -223,11 +223,8 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         persisted = _write_snapshot(store, persisted, logger)
         return StepResult(persisted, state, failed_reads=logger.failed_reads)
     config = replace(config, lead=file.value.lead)
-    root_read = beads_source.show((file.value.root_id,))
-    if isinstance(root_read, Err) and hasattr(root_read.error, "fix"):
-        # A failed `bd show` is a transient read failure, never "no root bead": keep the real error, say it is retried.
-        root_read = Err(replace(root_read.error, fix=f"bd show {file.value.root_id} failed; retried next tick"))
-    root = logger.result("beads.show_root", root_read, task_ids=[file.value.root_id])
+    # A failed `bd show` is the original Err, passed on unchanged; not_found is only a successful empty read.
+    root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
     if root_bead is not None and root_bead.status == SprintState.CLOSED:

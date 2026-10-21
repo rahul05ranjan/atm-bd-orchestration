@@ -264,7 +264,8 @@ def test_phase_rejects_non_git_code_checkout_before_running_gh(monkeypatch, tmp_
 
     assert queues.main(args, repo_root=tmp_path, runner=run, now=NOW) == 2
     captured = capsys.readouterr()
-    assert "config_invalid: set code_checkout to that repository's primary checkout" in captured.err
+    # The original command error (argv, exit code, stderr) is printed, not a re-invented config_invalid.
+    assert "git rev-parse" in captured.err and "[128] not a git repository" in captured.err
     assert calls == [(["git", "rev-parse", "--show-toplevel"], (tmp_path / "../not-a-repo").resolve())]
     assert not any(argv[0] == "gh" for argv, _ in calls)
 
@@ -424,3 +425,16 @@ def test_gh_failure_is_never_reported_as_a_stack_fault():
     run, _ = stack_runner(view_error=True, ancestors={(TRUNK, "layer-a"), ("layer-a", "layer-b")})
     _, rows = check(run)
     assert not any("gh" in row["detail"] for value in rows.values() for row in value)
+
+
+def test_failed_merge_base_read_is_reported_not_treated_as_no_issue() -> None:
+    failed = CommandFailed("command_failed", ("git", "merge-base", "--is-ancestor", TRUNK, "layer-a"), 128,
+                           "fatal: bad object", "inspect it")
+    run, _ = stack_runner(view_error=True)
+
+    def failing(argv, fix, **kwargs):
+        return Err(failed) if argv[:3] == ["git", "merge-base", "--is-ancestor"] else run(argv, fix, **kwargs)
+
+    with pytest.raises(queues.QueueFailure) as raised:
+        check(failing)
+    assert "git merge-base --is-ancestor" in str(raised.value) and "fatal: bad object" in str(raised.value)

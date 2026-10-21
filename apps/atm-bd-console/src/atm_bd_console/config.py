@@ -50,8 +50,7 @@ def code_repository(root: Path, checkout: str | None) -> Result[tuple[str, str]]
     fix = f"{CODE_REPO_FIX}; origin must be a GitHub repository URL"
     top = command.run(("git", "rev-parse", "--show-toplevel"), fix, cwd=code_root)
     if isinstance(top, Err):
-        return Err(ConfigInvalid("config_invalid", "code_checkout", str(code_root),
-                                 f"{CODE_REPO_FIX}; path is not a git checkout"))
+        return top
     try:
         actual_top = Path(top.value.stdout.strip()).resolve()
     except (OSError, RuntimeError, ValueError) as error:
@@ -62,8 +61,7 @@ def code_repository(root: Path, checkout: str | None) -> Result[tuple[str, str]]
                                  f"{CODE_REPO_FIX}; use the primary checkout at {actual_top}"))
     origin_result = command.run(("git", "remote", "get-url", "origin"), fix, cwd=code_root)
     if isinstance(origin_result, Err):
-        return Err(ConfigInvalid("config_invalid", "code_checkout.origin", str(code_root),
-                                 f"set origin in the code checkout to a GitHub repository URL; {origin_result.error}"))
+        return origin_result
     origin = origin_result.value.stdout.strip()
     repo = _github_repo(origin)
     if repo is None:

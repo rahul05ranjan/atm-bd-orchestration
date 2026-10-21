@@ -1450,17 +1450,19 @@ def _root_show(monkeypatch, root_reads):
 
 @pytest.mark.parametrize("state", [RUNNING_STATE, STATE])
 def test_failed_root_show_is_the_real_error_not_not_found(monkeypatch, github_runtime, state) -> None:
-    store, _, _, inputs = github_runtime
+    store, _, events, inputs = github_runtime
     _root_show(monkeypatch, [Err(ROOT_FAILED)])
     monkeypatch.setattr(runner.atm_bd, "phase", REAL_PHASE)
     result = runner.step(CONFIG, state, True, store)
     phase = inputs[-1].phase
     assert isinstance(phase, Err) and not isinstance(phase.error, NotFound)
-    assert phase.error == replace(ROOT_FAILED, fix="bd show atm-phase-bh failed; retried next tick")
-    assert result.failed_reads["beads.show_root"] == phase.error
+    assert phase.error is ROOT_FAILED
+    assert result.failed_reads["beads.show_root"] is ROOT_FAILED
     message = error_message(asdict(phase.error))
     assert "dolt: i/o timeout reading atm-phase-bh" in message and "bd show atm-phase-bh" in message
-    assert "retried next tick" in message and "fix root in the phase file" not in message
+    assert "fix root in the phase file" not in message
+    logged = [f for action, f in events if action == "read" and f["source"] == "beads.show_root"]
+    assert logged and logged[0]["outcome"] == "failed" and logged[0]["error"] == asdict(ROOT_FAILED)
 
 
 def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, github_runtime) -> None:
