@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "atm-beads/scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from command_timeout import DEFAULT_COMMAND_TIMEOUT, RAISE_FIX, TIMEOUT_ENV, command_timeout
+from command_timeout import DEFAULT_COMMAND_TIMEOUT, RAISE_FIX, TIMEOUT_ENV, command_timeout, import_timeout
 from stack_top import select_stack_top, stack_bead_id
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -25,7 +25,7 @@ IGNORED_STATUS_PATHS = (".beads.gate.lock", ".sc-compose/")
 PRIMARY = Path(__file__).resolve().parents[4]
 VALIDATE_PLAN = str(PRIMARY / ".claude/skills/atm-beads/scripts/validate-plan")
 MIN_VALIDATE_PLAN_TIMEOUT = 300
-COMMAND_TIMEOUT = command_timeout()
+COMMAND_TIMEOUT = import_timeout()
 VALIDATE_PLAN_TIMEOUT = max(MIN_VALIDATE_PLAN_TIMEOUT, COMMAND_TIMEOUT)
 
 
@@ -214,6 +214,12 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
     parser.add_argument("--worktree", default="")
     parser.add_argument("--base", default="", help="accepted for compatibility; sanity does not check PR bases")
     args = parser.parse_args(argv)
+    try:
+        command_timeout()
+    except ValueError as exc:
+        print(f"assignment-gates: {exc}", file=sys.stderr)
+        print("GATE_CANNOT_RUN")
+        return 2
     if args.kind != "sanity" and not args.pr_target:
         parser.error(f"{args.kind} needs --pr-target")
     if args.kind == "stack-top":

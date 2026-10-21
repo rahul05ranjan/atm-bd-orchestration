@@ -26,3 +26,14 @@ def command_timeout(environ: Mapping[str, str] = os.environ) -> int:
         raise ValueError(f"{TIMEOUT_ENV}={raw!r} is not a positive integer number of seconds; "
                          f"unset it or set it like {TIMEOUT_ENV}={DEFAULT_COMMAND_TIMEOUT}")
     return value
+
+
+def import_timeout(environ: Mapping[str, str] = os.environ) -> int:
+    """The module-level value: an invalid setting falls back to the default here so import never fails.
+
+    Each script's `main()` calls `command_timeout()` and reports the invalid setting as its own typed error.
+    """
+    try:
+        return command_timeout(environ)
+    except ValueError:
+        return DEFAULT_COMMAND_TIMEOUT

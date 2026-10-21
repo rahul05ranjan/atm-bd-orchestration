@@ -15,6 +15,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 import pytest
+from unittest.mock import patch
 
 
 from task_close_world import DERIVED, EXAMPLES, SCRIPTS, World, example_values, hook
@@ -256,6 +257,17 @@ def test_local_timeout_is_typed_and_names_command_and_deadline(world, monkeypatc
     assert error["code"] == "COMMAND.FAILED"
     assert "git" in error["message"] and "rev-parse" in error["message"] and "7s" in error["message"]
     assert error["fix"].startswith("Retry once, or raise ATM_BD_GATE_TIMEOUT_S")
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-3"])
+def test_invalid_timeout_env_is_a_typed_config_error_not_a_traceback(world, bad):
+    with patch.dict(os.environ, {"ATM_BD_GATE_TIMEOUT_S": bad}):
+        result = world.run()
+    error = result["err"]
+    assert error["code"] == "CONFIG.INVALID"
+    assert f"ATM_BD_GATE_TIMEOUT_S={bad!r}" in error["message"]
+    assert "ATM_BD_GATE_TIMEOUT_S=180" in error["fix"]
+    assert world.calls == []
 
 
 @pytest.mark.parametrize("failed_command", ["ls-remote", "fetch"])

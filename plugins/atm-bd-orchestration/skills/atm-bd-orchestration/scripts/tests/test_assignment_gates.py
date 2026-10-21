@@ -111,6 +111,19 @@ class AssignmentGateTests(unittest.TestCase):
                 self.assertIn("retry once, or raise ATM_BD_GATE_TIMEOUT_S", stderr.getvalue())
                 self.assertTrue(seen and all(timeout == 7 for timeout in seen))
 
+    def test_invalid_timeout_env_is_gate_cannot_run_not_a_traceback(self):
+        for bad in ("abc", "0", "-3"):
+            with self.subTest(bad=bad):
+                runner = FakeRunner({})
+                stderr, stdout = io.StringIO(), io.StringIO()
+                with patch.dict(os.environ, {"ATM_BD_GATE_TIMEOUT_S": bad}), redirect_stderr(stderr), redirect_stdout(stdout):
+                    exit_code = gates.main(["dev", "--root", "r", "--bead", "b", "--pr-target", "t"], runner)
+                self.assertEqual((exit_code, stdout.getvalue().strip()), (2, "GATE_CANNOT_RUN"))
+                self.assertIn(f"ATM_BD_GATE_TIMEOUT_S={bad!r}", stderr.getvalue())
+                self.assertIn("ATM_BD_GATE_TIMEOUT_S=180", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                self.assertEqual(runner.calls, [])
+
     def test_stack_top_timeout_is_typed(self):
         def timeout(argv, **kwargs):
             raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
