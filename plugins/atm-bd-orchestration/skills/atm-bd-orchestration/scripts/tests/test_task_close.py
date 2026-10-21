@@ -60,6 +60,7 @@ def test_assignment_details_requires_an_assignment():
 ])
 def test_template_rebase_and_hook_ancestry_use_the_same_stack_top(world, template, layers, expected):
     spec = importlib.util.spec_from_file_location("assignment_gates_for_close", SCRIPTS / "assignment-gates.py")
+    assert spec is not None and spec.loader is not None
     gates = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gates)
     world.beads["atm-phase-bj.stack"]["metadata"]["layers"] = layers
@@ -233,6 +234,7 @@ def test_network_timeouts_retry_then_fall_back(world, command, monkeypatch):
 
 def test_deadline_injection_convention_matches_assignment_gates(world, monkeypatch):
     spec = importlib.util.spec_from_file_location("assignment_gates_deadline_contract", SCRIPTS / "assignment-gates.py")
+    assert spec is not None and spec.loader is not None
     gates = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gates)
     assert hook.COMMAND_TIMEOUT == gates.COMMAND_TIMEOUT == hook.command_timeout(os.environ)
@@ -468,7 +470,9 @@ def test_sanity_fail_message_contains_exact_undone_deliverables(world):
     assert len(messages) == 1
     root = ET.fromstring(messages[0]["body"])
     assert root.attrib == {"bead": world.values["checked_bead"], "sprint": world.values["sprint"]}
-    lines = root.find("description").text.splitlines()
+    description = root.find("description")
+    assert description is not None and description.text is not None
+    lines = description.text.splitlines()
     assert lines == [
         f"{world.values['checked_title']}: sanity round {world.values['round']} of {world.values['max_sanity_rounds']}.",
         f"Branch {world.values['branch']}, PR #{world.values['pr_number']}, commit {world.values['commit']}.",
@@ -613,8 +617,7 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
     baseline_root = tmp_path / "baseline"
     baseline_root.mkdir()
     baseline = World(baseline_root, monkeypatch)
-    changes = dict(verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
-    assert "ok" in baseline.run(role, **changes)
+    assert "ok" in baseline.run(role, verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
     # each baseline send, keyed by the boundary that commits it: the next write is its gating write
     sends = [index for index, (argv, _) in enumerate(baseline.writes) if argv[:2] == ["atm", "send"]]
     gated = {index + 1: index for index in sends if index + 1 < len(baseline.writes)}
@@ -626,7 +629,7 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
         root.mkdir()
         world = World(root, monkeypatch)
         world.fail_after = boundary
-        assert "err" in world.run(role, **changes)
+        assert "err" in world.run(role, verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
         assert world.writes[-1][0][:3] == baseline.writes[boundary - 1][0][:3], boundary
         world.fail_after = None
         result = world.run(role)
@@ -650,11 +653,10 @@ def test_replay_after_every_committed_write_converges(tmp_path, monkeypatch, rol
 
 @pytest.mark.parametrize("role,verdict", [("dev", "PASS"), ("fix", "PASS"), ("sanity", "PASS"), ("sanity", "FAIL"), ("sanity", "CANNOT_RUN"), ("qa", "PASS"), ("qa", "FAIL")])
 def test_second_run_after_success_sends_nothing(tmp_path, monkeypatch, role, verdict):
-    changes = dict(verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
     root = tmp_path / "world"
     root.mkdir()
     world = World(root, monkeypatch)
-    assert "ok" in world.run(role, **changes)
+    assert "ok" in world.run(role, verdict=verdict, undone=[{"number": 1, "reason": "not implemented"}])
     sent = len(world.messages)
     assert "ok" in world.run(role)
     assert len(world.messages) == sent
@@ -791,7 +793,9 @@ def test_shared_contract_covers_all_role_templates_and_ids(world):
             assert world.values[role_id] in body
     rebase = ET.fromstring(hook.sc_render.render(hook.TEMPLATES / "rebase-required.xml.j2", world.values))
     assert rebase.attrib["bead"] == world.values["checked_bead"]
-    description = rebase.find("description").text
+    description_node = rebase.find("description")
+    assert description_node is not None and description_node.text is not None
+    description = description_node.text
     assert world.values["branch"] in description
     assert world.values["stacked"]["top"]["branch"] in description
     assert world.values["stacked"]["top"]["head"] in description

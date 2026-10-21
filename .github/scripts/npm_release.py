@@ -69,7 +69,9 @@ def metadata(path):
         members = [m for m in contents if m.name == "package/package.json"]
         if len(members) != 1 or not members[0].isfile() or members[0].size > 1024 * 1024:
             raise ValueError("archive must contain exactly one regular package/package.json")
-        return json.load(archive.extractfile(members[0]))
+        metadata = archive.extractfile(members[0])
+        assert metadata is not None
+        return json.load(metadata)
 
 
 def check_package_metadata(data, name, release_version, label):

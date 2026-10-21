@@ -129,7 +129,9 @@ class TemplateContractTests(unittest.TestCase):
     def test_finding_bead_deliverables_are_splittable(self):
         import importlib.machinery, importlib.util, json, subprocess
         loader = importlib.machinery.SourceFileLoader("sanity_split", str(ROOT / "scripts/sanity-split"))
-        split = importlib.util.module_from_spec(importlib.util.spec_from_loader("sanity_split", loader))
+        spec = importlib.util.spec_from_loader("sanity_split", loader)
+        assert spec is not None
+        split = importlib.util.module_from_spec(spec)
         loader.exec_module(split)
         result = render(ROOT / "templates/finding-bead.json.j2", ROOT / "examples/finding-bead-vars.json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -269,6 +271,7 @@ class TemplateContractTests(unittest.TestCase):
                 text = (ROOT.parents[1] / "agents" / reviewer).read_text()
                 matched = re.search(r"## Inputs.*?```json\n(.*?)\n```", text, re.S)
                 self.assertIsNotNone(matched)
+                assert matched is not None
                 input_json = json.loads(matched.group(1))
                 self.assertEqual(set(input_json), expected_keys)
                 self.assertEqual(input_json["context"], [])
@@ -281,8 +284,11 @@ class TemplateContractTests(unittest.TestCase):
         self.assertIn("On a client API_FAILURE, return that result unchanged, with no retry and no context edit.", text)
         self.assertNotIn("rebuild `context` and rerun", text)
         self.assertNotIn("--request", text)
-        assignment = json.loads(re.search(r"## Inputs\n\n```json\n(.*?)\n```", text, re.S).group(1))
+        matched = re.search(r"## Inputs\n\n```json\n(.*?)\n```", text, re.S)
+        assert matched is not None
+        assignment = json.loads(matched.group(1))
         spec = importlib.util.spec_from_file_location("jev_client", ROOT / "scripts" / "jev_client.py")
+        assert spec is not None and spec.loader is not None
         client = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(client)
         # every field the client reads is in the documented input; only the example's paths are not a repository
@@ -330,7 +336,9 @@ class FixRoundReviewerScopeTests(unittest.TestCase):
                 self.assertIn(f"bd show {values['checked_bead']} --json", result.stdout)
                 self.assertIn("Add its value as `found_on_layer` to each row", result.stdout)
                 self.assertIn("never substitute the sprint container's layer", result.stdout)
-                expression = re.search(r"\| jq -c '([^']+)'", result.stdout).group(1)
+                matched = re.search(r"\| jq -c '([^']+)'", result.stdout)
+                assert matched is not None
+                expression = matched.group(1)
                 for metadata, expected in (({"layer": 15, "found_on_layer": 4}, "15"),
                                            ({"layer": "", "found_on_layer": 15}, "15"),
                                            ({"found_on_layer": 15}, "15"), ({"layer": 0}, "0"), ({}, "")):

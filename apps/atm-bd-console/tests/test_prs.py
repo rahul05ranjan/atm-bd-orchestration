@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from rich.cells import cell_len
@@ -95,7 +96,9 @@ def test_pr_assignee_uses_roster_icon_before_name() -> None:
 
 @pytest.mark.parametrize("phase", ("bh", "phase-current"))
 @pytest.mark.parametrize("mode", ("graphql", "rest"))
-def test_successful_empty_prs_name_actual_phase_and_checked_time(phase: str, mode: str, monkeypatch) -> None:
+def test_successful_empty_prs_name_actual_phase_and_checked_time(
+    phase: str, mode: Literal["graphql", "rest"], monkeypatch
+) -> None:
     original_tz = os.environ.get("TZ")
     monkeypatch.setenv("TZ", "Etc/GMT+8")
     time.tzset()
@@ -114,6 +117,7 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
     empty = replace(snapshot(), prs=())
     assert render_prs(replace(empty, gh=GhStatus("off", None, None, None, False)), 120).plain == "GitHub checks are off"
     failed = GhStatus("graphql", False, Timeout("timeout", ("gh",), 5, "retry"), NOW, False)
+    assert failed.error is not None
     assert render_prs(replace(empty, gh=failed), 120).plain == f"GitHub read failed: {error_text(failed.error)}"
     never = GhStatus("graphql", None, None, None, False)
     assert render_prs(replace(empty, gh=never), 120).plain == "PRs not yet read"  # no data is not "no open PR"
@@ -122,6 +126,7 @@ def test_empty_prs_distinguish_github_off_and_failure() -> None:
 def test_cached_rows_after_a_failed_read_are_marked_stale_with_the_read_time_and_typed_error() -> None:
     value = snapshot()
     failed = GhStatus("graphql", False, Timeout("timeout", ("gh", "api"), 5, "retry"), NOW, False)
+    assert failed.error is not None
     read_at = NOW - timedelta(minutes=7)
     lines = render_prs(replace(value, gh=failed), 200, read_at=read_at).plain.splitlines()
     assert lines[0] == f"stale since {read_at.astimezone().strftime('%H:%M')}: {error_text(failed.error)}"

@@ -149,7 +149,7 @@ def format_fenced_result(result: dict[str, Any]) -> str:
     return "```json\n" + json.dumps(validate_result(result), sort_keys=True) + "\n```"
 
 
-def aggregate_results(results: list[dict[str, Any] | None], expected_channels: list[str]) -> list[dict[str, Any]]:
+def aggregate_results(results: list[object], expected_channels: list[str]) -> list[dict[str, Any]]:
     """Validate every result, retaining valid channels and recording contract failures."""
     validated = []
     for channel, result in zip(expected_channels, results):

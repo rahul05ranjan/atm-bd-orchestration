@@ -26,6 +26,12 @@ FORMULAS = {"skills/atm-bd-orchestration/formulas/finding-group.formula.toml.j2"
             "skills/atm-bd-orchestration/formulas/sprint-group.formula.toml.j2"}
 
 
+def leading_name(expression: str) -> str:
+    matched = re.match(r"\s*([A-Za-z_]\w*)", expression)
+    assert matched is not None
+    return matched.group(1)
+
+
 def schema_errors(template: Path, cwd: Path) -> list[str]:
     result = subprocess.run(["sc-compose", "validate", "--strict", "--json", "--root", str(template.parent),
                              "--file", str(template)], cwd=cwd, capture_output=True, text=True)
@@ -79,7 +85,7 @@ def formula_schema_errors(formula: Path) -> list[str]:
     front = yaml.safe_load(front)
     declared = set(front.get("required_variables", [])) | set(front.get("defaults") or {})
     body = re.sub(r"\{#.*?#\}", "", body, flags=re.S)
-    used = {re.match(r"\s*([A-Za-z_]\w*)", expr).group(1) for expr in re.findall(r"\{\{\{(.*?)\}\}\}", body, flags=re.S)}
+    used = {leading_name(expr) for expr in re.findall(r"\{\{\{(.*?)\}\}\}", body, flags=re.S)}
     bound = set()
     for statement in re.findall(r"\{%-?(.*?)-?%\}", body, flags=re.S):
         statement = re.sub(r"\"[^\"]*\"|'[^']*'", "", statement)

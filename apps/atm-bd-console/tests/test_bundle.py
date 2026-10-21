@@ -19,6 +19,17 @@ UV = shutil.which("uv")
 pytestmark = pytest.mark.skipif(UV is None, reason="uv is required to build and install the bundle")
 
 
+def required_uv() -> str:
+    assert UV is not None
+    return UV
+
+
+def read_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
+    source = archive.extractfile(member)
+    assert source is not None
+    return source.read()
+
+
 def run(*args: str, cwd: Path = APP, check: bool = True, text: bool = True):
     if args[:2] == (UV, "build") and cwd.resolve() == APP.resolve():
         pytest.fail("bundle builds require a private temporary checkout, not the shared app", pytrace=False)
@@ -33,7 +44,7 @@ def bundle_checkout(tmp_path: Path) -> Path:
 
 
 def git_install_command(python: Path, commit: str, repo: Path) -> list[str]:
-    return [UV, "pip", "install", "--offline", "--no-python-downloads", "--no-build-isolation",
+    return [required_uv(), "pip", "install", "--offline", "--no-python-downloads", "--no-build-isolation",
             "--no-deps", "--python", str(python),
             f"git+{repo.as_uri()}@{commit}#subdirectory=apps/atm-bd-console"]
 
@@ -78,7 +89,7 @@ def committed_plugin(commit: str, repo: Path = REPO) -> dict[str, bytes]:
     prefix = "plugins/atm-bd-orchestration/"
     archive = run("git", "archive", "--format=tar", commit, prefix, cwd=repo, text=False).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as source:
-        return {member.name[len(prefix):]: source.extractfile(member).read()
+        return {member.name[len(prefix):]: read_member(source, member)
                 for member in source.getmembers() if member.isfile() and member.name.startswith(prefix)}
 
 
@@ -87,7 +98,7 @@ def contents(archive: Path) -> dict[str, bytes]:
         with zipfile.ZipFile(archive) as wheel:
             return {name: wheel.read(name) for name in wheel.namelist() if not name.endswith("/")}
     with tarfile.open(archive) as sdist:
-        return {member.name: sdist.extractfile(member).read() for member in sdist.getmembers() if member.isfile()}
+        return {member.name: read_member(sdist, member) for member in sdist.getmembers() if member.isfile()}
 
 
 def check_archive(archive: Path, expected: dict[str, bytes], expected_commit: str) -> None:
@@ -172,7 +183,7 @@ def test_sdist_rejects_identity_without_valid_commit(tmp_path: Path, bundle_chec
 def test_git_file_install_bundles_the_plugin(tmp_path: Path, bundle_checkout: Path) -> None:
     commit = run("git", "rev-parse", "HEAD", cwd=bundle_checkout).stdout.strip()
     venv = tmp_path / "venv"
-    run(UV, "venv", "--offline", "--no-python-downloads", "--python", sys.executable, str(venv))
+    run(required_uv(), "venv", "--offline", "--no-python-downloads", "--python", sys.executable, str(venv))
     python = venv / "bin" / "python"
     purelib = Path(run(str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))").stdout.strip())
     (purelib / "test-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n")

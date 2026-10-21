@@ -229,7 +229,8 @@ def test_public_operations_accept_an_injected_timeout(monkeypatch) -> None:
     )
 
     assert all(isinstance(result, Err) and isinstance(result.error, Timeout) for result in results)
-    assert all(result.error.seconds == 1 for result in results if isinstance(result, Err))
+    assert all(result.error.seconds == 1 for result in results
+               if isinstance(result, Err) and isinstance(result.error, Timeout))
 
 
 @pytest.mark.parametrize(

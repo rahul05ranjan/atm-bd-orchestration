@@ -9,8 +9,16 @@ import tempfile
 import tomllib
 import weakref
 from pathlib import Path
+from typing import cast
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+
+def _force_include(build_data: dict[str, object]) -> dict[str, str]:
+    value = build_data.get("force_include")
+    if not isinstance(value, dict):
+        raise RuntimeError("Hatch build data lacks force_include mapping")
+    return cast(dict[str, str], value)
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -61,7 +69,7 @@ class CustomBuildHook(BuildHookInterface):
         self._include_identity(output, build_data)
 
     def _include_identity(self, output: Path, build_data: dict[str, object]) -> None:
-        build_data["force_include"][str(output)] = self._dest("_build_identity.py")
+        _force_include(build_data)[str(output)] = self._dest("_build_identity.py")
 
     def _dest(self, name: str) -> str:
         prefix = "atm_bd_console" if self.target_name == "wheel" else "src/atm_bd_console"
@@ -74,7 +82,7 @@ class CustomBuildHook(BuildHookInterface):
         source = bundled if (package / "PKG-INFO").is_file() else (plugin if plugin.is_dir() else bundled)
         if not source.is_dir():
             raise RuntimeError(f"cannot bundle skills: neither {plugin} nor {bundled} exists")
-        build_data["force_include"][str(source)] = self._dest("_skills")
+        _force_include(build_data)[str(source)] = self._dest("_skills")
         self._include_manifest(package, source, build_data, package_version)
 
     def _include_manifest(self, package: Path, source: Path, build_data: dict[str, object], package_version: str) -> None:
@@ -82,7 +90,7 @@ class CustomBuildHook(BuildHookInterface):
         integrity = _load_integrity(package / "src" / "atm_bd_console" / "skill_integrity.py")
         output = self._managed_build_dir() / integrity.MANIFEST_NAME
         output.write_text(json.dumps(integrity.build_manifest(source, package_version), indent=2) + "\n", encoding="utf-8")
-        build_data["force_include"][str(output)] = self._dest(integrity.MANIFEST_NAME)
+        _force_include(build_data)[str(output)] = self._dest(integrity.MANIFEST_NAME)
 
     def _managed_build_dir(self) -> Path:
         if self._build_dir is None:

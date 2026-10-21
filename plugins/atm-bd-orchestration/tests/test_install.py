@@ -16,6 +16,7 @@ import tarfile
 import io
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import yaml
@@ -90,7 +91,7 @@ def test_provision_failure_stops_install_before_writes_and_is_reported(tmp_path,
     plan = SimpleNamespace(repo_root=repo)
     monkeypatch.setattr(install, "provision_tool_identity", lambda _root: (_ for _ in ()).throw(install.InstallError("provision failed")))
     with pytest.raises(install.InstallError, match="provision failed"):
-        install.apply_plan(plan, "1.0")
+        install.apply_plan(cast(install.Plan, plan), "1.0")
     assert list(repo.iterdir()) == []
     monkeypatch.setattr(install, "_plan_or_fail", lambda *_args: (plan, {}, None))
     monkeypatch.setattr(install, "package_version", lambda *_args: "1.0")
@@ -893,8 +894,11 @@ def test_real_upgrade_from_a_0_2_3_install(tmp_path, capsys):
     top = run_command(["git", "-C", str(PKG), "rev-parse", "--show-toplevel"], check=True, text=True).stdout.strip()
     archive = run_command(["git", "-C", top, "archive", "d5b7301:plugins/atm-bd-orchestration"],
                           check=True).stdout
-    tarfile.open(fileobj=io.BytesIO(archive)).extractall(
-        tmp_path / "old", **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+    with tarfile.open(fileobj=io.BytesIO(archive)) as package:
+        if hasattr(tarfile, "data_filter"):
+            package.extractall(tmp_path / "old", filter="data")
+        else:
+            package.extractall(tmp_path / "old")
     old_pkg = tmp_path / "old"
     repo = make_repo(tmp_path)
     (repo / ".atm.toml").write_text('[atm]\ndefault_team = "my-team"\n')

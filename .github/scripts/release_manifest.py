@@ -2,9 +2,37 @@
 from __future__ import annotations
 
 import re
+from argparse import Namespace
 import tomllib
 import urllib.parse
 from pathlib import Path, PurePosixPath
+from typing import NotRequired, TypedDict
+
+
+class CargoPackageCheck(TypedDict):
+    package: str
+    cargo_toml: str
+    mode: str
+    earlier_release_dependencies: list[str]
+
+
+class CredentialRehearsal(TypedDict):
+    workflow: str
+    inputs: dict[str, str]
+
+
+class ChannelPreflight(TypedDict):
+    agent: str
+    repository_secrets: list[str]
+    environment_secrets: list[dict[str, str]]
+    liveness_checks: list[dict[str, str]]
+    public_registry_checks: bool
+    credential_rehearsal: CredentialRehearsal | None
+    github_actions_permissions: NotRequired[list[str]]
+
+
+class RootChannelPreflight(ChannelPreflight):
+    name: str
 
 
 CHANNEL_CONTRACTS_FILE = "publish-channel-contracts.toml"
@@ -164,7 +192,7 @@ def workspace_dependency_names(crate_toml: Path, workspace_toml: Path) -> set[st
     return dependencies
 
 
-def validate_publish_order(args: object) -> int:
+def validate_publish_order(args: Namespace) -> int:
     """Check that package publication order follows workspace dependencies."""
     manifest = load_manifest(Path(args.manifest))
     workspace_toml = Path(args.workspace_toml)
@@ -185,7 +213,7 @@ def validate_publish_order(args: object) -> int:
     return 0
 
 
-def cargo_package_check_plan(workspace_toml: Path, manifest: dict) -> list[dict[str, object]]:
+def cargo_package_check_plan(workspace_toml: Path, manifest: dict) -> list[CargoPackageCheck]:
     """Return the registry-aware Cargo package validation plan.
 
     ``cargo package`` verifies a crate against the public registry.  During a
@@ -200,7 +228,7 @@ def cargo_package_check_plan(workspace_toml: Path, manifest: dict) -> list[dict[
         for crate in manifest["crates"]
         if crate.get("publish", True) is True
     }
-    plan: list[dict[str, object]] = []
+    plan: list[CargoPackageCheck] = []
     # A crate that is never uploaded needs no archive verification.
     for crate in publishable.values():
         package = crate["package"]
@@ -222,7 +250,7 @@ def cargo_package_check_plan(workspace_toml: Path, manifest: dict) -> list[dict[
     return plan
 
 
-def cmd_package_check_plan(args: object) -> int:
+def cmd_package_check_plan(args: Namespace) -> int:
     manifest = load_manifest(Path(args.manifest))
     for entry in cargo_package_check_plan(Path(args.workspace_toml), manifest):
         print(f"{entry['package']}|{entry['mode']}|{','.join(entry['earlier_release_dependencies'])}" + (f"|{entry['cargo_toml']}" if args.include_manifest else ""))
@@ -555,7 +583,7 @@ def _public_registry_checks(
     else:
         registry_contracts = contract.get("registries", [])
 
-    checks: list[dict[str, str]] = []
+    checks: list[dict[str, str | None]] = []
     for registry in registry_contracts:
         check: dict[str, str | None] = {
             "channel": channel_name,
@@ -611,7 +639,10 @@ def check_version_publication(
         check = _public_registry_checks(
             manifest["channel_contracts"], "crates_io", crate["package"], version
         )[0]
-        if registry_version_state(check["version_lookup_url"]) == "published":
+        lookup_url = check["version_lookup_url"]
+        if lookup_url is None:
+            raise SystemExit("public registry version lookup URL is missing")
+        if registry_version_state(lookup_url) == "published":
             (preserved if check["channel"] in preserved_channels else unexpected).append(
                 crate["artifact"]
             )
@@ -642,7 +673,7 @@ def _channel_names(manifest: dict) -> tuple[str, ...]:
     return tuple(channels)
 
 
-def _preflight_outcome_status(outcome: str | None) -> str:
+def _preflight_outcome_status(outcome: object) -> str:
     """Map a GitHub Actions step outcome to a non-disclosing check status."""
     if outcome == "success":
         return "passed"

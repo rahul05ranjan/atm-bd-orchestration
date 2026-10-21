@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from conftest import HANG_GUARD_S, run_scenario
@@ -361,7 +362,7 @@ def test_startup_error_is_in_dashboard_before_first_refresh(monkeypatch):
         refresh_views=lambda: None, call_after_refresh=lambda _callback: None,
     )
 
-    app.ConsoleApp._show(dummy, replace(SNAPSHOT, errors=(), sprints=()), "", None)
+    app.ConsoleApp._show(cast(app.ConsoleApp, dummy), replace(SNAPSHOT, errors=(), sprints=()), "", None)
 
     assert dummy.snapshot.errors == (error,)
     assert "atm teams add-member tool atm-bd" in cli.render.dashboard(dummy.snapshot, 80, 80).plain

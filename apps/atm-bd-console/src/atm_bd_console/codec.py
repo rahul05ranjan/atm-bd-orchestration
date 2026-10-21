@@ -87,7 +87,7 @@ def _exceeds_depth_limit(text: str) -> bool:
     return False
 
 
-def from_json(cls: type[Any], text: str) -> Result[Any]:
+def from_json(cls: object, text: str) -> Result[Any]:
     """Decode up to 128 JSON container levels; malformed input is data, never an exception."""
     if _exceeds_depth_limit(text):
         return Err(ParseFailed("parse_failed", "$", "value nested too deeply", _FIX))

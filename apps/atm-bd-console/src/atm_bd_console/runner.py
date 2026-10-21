@@ -4,13 +4,15 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Literal
+from typing import Literal, Protocol
+
+from sc_observability import Level
 
 from . import atm_bd, atm_source, beads_source, git_source, github_source, ledger_source, model
 from .closed_cache import ClosedBeads
 from .dispatch import candidates, sprint_of, verification_reason
 from .enums import MergeState, PrState, SprintState
-from .log import TickLog, create_console_logger, error_message
+from .log import EventAction, TickLog, create_console_logger, error_message
 from .result import Err, Error, NotFound, Ok, Result
 from .state import StateStore, load_merges, load_prs, load_snapshot
 from .types import (
@@ -41,7 +43,19 @@ def _gh(mode: Literal["graphql", "rest", "off"]) -> GhStatus:
     return GhStatus(mode, None, None, None, False)
 
 
-def _run_actions(config: Config, actions: tuple[Action, ...], store: StateStore, now: datetime, logger: TickLog) -> tuple[tuple[Action, ...], tuple]:
+class _ActionStore(Protocol):
+    def append_action(self, value: ActionLine) -> Result[None]: ...
+
+
+class _ActionLogger(Protocol):
+    def mark_reported(self, error: Error) -> None: ...
+
+    def event(self, action: EventAction, *, level: Level = "info", message: str | None = None,
+              **fields: object) -> None: ...
+
+
+def _run_actions(config: Config, actions: tuple[Action, ...], store: _ActionStore, now: datetime,
+                 logger: _ActionLogger) -> tuple[tuple[Action, ...], tuple]:
     """Run actions and retain their actual delivery outcome for reporting."""
     errors = []
     reported = []

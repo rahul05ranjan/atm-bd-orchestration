@@ -22,6 +22,7 @@ from atm_bd_console.types import (
     Member,
     Merge,
     Phase,
+    Presence,
     Problem,
     PullRequest,
     RemoteRef,
@@ -32,6 +33,11 @@ from atm_bd_console.types import (
     Task,
     Worktree,
 )
+
+
+def required_worktree(candidate: Step) -> str:
+    assert candidate.worktree is not None
+    return candidate.worktree
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 REPO = RepoConfig("atm", "dev-sanity", "quality-mgr", "/repo", "/worktrees", "just lint", "/policy", (), "/plans")
@@ -111,10 +117,11 @@ def test_cached_github_error_is_not_readded_as_a_new_tick_error() -> None:
 
 
 def test_roster_statuses_and_markers() -> None:
-    members = tuple(Member(name, presence, NOW - timedelta(minutes=5)) for name, presence in (
+    roster: tuple[tuple[str, Presence], ...] = (
         ("busy", "active"), ("stalling", "idle"), ("blocked", "blocked"),
         ("offline", "offline"), ("idle", "idle"),
-    ))
+    )
+    members = tuple(Member(name, presence, NOW - timedelta(minutes=5)) for name, presence in roster)
     tasks = (
         Task("foreign", "busy", "active", 1, NOW, NOW - timedelta(seconds=20), "foreign"),
         Task("broken", "busy", "assigned", 2, NOW, NOW, "broken"),
@@ -694,7 +701,7 @@ def test_missing_worktree_keeps_conflict_details_without_duplicate_notices() -> 
     assert all(problem.first_seen == NOW for problem in snapshot.problems)
     assert actions == ()
 
-    recovered_worktree = replace(refreshed, worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)))
+    recovered_worktree = replace(refreshed, worktrees=Ok((Worktree(required_worktree(candidate), "topic", "sha"),)))
     snapshot, actions, _ = tick(recovered_worktree, state, NOW + timedelta(minutes=6), render)
 
     assert [problem.key for problem in snapshot.problems] == ["conflict:topic"]
@@ -729,7 +736,7 @@ def test_conflict_problem_names_files_and_spec_error_is_snapshot_only() -> None:
 def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base")
     supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
-                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)), merges=(Err(error),))
+                      worktrees=Ok((Worktree(required_worktree(candidate), "topic", "sha"),)), merges=(Err(error),))
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
     assert error in snapshot.errors
     assert not any(action.kind == "assign" for action in actions)
@@ -750,7 +757,7 @@ def test_merge_probe_error_holds_with_problem_then_recovers(error) -> None:
 def test_unpushed_branch_is_reported_once_as_unpushed_and_never_as_a_failed_merge_check() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, assignee=None, branch="topic", target="base")
     unpushed = Merge("topic", "base", MergeState.HEAD_NOT_PUSHED, (), ("head not pushed",), NOW)
-    supplied = inputs(phase(candidate), remotes=Ok(()), worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+    supplied = inputs(phase(candidate), remotes=Ok(()), worktrees=Ok((Worktree(required_worktree(candidate), "topic", "sha"),)),
                       merges=(Ok(unpushed),))
 
     snapshot, actions, state = tick(supplied, STATE, NOW, render)
@@ -775,7 +782,7 @@ def test_merge_probe_failure_on_a_step_that_is_not_ready_is_not_a_problem() -> N
 def test_closed_task_read_gates_dispatch_and_a_closed_candidate_is_never_assigned() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base", assignee="quality-mgr")
     supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
-                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+                      worktrees=Ok((Worktree(required_worktree(candidate), "topic", "sha"),)),
                       merges=(Ok(Merge("topic", "base", MergeState.CLEAN, (), (), NOW)),))
     _, actions, _ = tick(supplied, STATE, NOW, lambda context: Ok(DispatchSpec("qa", {})))
     assert [action.kind for action in actions] == ["assign"]
@@ -789,7 +796,7 @@ def test_closed_task_read_gates_dispatch_and_a_closed_candidate_is_never_assigne
 def test_failed_roster_read_builds_no_action_and_failed_task_read_shows_nobody_idle() -> None:
     candidate = step("qa", "atm-bh-1", kind="qa", ready=True, branch="topic", target="base", assignee="quality-mgr")
     supplied = inputs(phase(candidate), remotes=Ok((RemoteRef("topic", "sha"),)),
-                      worktrees=Ok((Worktree(candidate.worktree, "topic", "sha"),)),
+                      worktrees=Ok((Worktree(required_worktree(candidate), "topic", "sha"),)),
                       merges=(Ok(Merge("topic", "base", MergeState.CLEAN, (), (), NOW)),))
     spec = lambda context: Ok(DispatchSpec("qa", {}))
     _, actions, _ = tick(supplied, STATE, NOW, spec)

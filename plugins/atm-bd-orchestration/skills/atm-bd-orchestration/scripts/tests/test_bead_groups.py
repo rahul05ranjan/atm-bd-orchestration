@@ -20,7 +20,9 @@ class FindingGroupTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("sc-compose"), "sc-compose is required to render bead formulas")
     def test_finding_group_propagates_optional_provenance_to_fix(self):
         loader = importlib.machinery.SourceFileLoader("bead_groups_provenance", str(SCRIPTS / "bead-groups"))
-        groups = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        assert spec is not None
+        groups = importlib.util.module_from_spec(spec)
         loader.exec_module(groups)
         runner = object.__new__(groups.Run)
         runner.option = None
@@ -39,7 +41,7 @@ class FindingGroupTests(unittest.TestCase):
             findings = root / "findings.json"
             shutil.copyfile(formula, root / "formula.toml.j2")
             for provenance in (15, None):
-                row = {"ref": "qa1-f1", "severity": "blocking", "reviewer": "qa", "title": "issue", "remedy": "fix"}
+                row: dict[str, object] = {"ref": "qa1-f1", "severity": "blocking", "reviewer": "qa", "title": "issue", "remedy": "fix"}
                 if provenance is not None:
                     row["found_on_layer"] = provenance
                 findings.write_text(json.dumps({"sprint": "d-1", "round": 1, "filed_by": "qa",
@@ -64,7 +66,9 @@ class FindingGroupTests(unittest.TestCase):
 class FoundOnLayerGuardTests(unittest.TestCase):
     def targets(self, layer):
         loader = importlib.machinery.SourceFileLoader("bead_groups_layer_guard", str(SCRIPTS / "bead-groups"))
-        groups = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        assert spec is not None
+        groups = importlib.util.module_from_spec(spec)
         loader.exec_module(groups)
         runner = object.__new__(groups.Run)
         runner.option = None
@@ -109,7 +113,9 @@ class FoundOnLayerGuardTests(unittest.TestCase):
 class PhaseEndFindingTests(unittest.TestCase):
     def targets(self, **extra):
         loader = importlib.machinery.SourceFileLoader("bead_groups_phase_end", str(SCRIPTS / "bead-groups"))
-        groups = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        assert spec is not None
+        groups = importlib.util.module_from_spec(spec)
         loader.exec_module(groups)
         runner = object.__new__(groups.Run)
         runner.option = None

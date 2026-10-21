@@ -67,8 +67,8 @@ def test_cell_mouse_parser_keeps_cells_after_an_unsolicited_in_band_resize_repor
 def test_input_thread_builds_the_cell_mouse_parser_and_restores_textual_afterwards() -> None:
     from atm_bd_console.terminal import CellMouseParser, cell_mouse_parser
 
-    assert linux_driver.XTermParser is XTermParser
+    assert vars(linux_driver)["XTermParser"] is XTermParser
     with cell_mouse_parser():
-        assert linux_driver.XTermParser is CellMouseParser
-    assert linux_driver.XTermParser is XTermParser
+        assert vars(linux_driver)["XTermParser"] is CellMouseParser
+    assert vars(linux_driver)["XTermParser"] is XTermParser
     assert "run_input_thread" in CONSOLE_DRIVER_CLASS.__dict__

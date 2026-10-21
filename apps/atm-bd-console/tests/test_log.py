@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from typing import cast
 
 import pytest
 from sc_observability import Err as ObservabilityErr
-from sc_observability import LoggerConfig, create_logger
+from sc_observability import Logger, LoggerConfig, create_logger
 
 from atm_bd_console import log
 from atm_bd_console.log import create_console_logger
@@ -81,7 +82,7 @@ def test_native_typed_errors_are_exposed_as_console_errors(tmp_path, monkeypatch
         monkeypatch.setattr(log, "create_logger", lambda *_: rejected)
         result = create_console_logger(tmp_path)
     else:
-        logger = log.ConsoleLogger(NativeLogger())
+        logger = log.ConsoleLogger(cast(Logger, NativeLogger()))
         result = logger.event("action") if operation == "event" else logger.flush()
 
     assert isinstance(result, Err)

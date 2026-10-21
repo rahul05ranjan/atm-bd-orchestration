@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 from contract_samples import CONFIG, NOW, PHASE, PHASE_FILE, REPO_CONFIG, SNAPSHOT, TIMEOUT
-from test_runner import RUNNING_STATE, Store
+from test_runner import RUNNING_STATE, Store, fake_store
 
 from atm_bd_console import atm_bd, beads_source, ledger_source, runner
 from atm_bd_console.closed_cache import ClosedBeads
@@ -65,7 +65,8 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> FakeBd:
 
 
 def tick(cache: ClosedBeads):
-    return runner.step(replace(CONFIG, github="off", no_fetch=True, dry_run=True), RUNNING_STATE, False, Store(), cache)
+    return runner.step(replace(CONFIG, github="off", no_fetch=True, dry_run=True), RUNNING_STATE, False,
+                       fake_store(Store()), cache)
 
 
 def test_second_tick_issues_no_closed_reads(fake):

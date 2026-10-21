@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import fields, replace
 from datetime import UTC, datetime
+from functools import partial
 
 from contract_samples import PHASE_TEMPLATES
 
@@ -66,7 +67,8 @@ def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
 def test_missing_target_holds_with_actionable_reason() -> None:
     value = replace(phase(step(target=None)), sprints=(replace(SPRINT, target=None),))
     outcome = dispatch(value, (), (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),),
-                       (RemoteRef("sprint/bh-6", "abc123"),), (), (), REPO, "fenix", NOW, dispatch_spec, roster=ROSTER, closed=frozenset())
+                       (RemoteRef("sprint/bh-6", "abc123"),), (), (), REPO, "fenix", NOW,
+                       partial(dispatch_spec, templates=PHASE_TEMPLATES), roster=ROSTER, closed=frozenset())
     assert outcome.actions == ()
     assert "set the step or sprint PR target" in outcome.held[0].reason
 
@@ -149,10 +151,11 @@ def test_a_step_already_tasked_or_in_progress_is_never_a_hold() -> None:
     worktrees = (Worktree("/worktrees/bh-6", "sprint/bh-6", "abc123"),)
     remotes = (RemoteRef("sprint/bh-6", "abc123"),)
     active = Task("atm-bh-6.group-qa", "solar", "active", 1, NOW, NOW, "qa")
-    tasked = dispatch(phase(step(ready=False)), (active,), worktrees, remotes, (), (), REPO, "fenix", NOW, dispatch_spec,
+    tasked = dispatch(phase(step(ready=False)), (active,), worktrees, remotes, (), (), REPO, "fenix", NOW,
+                      partial(dispatch_spec, templates=PHASE_TEMPLATES),
                       roster=ROSTER, closed=frozenset())
     in_progress = dispatch(phase(step(status=SprintState.IN_PROGRESS, ready=False)), (), worktrees, remotes, (), (), REPO,
-                           "fenix", NOW, dispatch_spec, roster=ROSTER, closed=frozenset())
+                           "fenix", NOW, partial(dispatch_spec, templates=PHASE_TEMPLATES), roster=ROSTER, closed=frozenset())
     assert tasked.held == () and tasked.actions == ()
     assert in_progress.held == () and in_progress.actions == ()
 
