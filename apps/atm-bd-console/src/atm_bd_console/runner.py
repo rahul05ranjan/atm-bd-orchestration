@@ -223,19 +223,25 @@ def step(config: Config, state: State, force_github: bool, store: StateStore) ->
         persisted = _write_snapshot(store, persisted, logger)
         return StepResult(persisted, state, failed_reads=logger.failed_reads)
     config = replace(config, lead=file.value.lead)
-    root = logger.result("beads.show_root", beads_source.show((file.value.root_id,)), task_ids=[file.value.root_id])
+    root_read = beads_source.show((file.value.root_id,))
+    if isinstance(root_read, Err) and hasattr(root_read.error, "fix"):
+        # A failed `bd show` is a transient read failure, never "no root bead": keep the real error, say it is retried.
+        root_read = Err(replace(root_read.error, fix=f"bd show {file.value.root_id} failed; retried next tick"))
+    root = logger.result("beads.show_root", root_read, task_ids=[file.value.root_id])
     root_bead = root.value[0] if isinstance(root, Ok) and root.value else None
     # This is deliberately the sole read on a closed phase.
     if root_bead is not None and root_bead.status == SprintState.CLOSED:
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger, force_github)
-    if not force_github and model.idle_stop_due(state, now):
+    if not force_github and isinstance(root, Ok) and model.idle_stop_due(state, now):
         return _stopped_tick(config, state, now, store, file.value, repo.value, root_bead, logger)
     opened = logger.result("beads.open", beads_source.open_rows(file.value.label), label=file.value.label)
     ready = logger.result("beads.ready", beads_source.ready(file.value.label), label=file.value.label)
     known = opened.value.beads if isinstance(opened, Ok) else ()
     shown_ids = atm_bd.closed_show_ids(file.value, known)
     shown = logger.result("beads.show_closed", beads_source.show(shown_ids), task_ids=list(shown_ids))
-    if isinstance(opened, Err):
+    if isinstance(root, Err):
+        phase = root
+    elif isinstance(opened, Err):
         phase = opened
     elif isinstance(ready, Err):
         phase = ready

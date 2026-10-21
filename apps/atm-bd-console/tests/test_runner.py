@@ -27,14 +27,14 @@ from contract_samples import (
     TIMEOUT,
 )
 
-from atm_bd_console import log, runner
+from atm_bd_console import atm_bd, log, runner
 from atm_bd_console.beads_source import open_rows
 from atm_bd_console.command import Output
 from atm_bd_console.enums import CiState, MergeState, PrState, QaState, SprintState
 from atm_bd_console.log import TickLog, error_message
 from atm_bd_console.model import due as model_due
 from atm_bd_console.model import tick as model_tick
-from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
+from atm_bd_console.result import CommandFailed, ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
 from atm_bd_console.state import acquire_lock, load_prs, load_snapshot, load_state
 from atm_bd_console.types import (
     INITIAL_STATE,
@@ -54,6 +54,7 @@ from atm_bd_console.types import (
 )
 
 RUNNING_STATE = replace(STATE, idle_since=None)
+REAL_PHASE = atm_bd.phase
 
 
 class StoreReads:
@@ -1427,3 +1428,51 @@ def test_step_reports_failed_atm_and_git_reads(monkeypatch, github_runtime) -> N
     failed = runner.step(CONFIG, RUNNING_STATE, False, store).failed_reads
     for source in ("atm.members", "atm.tasks", "git.worktrees"):
         assert failed[source] == TIMEOUT
+
+
+ROOT_FAILED = CommandFailed("command_failed", ("bd", "show", "atm-phase-bh", "--json"), 1,
+                            "dolt: i/o timeout reading atm-phase-bh", "inspect bd output")
+
+
+def _root_show(monkeypatch, root_reads):
+    reads = iter(root_reads)
+    shown = []
+
+    def show(ids):
+        if ids == (PHASE_FILE.root_id,):
+            shown.append(ids)
+            return next(reads)
+        return Ok(())
+
+    monkeypatch.setattr(runner.beads_source, "show", show)
+    return shown
+
+
+@pytest.mark.parametrize("state", [RUNNING_STATE, STATE])
+def test_failed_root_show_is_the_real_error_not_not_found(monkeypatch, github_runtime, state) -> None:
+    store, _, _, inputs = github_runtime
+    _root_show(monkeypatch, [Err(ROOT_FAILED)])
+    monkeypatch.setattr(runner.atm_bd, "phase", REAL_PHASE)
+    result = runner.step(CONFIG, state, True, store)
+    phase = inputs[-1].phase
+    assert isinstance(phase, Err) and not isinstance(phase.error, NotFound)
+    assert phase.error == replace(ROOT_FAILED, fix="bd show atm-phase-bh failed; retried next tick")
+    assert result.failed_reads["beads.show_root"] == phase.error
+    message = error_message(asdict(phase.error))
+    assert "dolt: i/o timeout reading atm-phase-bh" in message and "bd show atm-phase-bh" in message
+    assert "retried next tick" in message and "fix root in the phase file" not in message
+
+
+def test_empty_successful_root_show_is_not_found_then_recovers(monkeypatch, github_runtime) -> None:
+    store, _, _, inputs = github_runtime
+    root = replace(BEAD, id=PHASE_FILE.root_id, labels=(PHASE_FILE.label,), parent=None)
+    _root_show(monkeypatch, [Ok(()), Err(ROOT_FAILED), Ok((root,))])
+    monkeypatch.setattr(runner.atm_bd, "phase", REAL_PHASE)
+    empty = runner.step(CONFIG, RUNNING_STATE, True, store)
+    assert inputs[-1].phase == Err(NotFound("not_found", "atm-phase-bh (no root bead)",
+                                            "bd show atm-phase-bh; fix root in the phase file"))
+    assert "beads.show_root" not in empty.failed_reads
+    failed = runner.step(CONFIG, RUNNING_STATE, True, store)
+    assert isinstance(inputs[-1].phase.error, CommandFailed) and "beads.show_root" in failed.failed_reads
+    recovered = runner.step(CONFIG, RUNNING_STATE, True, store)
+    assert isinstance(inputs[-1].phase, Ok) and "beads.show_root" not in recovered.failed_reads
