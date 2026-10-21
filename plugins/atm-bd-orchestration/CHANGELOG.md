@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- The console closed-bead cache drops a reopened bead's cached closed row and closed-stage entries as well as the bead, so a reopened bead can no longer leave a stale closed row on screen (#533).
 - The console status bar says `gh: <mode> not read yet` before the first GitHub read instead of `gh: graphql ✅ --:--`, so a read that never happened is never shown as a success (#533).
 - The console Sprint steps pane starts with the labelled `unavailable - the phase has not been read` placeholder and shows `unavailable - <typed error>` when the first tick fails, so it is never blank (#533).
 - The console TUI build line shows the package version (`__version__`, the string `atm-bd --version` prints) on a release install, not the repo commit count (`0.18.823`). A checkout or a build from a dirty tree adds `+g<sha>[-dirty]`; the wheel build now writes `<version>+g<sha>[-dirty]` and no commit count is stored or shown (#532).

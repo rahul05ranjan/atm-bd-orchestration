@@ -135,6 +135,11 @@ class ClosedBeads:
             for bead_id in ids:
                 if self._beads.pop(bead_id, None) is not None:
                     self._dirty = True
+                if self._rows.pop(bead_id, None) is not None:
+                    self._dirty = True
+                for stage_rows in self._stage_rows.values():
+                    if stage_rows.pop(bead_id, None) is not None:
+                        self._dirty = True
 
     def missing_rows(self, ids: Iterable[str]) -> tuple[str, ...]:
         with self._lock:
