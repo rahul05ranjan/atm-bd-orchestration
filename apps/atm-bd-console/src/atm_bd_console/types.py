@@ -81,6 +81,10 @@ class Step:
     carry_forward: str | None
     close_reason: str | None = None
     severity: str | None = None
+    # QA steps: the QA bead and its checked bead as bd rows (id, title, status, labels, metadata). Dispatch builds the
+    # QA vars from them with the canonical resolver, close_fields.qa_assignment_vars, the one producer of QA vars (#557).
+    qa_row: Mapping[str, Any] | None = None
+    checked_row: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -54,6 +54,22 @@ def run(value: Step, *, remotes=None, worktrees=None, merges=None, prs=(), spec=
     return dispatch(phase(value), (), worktree_values, remote_values, merges, prs, REPO, "fenix", NOW, renderer, roster=ROSTER, closed=frozenset())
 
 
+def test_a_relative_bead_worktree_is_found_where_git_lists_it() -> None:
+    # bk-15 F2: the bead's worktree is relative to the primary checkout; git lists it absolute (#557).
+    listed = (Worktree("/worktrees/fix/bk-15-qa1-f2", "sprint/bh-6", "abc123"),)
+    seen: list[DispatchContext] = []
+    outcome = run(step(worktree="../worktrees/fix/bk-15-qa1-f2"), worktrees=listed,
+                  spec=lambda context: seen.append(context) or Ok(DispatchSpec("qa", {})))
+    assert outcome.held == () and len(outcome.actions) == 1
+    assert seen[0].worktree_path == "/worktrees/fix/bk-15-qa1-f2"
+
+
+def test_a_relative_bead_worktree_git_does_not_list_is_held_naming_the_resolved_path() -> None:
+    outcome = run(step(worktree="../worktrees/fix/absent"))
+    assert outcome.actions == ()
+    assert any("no worktree for sprint/bh-6 at /worktrees/fix/absent" in row.reason for row in outcome.held)
+
+
 def test_unavailable_merge_holds_until_current_pair_is_verified() -> None:
     unavailable = Merge("sprint/bh-6", "sprint/bh-1", MergeState.ERROR, (), ("timeout; retry the merge check",), NOW)
     wrong_target = replace(unavailable, target="other", state=MergeState.CLEAN)
@@ -225,9 +241,21 @@ def test_stack_has_one_owner_sprint() -> None:
     assert "stack" not in {field.name for field in fields(DispatchContext)}
 
 
-def test_qa_dispatch_reads_stack_from_sprint() -> None:
-    spec = dispatch_spec(_context(), PHASE_TEMPLATES)
-    assert isinstance(spec, Ok)
+def test_qa_dispatch_reads_stack_and_layer_from_the_poured_qa_bead() -> None:
+    # The sprint plan says layer 4; the QA bead, poured from that sprint's stack, is planned on layer 6 (#557).
+    poured = {"role": "qa", "phase": "bh", "sprint": "bh-6", "sprint_bead": "atm-bh-6", "stack": "phase-bh",
+              "stack_bead": "atm-phase-bh.stack", "branch": "sprint/bh-6-tick", "worktree": "/worktrees/bh-6",
+              "pr_target": "integrate/phase-bh", "base": "integrate/phase-bh", "checked_bead": "atm-bh-6.dev",
+              "checked_title": "bh-6", "sanity_bead": "atm-bh-6.sanity", "qa_bead": "atm-bh-6.qa",
+              "phase_feature": "console", "lint_command": "just lint", "policy_path": "/policy", "max_sanity_rounds": 5,
+              "layer": 6, "round": 1, "reviewers_round1": ["req-qa"]}
+    qa_row = {"id": "atm-bh-6.qa", "title": "QA bh-6", "status": "open", "labels": ["stage:qa"], "metadata": poured}
+    checked_row = {"id": "atm-bh-6.dev", "title": "bh-6", "status": "closed", "labels": ["stage:dev"],
+                   "metadata": {"role": "dev", "commit": "abc123", "branch": "sprint/bh-6-tick", "pr_number": 12}}
+    context = _context()
+    context = replace(context, step=replace(context.step, qa_row=qa_row, checked_row=checked_row),
+                      sprint=replace(context.sprint, layer=4))
+    spec = dispatch_spec(context, PHASE_TEMPLATES)
+    assert isinstance(spec, Ok), spec
     assert spec.value.template == PHASE_TEMPLATES["qa"]
-    assert spec.value.vars["stack"] == "phase-bh"
-    assert spec.value.vars["layer"] == 6
+    assert (spec.value.vars["stack"], spec.value.vars["layer"], spec.value.vars["pr_number"]) == ("phase-bh", 6, "12")
