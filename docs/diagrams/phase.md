@@ -73,7 +73,7 @@ flowchart TB
   RF["phase-end finding"]:::tmpl
   WFR["p-workflow-issues<br/>outside the phase"]:::tmpl
   WF["workflow-issue class bead"]:::tmpl
-  TOML[/".atm-bd/#lt;phase#gt;.toml (tracked)<br/>plan file, phase root, integration_branch"/]:::file
+  TOML[/".atm-bd/#lt;phase#gt;.toml (tracked)<br/>plan file, phase root, integration_branch,<br/>lead, templates"/]:::file
   SJ[/"#lt;plans_dir#gt;/#lt;phase#gt;.jsonl<br/>on the integration branch"/]:::file
 
   SPR -->|parent-child| ROOT

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from .enums import MergeState, SprintState
 from .error_text import error_text
@@ -60,6 +61,13 @@ def candidates(phase: Phase, tasks: tuple[Task, ...], closed: frozenset[str]) ->
     )
 
 
+def resolved_worktree(path: str, primary_checkout: str) -> str:
+    """A bead's worktree as git lists it: a relative path is relative to the primary checkout, resolved the way
+    close_fields.close_vars resolves it, so the gate and the QA vars name the same directory (#557)."""
+    worktree = Path(path)
+    return str(worktree if worktree.is_absolute() else (Path(primary_checkout) / worktree).resolve())
+
+
 def _gate_reasons(
     step: Step,
     target: str | None,
@@ -67,6 +75,7 @@ def _gate_reasons(
     remote_by_branch: dict[str, str],
     merge_by_pair: dict[tuple[str, str], Merge],
     remote_error: Error | None,
+    primary_checkout: str,
 ) -> list[str]:
     """Why a ready step cannot dispatch yet. Only ready steps get these gates: a step that is not ready has no
     branch or worktree yet, so the gates would only repeat as `<missing>` rows beside its `not ready` row."""
@@ -77,10 +86,9 @@ def _gate_reasons(
         where = step.worktree or "<worktree>"
         reasons.append(f"branch not on origin: {step.branch or '<missing>'}"
                        + (f"; push it: `git -C {where} push -u origin {step.branch}`" if step.branch else ""))
-    if not step.worktree or not any(
-        worktree.path == step.worktree and worktree.branch == step.branch for worktree in worktrees
-    ):
-        reasons.append(f"no worktree for {step.branch or '<missing>'} at {step.worktree or '<unset>'}; "
+    path = resolved_worktree(step.worktree, primary_checkout) if step.worktree else None
+    if path is None or not any(worktree.path == path and worktree.branch == step.branch for worktree in worktrees):
+        reasons.append(f"no worktree for {step.branch or '<missing>'} at {path or '<unset>'}; "
                        "create it with the sc-git-worktree skill (not `git worktree add`)")
     merge = merge_by_pair.get((step.branch, target)) if step.branch and target else None
     if merge is not None and merge.state == MergeState.CONFLICT:
@@ -127,7 +135,7 @@ def dispatch(
         sprint = sprint_of(step, phase, repo.bead_prefix)
         target = step.target or (sprint.target if sprint else None)
         reasons = (["not ready"] if not step.ready else _gate_reasons(
-                       step, target, worktrees, remote_by_branch, merge_by_pair, remote_error,
+                       step, target, worktrees, remote_by_branch, merge_by_pair, remote_error, repo.primary_checkout,
                    ))
 
         pr = pr_by_branch.get(step.branch or "")
@@ -162,7 +170,7 @@ def dispatch(
             lead=lead,
             commit=remote_by_branch[step.branch],
             base=pr.base if pr else target,
-            worktree_path=step.worktree,
+            worktree_path=resolved_worktree(step.worktree, repo.primary_checkout),
             pr=pr,
             layer_prs=layer_prs,
             repo=repo,

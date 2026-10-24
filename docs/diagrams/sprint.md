@@ -4,14 +4,15 @@ The sprint bead is a container. Its own group is three sibling children,
 `dev ← sanity ← qa`: sanity blocks on dev, qa blocks on sanity. Each blocking
 finding pours the same shape, `fix ← sanity ← qa`, as siblings directly under
 the sprint; there is no finding container. The fix bead is the dev's task and
-carries the finding's metadata. bd refuses to close the sprint while any child
-is open.
+carries the finding's metadata. Every open dev, fix, sanity and qa bead also
+carries the close fields its close needs (close-hooks.md, "Close vars"). bd
+refuses to close the sprint while any child is open.
 
 | Bead | Closed by | When |
 | --- | --- | --- |
-| dev, fix | the dev | the work is committed |
-| sanity | dev-sanity | PASS closes it. FAIL increments `metadata.sanity_round`; up to the configured cap the hook reopens dev or fix, resets sanity open/unassigned and sends `sanity-fail`; exceeding the cap escalates without reopening |
-| qa | quality-mgr | after it has poured a fix group for each blocking finding and created the important and minor finding beads |
+| dev, fix | the dev, through `atm-task-close.py --role dev\|fix` | the work is pushed and its PR is open; the script records commit, branch and PR on the bead, assigns sanity and closes the dev's task |
+| sanity | the sanity `task.close` hook, on dev-sanity's close | PASS closes it. FAIL reopens dev or fix, resets sanity open/unassigned and sends `sanity-failed`; no round is counted (the legacy close mode counts rounds up to `max_sanity_rounds`) |
+| qa | quality-mgr, through `atm-task-close.py --role qa` | after it has poured a fix group for each blocking finding and created the important and minor finding beads |
 | sprint | the team lead | every blocking fix group is closed |
 
 ## The sprint group
@@ -25,7 +26,7 @@ flowchart TB
   SPR["p-x-2 sprint container<br/>model: SprintBead<br/>deliverables, acceptance_criteria, requirements, adrs,<br/>worktree, branch, pr_target, difficulty"]:::tmpl
 
   subgraph POUR["poured: sprint-group onto p-x-2"]
-    DEV["p-x-2.group-dev<br/>difficulty; closed by the dev"]:::poured
+    DEV["p-x-2.group-dev<br/>difficulty, close fields; closed by the dev"]:::poured
     SAN["p-x-2.group-sanity: gate<br/>model: SanityBead, metadata.dev_bead"]:::poured
     QA["p-x-2.group-qa<br/>metadata: checked_bead, round = 1"]:::poured
   end
@@ -135,30 +136,35 @@ flowchart TB
   classDef script fill:#e6f4ea,stroke:#188038,color:#000
 
   SPR["p-x-2 sprint container<br/>cannot close: dev is open"]:::tmpl
-  DEV["p-x-2.group-dev<br/>reopened by the close hook<br/>closed ATM task re-assigned by the lead"]:::poured
+  DEV["p-x-2.group-dev<br/>reopened by the sanity close hook<br/>closed ATM task re-assigned by the lead"]:::poured
   SAN["p-x-2.group-sanity: gate<br/>reset open and unassigned<br/>re-blocked by dev"]:::poured
-  FAIL["hook sends sanity-fail<br/>deliverable-2 and deliverable-5<br/>with selected reasons, no child beads"]:::script
-  CAP["round exceeds max_sanity_rounds (default 5)<br/>SANITY.ROUND_CAP to lead once<br/>dev stays closed; sanity not reset"]:::script
+  FAIL["hook sends sanity-failed to the dev<br/>deliverable 2 and deliverable 5<br/>with their issues, no child beads"]:::script
 
   DEV ==>|parent-child| SPR
   SAN ==>|parent-child| SPR
   SAN ==>|blocks| DEV
-  SAN -.->|FAIL within cap| FAIL
-  FAIL -.->|message on open task| DEV
-  SAN -.->|FAIL above cap| CAP
+  SAN -.->|FAIL| FAIL
+  FAIL -.->|message to the dev| DEV
 ```
 
 The sanity bead is a minimal gate with no `discovered-from` edge. On FAIL
-the close hook increments `metadata.sanity_round`. While the count is at most
-`max_sanity_rounds` (default 5), it reopens the checked bead, resets sanity
-open and unassigned, and sends one `sanity-fail` message with the numbered
-undone deliverables and selected reasons on the dev's existing open task.
-The dev fixes them, rebases onto the current top, validates, pushes and reruns
-the hook. No finding children or new task are created. Once the count exceeds
-the cap (the sixth FAIL by default), the hook reopens nothing and sends
-`SANITY.ROUND_CAP` to the lead once; the dev task stays closed until the lead
-rules. The same applies to a fix bead and its sanity.
+the sanity close hook journals two writes: reopen the checked bead (only
+while its assignee is still the dev task's assignee) and reset sanity open
+and unassigned, keeping its `blocks` edge. It sends one `sanity-failed`
+message to the dev with the numbered missing deliverables and their issues
+(deliverable 0 is a verification-wide evidence gap) and closes the sanity
+task. The dev's task was closed at dev complete; the lead re-assigns it, and
+the dev fixes, rebases onto the current top, validates, pushes and runs
+`atm-task-close.py` again, which assigns sanity again. No finding children
+are created. The same applies to a fix bead and its sanity.
 
-dev-sanity is one teammate (`agents/dev-sanity.md`) that spawns
-`sc-sanity-llm` and `sc-sanity-jev`, owns the verdict, reruns a failed
-reviewer, and triages LLM/JEV disagreement.
+In the legacy close mode (`atm-task-close.py --role sanity`, a phase without
+the hook registration) FAIL also increments `metadata.sanity_round`; once it
+exceeds `max_sanity_rounds` (default 5) nothing is reopened and the lead gets
+`SANITY.ROUND_CAP` once.
+
+dev-sanity is one teammate (`agents/dev-sanity.md`). In the daemon close mode
+it inspects the deliverables and the dev's build and test evidence itself and
+never builds; in the legacy mode it spawns `sc-sanity-llm` and
+`sc-sanity-jev`, owns the verdict, reruns a failed reviewer, and triages
+LLM/JEV disagreement.
