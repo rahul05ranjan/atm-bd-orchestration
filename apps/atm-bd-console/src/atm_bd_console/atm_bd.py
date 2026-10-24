@@ -48,6 +48,7 @@ SPRINT_BEAD_KEY = "sprint_bead"
 SEVERITY_KEY = "severity"
 QUICK_FIX_KEY = "quick_fix"
 BRANCH_KEY, PR_TARGET_KEY, WORKTREE_KEY, LAYER_KEY, DIFFICULTY_KEY = "branch", "pr_target", "worktree", "layer", "difficulty"
+PR_NUMBER_KEY, PR_URL_KEY = "pr_number", "pr_url"  # recorded on a dev or fix bead by its close
 # Semantic source name -> production template variable. Dispatch code uses these names
 # so the template contract is defined here once, next to the template paths.
 DISPATCH_KEYS: Mapping[str, str] = {
@@ -330,6 +331,8 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         if checked_bead.metadata.get(ROUND_KEY) is None:
             return _missing(f"{checked_bead.id}.metadata.{ROUND_KEY}")
         qa_round = checked_bead.metadata[ROUND_KEY] + 1
+    recorded = checked_bead.metadata if kind == QA_KIND and checked_bead is not None else {}
+    recorded_pr = _pr_number(recorded.get(PR_NUMBER_KEY))
     top = _top_epic(bead, parents)
     prefix = (top or bead.id).split("-", 1)[0]
     return Ok(Step(
@@ -338,7 +341,16 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         metadata.get(WORKTREE_KEY), metadata.get(LAYER_KEY), metadata.get(DIFFICULTY_KEY),
         short_id(top or bead.id, prefix), top, bead.claimed_at, bead.closed_at, bead.title,
         checked, sprint_bead, qa_round, carry, bead.close_reason, _severity(bead),
+        recorded_pr, (recorded.get(PR_URL_KEY) or None) if recorded_pr is not None else None,
     ))
+
+
+def _pr_number(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    return int(value) if isinstance(value, str) and value.isdigit() and int(value) > 0 else None
 
 
 def closed_show_ids(file: PhaseFile, known: tuple[Bead, ...]) -> tuple[str, ...]:
@@ -443,6 +455,17 @@ def dispatch_spec(ctx: DispatchContext, templates: Mapping[str, str]) -> Result[
         return Ok(DispatchSpec(template, values))
     if current.qa_round is None:
         return _missing(f"{current.bead_id}.metadata.{ROUND_KEY}")
+    if pr is None:
+        # The PR read can lag a just-opened PR (#2214): use the PR the checked bead recorded at close, and never
+        # assign QA without one.
+        if current.recorded_pr is None:
+            return Err(NotFound(
+                "not_found", f"{current.checked_bead}.metadata.{PR_NUMBER_KEY}",
+                f"no open PR for {current.branch} in the PR read and {current.checked_bead} records none: finish its "
+                "dev or fix close (it records pr_number) or refresh GitHub; QA is not assigned without its PR",
+            ))
+        values[keys["pr_number"]] = str(current.recorded_pr)
+        values[keys["pr_url"]] = current.recorded_pr_url or ""
     values |= {
         keys["phase"]: ctx.phase_id, keys["phase_title"]: ctx.phase_title,
         keys["stack"]: ctx.sprint.stack, keys["layer"]: ctx.sprint.layer,

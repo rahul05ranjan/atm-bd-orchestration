@@ -143,7 +143,10 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
         "checked_bead": f"{sprint.id}.group-dev", "round": 1, "branch": SPRINT.branch,
         "pr_target": SPRINT.target, "worktree": WORKTREE.path,
     })
-    beads = {bead.id: bead for bead in (root, sprint, candidate)}
+    # The dev close records its PR on the checked bead; with GitHub off, QA dispatch takes it from there (#557).
+    dev = replace(BEAD, id=f"{sprint.id}.group-dev", status=SprintState.CLOSED, parent=sprint.id,
+                  labels=("stage:dev",), metadata={"branch": SPRINT.branch, "pr_number": 2214})
+    beads = {bead.id: bead for bead in (root, sprint, candidate, dev)}
     monkeypatch.setattr(cli.config_source, "repo_root", lambda: phase_repo)
     monkeypatch.chdir(phase_repo)
     monkeypatch.setattr(runner.beads_source, "show", lambda ids: Ok(tuple(beads[item] for item in ids if item in beads)))

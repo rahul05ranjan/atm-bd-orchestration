@@ -34,7 +34,7 @@ FIELDS: dict[str, str] = {
     "Task": "id agent state position assigned_at state_since description",
     "Bead": "id title status labels parent blocked_by assignee metadata created_at claimed_at closed_at close_reason raw_status",
     "Step": "bead_id sprint kind quick_fix anchor status ready assignee branch target worktree layer difficulty tag "
-            "top_epic claimed_at closed_at title checked_bead sprint_bead qa_round carry_forward close_reason severity",
+            "top_epic claimed_at closed_at title checked_bead sprint_bead qa_round carry_forward close_reason severity recorded_pr recorded_pr_url",
     "Sprint": "id title layer branch target stack depends_on closed findings status raw_status",
     "Phase": "root_id label title closed sprints steps step_errors",
     "DispatchSpec": "template vars",

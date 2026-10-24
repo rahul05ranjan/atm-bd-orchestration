@@ -670,6 +670,11 @@ def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullReque
         assert isinstance(spec, Err), spec
         assert "beads_dir, phase_lead, and close_context" in spec.error.fix
         return
+    if pr is None:
+        # No PR in the read and none recorded on the checked bead: QA is refused, never sent with an empty PR.
+        assert isinstance(spec, Err) and isinstance(spec.error, NotFound), spec
+        assert _not_found(spec.error).what == f"{STEPS[kind].metadata['checked_bead']}.metadata.pr_number"
+        return
     assert isinstance(spec, Ok), spec
     template, values = expected(kind, pr)
     assert spec.value.template == f".claude/skills/atm-bd-orchestration/templates/{template}"
@@ -678,6 +683,34 @@ def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullReque
     assert rendered.returncode == 0, rendered.stderr
     verification = f"This is fix verification of fix bead `{FIX.id}`"
     assert (verification in rendered.stdout) is (kind == "fix_qa")
+
+
+@pytest.mark.parametrize("kind", ["sprint_qa", "fix_qa"])
+def test_qa_without_a_pr_in_the_read_uses_the_pr_its_checked_bead_recorded(kind: str, tmp_path: Path) -> None:
+    # #2214: the PR read had not caught up with a just-opened PR, and QA was assigned with an empty pr_number.
+    qa = STEPS[kind]
+    checked_id = qa.metadata["checked_bead"]
+    checked = PARENTS[checked_id]
+    recorded = {**PARENTS, checked_id: replace(checked, metadata={**checked.metadata, "pr_number": 2214,
+                                                                     "pr_url": "https://example.test/pull/2214"})}
+    result = step(qa, recorded)
+    assert isinstance(result, Ok), result
+    spec = dispatch_spec(context(result.value, None), PHASE_TEMPLATES)
+    assert isinstance(spec, Ok), spec
+    assert spec.value.vars["pr_number"] == "2214"
+    assert spec.value.vars["pr_url"] == "https://example.test/pull/2214"
+    template, values = expected(kind, None)
+    assert dict(spec.value.vars) == {**values, "pr_number": "2214", "pr_url": "https://example.test/pull/2214"}
+    rendered = render(template, dict(spec.value.vars), tmp_path)
+    assert rendered.returncode == 0, rendered.stderr
+    assert "<pr-number><![CDATA[2214]]></pr-number>" in rendered.stdout
+
+
+def test_a_live_pr_wins_over_the_recorded_one() -> None:
+    checked = PARENTS[DEV.id]
+    recorded = {**PARENTS, DEV.id: replace(checked, metadata={**checked.metadata, "pr_number": 1})}
+    spec = dispatch_spec(context(_ok(step(SPRINT_QA, recorded)), PR), PHASE_TEMPLATES)
+    assert isinstance(spec, Ok) and spec.value.vars["pr_number"] == str(PR.number)
 
 
 def test_dispatch_spec_uses_named_template_variable_keys(monkeypatch: pytest.MonkeyPatch) -> None:
