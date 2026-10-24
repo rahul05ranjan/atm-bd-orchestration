@@ -48,7 +48,7 @@ TEST_LEAD = "test-lead"
 TEST_SANITY_MEMBER = "test-sanity"
 TEST_QA_MEMBER = "test-qa"
 TEST_REVIEWER = "test-reviewer"
-OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "severity", "recorded_pr", "recorded_pr_url", "assignee", "code_checkout",
+OPTIONAL_ADDITIONS = {"agent_type", "model", "harness", "qa_state", "close_reason", "severity", "qa_row", "checked_row", "assignee", "code_checkout",
                       "core_remaining", "core_limit", "core_reset", "graphql_remaining", "graphql_limit",
                       "graphql_reset", "quota_at"}
 

@@ -30,6 +30,7 @@ import pytest
 from contract_samples import PHASE_TEMPLATES
 from process_helpers import run_process
 
+from atm_bd_console import atm_bd as atm_bd_module
 from atm_bd_console import beads_source
 from atm_bd_console.atm_bd import (
     DISPATCH_KEYS,
@@ -50,6 +51,7 @@ from atm_bd_console.result import ConfigInvalid, Err, Error, IoFailed, NotFound,
 from atm_bd_console.types import (
     Bead,
     DispatchContext,
+    DispatchSpec,
     Phase,
     PhaseFile,
     PullRequest,
@@ -599,14 +601,32 @@ def bead(bead_id: str, stage: str, parent: str, **metadata) -> Bead:
 ROOT = Bead("atm-phase-bh", "phase-bh", SprintState.OPEN, ("phase-bh",), None, (), None, {}, NOW, None, None)
 CONTAINER = bead("atm-bh-5", "sprint", "atm-phase-bh", layer=5, branch=SPRINT.branch, pr_target=SPRINT.target,
                  stack="phase-bh")
-DEV = bead("atm-bh-5.group-dev", "dev", "atm-bh-5", sprint="bh-5", sprint_bead="atm-bh-5", layer=5)
+QA_BASE = "sprint/bh-10-textual-tabs"
+PR_URL = "https://github.com/randlee/atm-bd-orchestration/pull/148"
+
+
+def poured_qa(bead_id: str, checked: str, branch: str, worktree: str, **extra) -> dict:
+    """The metadata a pour stamps on a QA bead (close_fields.POURED, plus its planned layer, round and reviewers)."""
+    return {"role": "qa", "phase": "bh", "sprint": "bh-5", "sprint_bead": "atm-bh-5", "stack": "phase-bh",
+            "stack_bead": "atm-phase-bh.stack", "branch": branch, "worktree": worktree, "pr_target": SPRINT.target,
+            "base": QA_BASE, "checked_bead": checked, "checked_title": checked, "sanity_bead": f"{checked}-sanity",
+            "qa_bead": bead_id, "phase_feature": "atm-bd-console", "lint_command": "just lint",
+            "policy_path": ".claude/project/quality-policy.md", "max_sanity_rounds": 5, "layer": 7, "round": 1,
+            "reviewers_round1": ["req-qa", "arch-qa"], **extra}
+
+
+# The checked beads record their close (commit, branch, PR); the QA beads are poured, and planned on layer 7 while
+# the sprint plan says 5: QA takes the QA bead's layer (bk-15 was dispatched with the planned one).
+DEV = bead("atm-bh-5.group-dev", "dev", "atm-bh-5", sprint="bh-5", sprint_bead="atm-bh-5", layer=5, role="dev",
+           commit=COMMIT, branch=SPRINT.branch, pr_number=148, pr_url=PR_URL)
 SANITY = bead("atm-bh-5.group-sanity", "dev-sanity", "atm-bh-5", dev_bead="atm-bh-5.group-dev",
               branch=SPRINT.branch, worktree="/worktrees/sprint/bh-5-git-github-source")
-SPRINT_QA = bead("atm-bh-5.group-qa", "qa", "atm-bh-5", checked_bead="atm-bh-5.group-dev", round=1, sprint="bh-5",
-                 sprint_bead="atm-bh-5", branch=SPRINT.branch, worktree="/worktrees/sprint/bh-5-git-github-source")
-FIX = bead("atm-bh-5.qa1-f1-r1-fix", "fix", "atm-bh-5", round=1, sprint_bead="atm-bh-5", finding_ref="qa1-f1")
-FIX_QA = bead("atm-bh-5.qa1-f1-r1-qa", "qa", "atm-bh-5", checked_bead=FIX.id, round=1, sprint="bh-5",
-              sprint_bead="atm-bh-5", branch="fix/bh-5-qa-r1", worktree="/worktrees/fix/bh-5-qa-r1")
+SPRINT_QA = bead("atm-bh-5.group-qa", "qa", "atm-bh-5", **poured_qa(
+    "atm-bh-5.group-qa", DEV.id, SPRINT.branch, "/worktrees/sprint/bh-5-git-github-source"))
+FIX = bead("atm-bh-5.qa1-f1-r1-fix", "fix", "atm-bh-5", round=1, sprint_bead="atm-bh-5", finding_ref="qa1-f1",
+           role="fix", commit=COMMIT, branch="fix/bh-5-qa-r1", pr_number=148, pr_url=PR_URL)
+FIX_QA = bead("atm-bh-5.qa1-f1-r1-qa", "qa", "atm-bh-5", **poured_qa(
+    "atm-bh-5.qa1-f1-r1-qa", FIX.id, "fix/bh-5-qa-r1", "/worktrees/fix/bh-5-qa-r1", round=2))
 PARENTS = {item.id: item for item in (ROOT, CONTAINER, DEV, SANITY, SPRINT_QA, FIX, FIX_QA)}
 
 
@@ -630,19 +650,17 @@ def expected(kind: str, pr: PullRequest | None) -> tuple[str, dict]:
             "worktree_path": "/worktrees/sprint/bh-5-git-github-source", "branch": SPRINT.branch, "commit": COMMIT,
             "base": base, **pr_fields, "primary_checkout": "/repo", "lint_command": "just lint", "layer_prs": [140],
         }
-    qa_common = {
-        "phase": "atm-phase-bh", "phase_feature": "atm-bd-console", "stack": "phase-bh", "layer": 5,
-        "policy_path": ".claude/project/quality-policy.md", "reviewers_round1": ["req-qa", "arch-qa"], "layer_prs": [140],
-        "sprint_bead": "atm-bh-5", "sprint": "bh-5", "commit": COMMIT, "base": base, **pr_fields,
-    }
-    if kind == "sprint_qa":
-        return "qa-template.xml.j2", {
-            "task_id": "atm-bh-5.group-qa", "checked_bead": "atm-bh-5.group-dev", "round": 1,
-            "worktree_path": "/worktrees/sprint/bh-5-git-github-source", "branch": SPRINT.branch, **qa_common,
-        }
+    # Exactly close_fields.qa_assignment_vars (the canonical resolver) plus the console's live pr_url and layer_prs.
+    qa = SPRINT_QA if kind == "sprint_qa" else FIX_QA
+    meta = qa.metadata
+    checked = DEV if kind == "sprint_qa" else FIX
     return "qa-template.xml.j2", {
-        "task_id": FIX_QA.id, "checked_bead": FIX.id, "round": 2, "carry_forward": FIX.id,
-        "worktree_path": "/worktrees/fix/bh-5-qa-r1", "branch": "fix/bh-5-qa-r1", **qa_common,
+        "task_id": qa.id, "qa_task_id": qa.id, "checked_bead": checked.id, "dev_task_id": checked.id,
+        "sanity_task_id": meta["sanity_bead"], "phase": "bh", "phase_feature": "atm-bd-console", "sprint": "bh-5",
+        "sprint_bead": "atm-bh-5", "stack": "phase-bh", "layer": 7, "round": meta["round"], "base": QA_BASE,
+        "worktree_path": meta["worktree"], "policy_path": ".claude/project/quality-policy.md",
+        "reviewers_round1": ["req-qa", "arch-qa"], "commit": COMMIT, "branch": checked.metadata["branch"],
+        "pr_number": "148", "carry_forward": FIX.id if kind == "fix_qa" else "", "pr_url": PR_URL, "layer_prs": [140],
     }
 
 
@@ -665,15 +683,11 @@ def render(template: str, values: dict, tmp_path: Path) -> subprocess.CompletedP
 @pytest.mark.parametrize("pr", [PR, None], ids=["with-pr", "no-pr"])
 @pytest.mark.parametrize("kind", list(STEPS))
 def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullRequest | None, tmp_path: Path) -> None:
+    # no-pr is #2214: the PR read had not caught up with a just-opened PR; the checked bead's recorded PR is used.
     spec = dispatch_spec(context(mapped(STEPS[kind]), pr), PHASE_TEMPLATES)
     if kind == "sanity":
         assert isinstance(spec, Err), spec
         assert "beads_dir, phase_lead, and close_context" in spec.error.fix
-        return
-    if pr is None:
-        # No PR in the read and none recorded on the checked bead: QA is refused, never sent with an empty PR.
-        assert isinstance(spec, Err) and isinstance(spec.error, NotFound), spec
-        assert _not_found(spec.error).what == f"{STEPS[kind].metadata['checked_bead']}.metadata.pr_number"
         return
     assert isinstance(spec, Ok), spec
     template, values = expected(kind, pr)
@@ -681,45 +695,67 @@ def test_dispatch_spec_vars_are_exact_and_render_strict(kind: str, pr: PullReque
     assert dict(spec.value.vars) == values
     rendered = render(template, dict(spec.value.vars), tmp_path)
     assert rendered.returncode == 0, rendered.stderr
+    assert "<pr-number><![CDATA[148]]></pr-number>" in rendered.stdout
     verification = f"This is fix verification of fix bead `{FIX.id}`"
     assert (verification in rendered.stdout) is (kind == "fix_qa")
 
 
-@pytest.mark.parametrize("kind", ["sprint_qa", "fix_qa"])
-def test_qa_without_a_pr_in_the_read_uses_the_pr_its_checked_bead_recorded(kind: str, tmp_path: Path) -> None:
-    # #2214: the PR read had not caught up with a just-opened PR, and QA was assigned with an empty pr_number.
-    qa = STEPS[kind]
-    checked_id = qa.metadata["checked_bead"]
-    checked = PARENTS[checked_id]
-    recorded = {**PARENTS, checked_id: replace(checked, metadata={**checked.metadata, "pr_number": 2214,
-                                                                     "pr_url": "https://example.test/pull/2214"})}
-    result = step(qa, recorded)
-    assert isinstance(result, Ok), result
-    spec = dispatch_spec(context(result.value, None), PHASE_TEMPLATES)
-    assert isinstance(spec, Ok), spec
-    assert spec.value.vars["pr_number"] == "2214"
-    assert spec.value.vars["pr_url"] == "https://example.test/pull/2214"
-    template, values = expected(kind, None)
-    assert dict(spec.value.vars) == {**values, "pr_number": "2214", "pr_url": "https://example.test/pull/2214"}
-    rendered = render(template, dict(spec.value.vars), tmp_path)
-    assert rendered.returncode == 0, rendered.stderr
-    assert "<pr-number><![CDATA[2214]]></pr-number>" in rendered.stdout
+def _qa_spec(qa: Bead, checked: Bead, pr: PullRequest | None = None) -> Result[DispatchSpec]:
+    return dispatch_spec(context(_ok(step(qa, {**PARENTS, qa.id: qa, checked.id: checked})), pr), PHASE_TEMPLATES)
 
 
-def test_a_live_pr_wins_over_the_recorded_one() -> None:
-    checked = PARENTS[DEV.id]
-    recorded = {**PARENTS, DEV.id: replace(checked, metadata={**checked.metadata, "pr_number": 1})}
-    spec = dispatch_spec(context(_ok(step(SPRINT_QA, recorded)), PR), PHASE_TEMPLATES)
-    assert isinstance(spec, Ok) and spec.value.vars["pr_number"] == str(PR.number)
+def _code(result: Result[DispatchSpec]) -> str:
+    assert isinstance(result, Err) and isinstance(result.error, ConfigInvalid), result
+    return result.error.key
+
+
+def test_qa_layer_is_the_qa_beads_not_the_sprint_plans() -> None:
+    spec = _qa_spec(SPRINT_QA, DEV)
+    assert isinstance(spec, Ok) and (spec.value.vars["layer"], SPRINT.layer) == (7, 5)
+
+
+def test_a_qa_bead_without_a_layer_is_refused_not_given_the_planned_one() -> None:
+    unplanned = replace(SPRINT_QA, metadata={k: v for k, v in SPRINT_QA.metadata.items() if k != "layer"})
+    assert _code(_qa_spec(unplanned, DEV)) == f"{SPRINT_QA.id}: ASSIGN_VARS.NOT_PLANNED"
+
+
+def test_a_checked_bead_without_a_recorded_pr_is_refused_never_sent_empty() -> None:
+    unrecorded = replace(DEV, metadata={k: v for k, v in DEV.metadata.items() if k != "pr_number"})
+    for pr in (PR, None):
+        assert _code(_qa_spec(SPRINT_QA, unrecorded, pr)) == f"{SPRINT_QA.id}: ASSIGN_VARS.NOT_RECORDED"
+
+
+def test_an_unpoured_qa_bead_is_refused_with_the_backfill_fix() -> None:
+    unpoured = replace(SPRINT_QA, metadata={k: v for k, v in SPRINT_QA.metadata.items() if k != "stack_bead"})
+    result = _qa_spec(unpoured, DEV)
+    assert _code(result) == f"{SPRINT_QA.id}: CLOSE_VARS.NOT_POURED"
+    assert isinstance(result, Err) and "close_fields_backfill.py" in result.error.fix
+
+
+def test_a_live_pr_that_disagrees_with_the_recorded_one_is_refused() -> None:
+    other = replace(DEV, metadata={**DEV.metadata, "pr_number": 1})
+    result = _qa_spec(SPRINT_QA, other, PR)
+    assert _code(result) == f"{DEV.id}.metadata.pr_number"
+    assert isinstance(result, Err) and "#148" in result.error.fix and "#1" in result.error.fix
+
+
+def test_a_missing_resolver_is_refused_with_the_install_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(*_args):
+        raise RuntimeError("skill script or required resource is not installed: atm-beads/scripts/close_fields.py")
+
+    monkeypatch.setattr(atm_bd_module, "load_skill", missing)
+    result = _qa_spec(SPRINT_QA, DEV, PR)
+    assert _code(result) == "atm-beads/scripts/close_fields.py"
 
 
 def test_dispatch_spec_uses_named_template_variable_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(DISPATCH_KEYS, "task", "task_identifier")
+    templates = {**PHASE_TEMPLATES, "sanity": ".claude/skills/atm-bd-orchestration/templates/custom-sanity.xml.j2"}
 
-    spec = dispatch_spec(context(mapped(SPRINT_QA), PR), PHASE_TEMPLATES)
+    spec = dispatch_spec(context(mapped(SANITY), PR), templates)
 
     assert isinstance(spec, Ok), spec
-    assert spec.value.vars["task_identifier"] == SPRINT_QA.id
+    assert spec.value.vars["task_identifier"] == SANITY.id
     assert "task_id" not in spec.value.vars
 
 
@@ -734,14 +770,6 @@ def test_fix_bead_without_round_is_not_found_naming_it() -> None:
     result = step(FIX_QA, missing)
     assert isinstance(result, Err) and result.error == NotFound("not_found", f"{FIX.id}.metadata.round",
                                                                "add the required ATM BD value")
-
-
-def test_qa_step_without_round_is_not_found_not_round_one() -> None:
-    from dataclasses import replace
-
-    result = dispatch_spec(context(replace(mapped(SPRINT_QA), qa_round=None), PR), PHASE_TEMPLATES)
-    assert isinstance(result, Err) and isinstance(result.error, NotFound)
-    assert _not_found(result.error).what == "atm-bh-5.group-qa.metadata.round"
 
 
 # D4 over recorded and planted beads, read through beads_source from a fake bd.

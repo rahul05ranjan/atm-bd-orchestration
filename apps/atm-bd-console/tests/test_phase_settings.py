@@ -142,10 +142,17 @@ def test_real_assignment_receives_phase_lead_and_configured_path(phase_repo, mon
         "sprint": "bh-6", "sprint_bead": sprint.id, "dev_bead": f"{sprint.id}.group-dev",
         "checked_bead": f"{sprint.id}.group-dev", "round": 1, "branch": SPRINT.branch,
         "pr_target": SPRINT.target, "worktree": WORKTREE.path,
+        # A poured QA bead carries its close fields (close_fields.POURED) and its planned layer and reviewers (#557).
+        **({"role": "qa", "phase": "bh", "sprint_bead": sprint.id, "stack": SPRINT.stack, "stack_bead": "atm-phase-bh.stack",
+            "base": SPRINT.target, "checked_title": "bh-6", "sanity_bead": f"{sprint.id}.group-sanity",
+            "qa_bead": f"{sprint.id}.group-qa", "phase_feature": "phase-bh", "lint_command": "just lint",
+            "policy_path": ".claude/project/quality-policy.md", "max_sanity_rounds": 5, "layer": SPRINT.layer,
+            "reviewers_round1": ["req-qa"]} if kind == "qa" else {}),
     })
     # The dev close records its PR on the checked bead; with GitHub off, QA dispatch takes it from there (#557).
     dev = replace(BEAD, id=f"{sprint.id}.group-dev", status=SprintState.CLOSED, parent=sprint.id,
-                  labels=("stage:dev",), metadata={"branch": SPRINT.branch, "pr_number": 2214})
+                  labels=("stage:dev",), metadata={"role": "dev", "branch": SPRINT.branch, "commit": "0123456789abcdef",
+                                                   "pr_number": 2214})
     beads = {bead.id: bead for bead in (root, sprint, candidate, dev)}
     monkeypatch.setattr(cli.config_source, "repo_root", lambda: phase_repo)
     monkeypatch.chdir(phase_repo)

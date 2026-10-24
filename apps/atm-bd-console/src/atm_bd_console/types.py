@@ -81,10 +81,10 @@ class Step:
     carry_forward: str | None
     close_reason: str | None = None
     severity: str | None = None
-    # The PR the checked bead recorded at its dev or fix close (QA steps): dispatch uses it when the PR read has
-    # no PR for the branch, and refuses a QA assignment when neither has one (#557, #2214).
-    recorded_pr: int | None = None
-    recorded_pr_url: str | None = None
+    # QA steps: the QA bead and its checked bead as bd rows (id, title, status, labels, metadata). Dispatch builds the
+    # QA vars from them with the canonical resolver, close_fields.qa_assignment_vars, the one producer of QA vars (#557).
+    qa_row: Mapping[str, Any] | None = None
+    checked_row: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

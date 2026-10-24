@@ -12,6 +12,7 @@ from typing import Any
 from .enums import SprintState
 from .ids import short_id
 from .result import ConfigInvalid, Err, Error, IoFailed, NotFound, Ok, ParseFailed, Result
+from .skill_loader import load_skill
 from .types import Bead, DispatchContext, DispatchSpec, Phase, PhaseFile, RepoConfig, Sprint, Step, StepKind
 
 # atm-bd conventions (atm-beads sprint_index_common.py): the only place they are named.
@@ -331,8 +332,7 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         if checked_bead.metadata.get(ROUND_KEY) is None:
             return _missing(f"{checked_bead.id}.metadata.{ROUND_KEY}")
         qa_round = checked_bead.metadata[ROUND_KEY] + 1
-    recorded = checked_bead.metadata if kind == QA_KIND and checked_bead is not None else {}
-    recorded_pr = _pr_number(recorded.get(PR_NUMBER_KEY))
+    rows = (_row(bead), _row(checked_bead)) if kind == QA_KIND and checked_bead is not None else (None, None)
     top = _top_epic(bead, parents)
     prefix = (top or bead.id).split("-", 1)[0]
     return Ok(Step(
@@ -341,16 +341,14 @@ def step(bead: Bead, parents: Mapping[str, Bead]) -> Result[Step]:
         metadata.get(WORKTREE_KEY), metadata.get(LAYER_KEY), metadata.get(DIFFICULTY_KEY),
         short_id(top or bead.id, prefix), top, bead.claimed_at, bead.closed_at, bead.title,
         checked, sprint_bead, qa_round, carry, bead.close_reason, _severity(bead),
-        recorded_pr, (recorded.get(PR_URL_KEY) or None) if recorded_pr is not None else None,
+        *rows,
     ))
 
 
-def _pr_number(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    return int(value) if isinstance(value, str) and value.isdigit() and int(value) > 0 else None
+def _row(bead: Bead) -> dict[str, Any]:
+    """A bead in the `bd list --json` shape close_fields reads."""
+    return {"id": bead.id, "title": bead.title, "status": bead.raw_status or str(bead.status), "labels": list(bead.labels),
+            "metadata": dict(bead.metadata)}
 
 
 def closed_show_ids(file: PhaseFile, known: tuple[Bead, ...]) -> tuple[str, ...]:
@@ -453,26 +451,41 @@ def dispatch_spec(ctx: DispatchContext, templates: Mapping[str, str]) -> Result[
             keys["lint_command"]: ctx.repo.lint_command,
         }
         return Ok(DispatchSpec(template, values))
-    if current.qa_round is None:
-        return _missing(f"{current.bead_id}.metadata.{ROUND_KEY}")
-    if pr is None:
-        # The PR read can lag a just-opened PR (#2214): use the PR the checked bead recorded at close, and never
-        # assign QA without one.
-        if current.recorded_pr is None:
-            return Err(NotFound(
-                "not_found", f"{current.checked_bead}.metadata.{PR_NUMBER_KEY}",
-                f"no open PR for {current.branch} in the PR read and {current.checked_bead} records none: finish its "
-                "dev or fix close (it records pr_number) or refresh GitHub; QA is not assigned without its PR",
-            ))
-        values[keys["pr_number"]] = str(current.recorded_pr)
-        values[keys["pr_url"]] = current.recorded_pr_url or ""
-    values |= {
-        keys["phase"]: ctx.phase_id, keys["phase_title"]: ctx.phase_title,
-        keys["stack"]: ctx.sprint.stack, keys["layer"]: ctx.sprint.layer,
-        keys["round"]: current.qa_round, keys["policy"]: ctx.repo.policy_path,
-        keys["reviewers"]: list(ctx.repo.reviewers_round1),
-        keys["sprint_bead"]: current.sprint_bead or "",
-    }
-    if current.carry_forward:
-        values[keys["carry_forward"]] = current.carry_forward
-    return Ok(DispatchSpec(template, values))
+    # QA vars have one producer, the canonical resolver manual dispatch uses (close-vars.py --qa-assignment): the QA
+    # bead's poured fields and the commit, branch and PR its checked bead recorded at close. The console adds only
+    # what it reads live: the stack's layer PRs and the PR URL (#557; #2214 empty PR, bk-15 planned layer).
+    resolved = qa_assignment(current, ctx.repo.primary_checkout)
+    if isinstance(resolved, Err):
+        return resolved
+    qa_vars = dict(resolved.value)
+    recorded = qa_vars[keys["pr_number"]]
+    if pr is not None and str(pr.number) != recorded:
+        return Err(ConfigInvalid(
+            "config_invalid", f"{current.checked_bead}.metadata.{PR_NUMBER_KEY}", recorded,
+            f"the PR read shows #{pr.number} open for {current.branch} but {current.checked_bead} recorded #{recorded}: "
+            f"correct {current.checked_bead}.metadata.pr_number to the PR under review, then dispatch again",
+        ))
+    checked_meta = (current.checked_row or {}).get("metadata") or {}
+    qa_vars[keys["pr_url"]] = pr.url if pr is not None else str(checked_meta.get(PR_URL_KEY) or "")
+    qa_vars[keys["layer_prs"]] = layer_prs
+    return Ok(DispatchSpec(template, qa_vars))
+
+
+CLOSE_FIELDS_SCRIPT = "atm-beads/scripts/close_fields.py"
+CLOSE_VARS_CONTRACT = "atm-bd-orchestration/templates/task-close-vars.j2"
+
+
+def qa_assignment(current: Step, repo_root: str) -> Result[Mapping[str, Any]]:
+    """The canonical QA vars of one QA step (close_fields.qa_assignment_vars), each refusal as a typed error."""
+    if current.qa_row is None or current.checked_row is None:
+        return _missing(f"{current.checked_bead} (the checked bead of {current.bead_id}) in the bead read")
+    try:
+        module, _ = load_skill(repo_root, CLOSE_FIELDS_SCRIPT, CLOSE_VARS_CONTRACT)
+    except RuntimeError as error:
+        return Err(ConfigInvalid("config_invalid", CLOSE_FIELDS_SCRIPT, str(error),
+                                 "install atm-bd-orchestration with close_fields.py (#557) into the repository's "
+                                 ".claude/skills; QA is not assigned without the canonical resolver"))
+    try:
+        return Ok(module.qa_assignment_vars(dict(current.qa_row), dict(current.checked_row), Path(repo_root)))
+    except module.CloseFieldsError as error:
+        return Err(ConfigInvalid("config_invalid", f"{current.bead_id}: {error.code}", str(error), error.fix))
