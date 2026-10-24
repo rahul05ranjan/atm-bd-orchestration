@@ -29,7 +29,7 @@ picks the agent at dispatch.
 
 | Bead | ATM task held by | Template |
 | --- | --- | --- |
-| dev | a dev, by `difficulty` | `dev-template.xml.j2` (a sanity FAIL reopens the same bead; `sanity-fail.xml.j2` goes to its assignee) |
+| dev | a dev, by `difficulty` | `dev-template.xml.j2`; a sanity FAIL reopens the same bead on the dev's existing task, with no new template. The sanity close hook (`sanity_task_close_hook.py`) journals the reopen through the bd-cache and sends the dev `sanity-failed-template.md.j2`; a legacy-mode close (`atm-task-close.py --role sanity`) sends `sanity-fail.xml.j2` |
 | fix | a dev, by `difficulty` | `fix-assignment.xml.j2` |
 | sanity | dev-sanity | `dev-sanity-template.xml.j2` |
 | qa | quality-mgr | `qa-template.xml.j2` |
