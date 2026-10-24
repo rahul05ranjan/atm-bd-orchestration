@@ -1,5 +1,5 @@
 name: atm-bd-orchestration
-version: 0.18.4
+version: 0.19.0
 description: >
   Bead-driven phase orchestration for ATM agent teams: the phase plan as a
   beads graph (atm-beads), dispatch, dev-sanity, QA and stack landing driven
@@ -32,10 +32,12 @@ artifacts:
     - skills/atm-bd-orchestration/examples/fix-assignment-vars.json
     - skills/atm-bd-orchestration/examples/fix-complete-vars.json
     - skills/atm-bd-orchestration/examples/flaky-test-qa-assignment-vars.json
+    - skills/atm-bd-orchestration/examples/hook-close-escalation-vars.json
     - skills/atm-bd-orchestration/examples/plan-review-complete-vars.json
     - skills/atm-bd-orchestration/examples/plan-review-template-fix-round-vars.json
     - skills/atm-bd-orchestration/examples/plan-review-template-vars.json
     - skills/atm-bd-orchestration/examples/plan-scope-reviewer-assignment-vars.json
+    - skills/atm-bd-orchestration/examples/pr-body-vars.json
     - skills/atm-bd-orchestration/examples/qa-bead-vars.json
     - skills/atm-bd-orchestration/examples/qa-complete-vars.json
     - skills/atm-bd-orchestration/examples/qa-findings-vars.json
@@ -45,7 +47,12 @@ artifacts:
     - skills/atm-bd-orchestration/examples/review-complete-vars.json
     - skills/atm-bd-orchestration/examples/review-template-vars.json
     - skills/atm-bd-orchestration/examples/ruthless-boundary-qa-assignment-vars.json
+    - skills/atm-bd-orchestration/examples/sanity-bead-repair-vars.json
+    - skills/atm-bd-orchestration/examples/sanity-close-error-vars.json
+    - skills/atm-bd-orchestration/examples/sanity-dev-close-vars.json
+    - skills/atm-bd-orchestration/examples/sanity-failed-template-vars.json
     - skills/atm-bd-orchestration/examples/sanity-run-record-vars.json
+    - skills/atm-bd-orchestration/examples/sanity-task-close-vars.json
     - skills/atm-bd-orchestration/examples/schema-reviewer-assignment-vars.json
     - skills/atm-bd-orchestration/examples/task-close-result-dev.json
     - skills/atm-bd-orchestration/examples/task-close-result-fix.json
@@ -65,25 +72,37 @@ artifacts:
     - skills/atm-bd-orchestration/references/post-mortem-jev.md
     - skills/atm-bd-orchestration/references/post-mortem.md
     - skills/atm-bd-orchestration/roles/quality-mgr.md
+    - skills/atm-bd-orchestration/scripts/BD-CACHE.md
+    - skills/atm-bd-orchestration/scripts/SANITY-CLOSE-HOOK.md
     - skills/atm-bd-orchestration/scripts/assignment-gates.py
     - skills/atm-bd-orchestration/scripts/atm-hook-doctor.py
     - skills/atm-bd-orchestration/scripts/atm-task-close.py
+    - skills/atm-bd-orchestration/scripts/bd_cache.py
+    - skills/atm-bd-orchestration/scripts/bd_cache_cron.py
+    - skills/atm-bd-orchestration/scripts/bd_models.py
     - skills/atm-bd-orchestration/scripts/bead-groups
     - skills/atm-bd-orchestration/scripts/bead-queues
     - skills/atm-bd-orchestration/scripts/bead_formulas.py
     - skills/atm-bd-orchestration/scripts/bv-analyze
     - skills/atm-bd-orchestration/scripts/check-review-completion.py
+    - skills/atm-bd-orchestration/scripts/close-vars.py
+    - skills/atm-bd-orchestration/scripts/close_fields_backfill.py
     - skills/atm-bd-orchestration/scripts/command_timeout.py
     - skills/atm-bd-orchestration/scripts/fix-round-scope
     - skills/atm-bd-orchestration/scripts/jev_client.py
     - skills/atm-bd-orchestration/scripts/post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/post_mortem_jev.py
+    - skills/atm-bd-orchestration/scripts/sanity-close-repair.py
     - skills/atm-bd-orchestration/scripts/sanity-close-vars
     - skills/atm-bd-orchestration/scripts/sanity-merge
     - skills/atm-bd-orchestration/scripts/sanity-run-history
     - skills/atm-bd-orchestration/scripts/sanity-split
     - skills/atm-bd-orchestration/scripts/sanity-stack-link
+    - skills/atm-bd-orchestration/scripts/sanity_close_legacy.py
+    - skills/atm-bd-orchestration/scripts/sanity_task_close_hook.py
     - skills/atm-bd-orchestration/scripts/stack_top.py
+    - skills/atm-bd-orchestration/scripts/tests/fixtures/bd-1.3.1/bd-schema.json
+    - skills/atm-bd-orchestration/scripts/tests/fixtures/bd-1.3.1/list-rows.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dev-ready.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/dirty-tree.json
     - skills/atm-bd-orchestration/scripts/tests/fixtures/not-ready.json
@@ -113,21 +132,26 @@ artifacts:
     - skills/atm-bd-orchestration/scripts/tests/test_assignment_gates.py
     - skills/atm-bd-orchestration/scripts/tests/test_atm_hook_doctor.py
     - skills/atm-bd-orchestration/scripts/tests/test_atomic.py
+    - skills/atm-bd-orchestration/scripts/tests/test_bd_cache.py
+    - skills/atm-bd-orchestration/scripts/tests/test_bd_cache_cron.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_groups.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_pour_plan.py
     - skills/atm-bd-orchestration/scripts/tests/test_bead_queues.py
     - skills/atm-bd-orchestration/scripts/tests/test_bv_analyze.py
+    - skills/atm-bd-orchestration/scripts/tests/test_close_vars.py
     - skills/atm-bd-orchestration/scripts/tests/test_fix_round_scope.py
     - skills/atm-bd-orchestration/scripts/tests/test_handoff_contracts.py
     - skills/atm-bd-orchestration/scripts/tests/test_jev_client.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_context.py
     - skills/atm-bd-orchestration/scripts/tests/test_post_mortem_jev.py
     - skills/atm-bd-orchestration/scripts/tests/test_qa_report_contract.py
+    - skills/atm-bd-orchestration/scripts/tests/test_sanity_close_legacy.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_close_vars.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_merge.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_run_history.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_split.py
     - skills/atm-bd-orchestration/scripts/tests/test_sanity_stack.py
+    - skills/atm-bd-orchestration/scripts/tests/test_sanity_task_close_hook.py
     - skills/atm-bd-orchestration/scripts/tests/test_task_close.py
     - skills/atm-bd-orchestration/scripts/tests/test_templates.py
     - skills/atm-bd-orchestration/scripts/tests/test_transitions.py
@@ -144,9 +168,11 @@ artifacts:
     - skills/atm-bd-orchestration/templates/fix-assignment.xml.j2
     - skills/atm-bd-orchestration/templates/fix-complete.md.j2
     - skills/atm-bd-orchestration/templates/flaky-test-qa-assignment.json.j2
+    - skills/atm-bd-orchestration/templates/hook-close-escalation.xml.j2
     - skills/atm-bd-orchestration/templates/plan-review-complete.md.j2
     - skills/atm-bd-orchestration/templates/plan-review-template.xml.j2
     - skills/atm-bd-orchestration/templates/plan-scope-reviewer-assignment.json.j2
+    - skills/atm-bd-orchestration/templates/pr-body.md.j2
     - skills/atm-bd-orchestration/templates/qa-bead.json.j2
     - skills/atm-bd-orchestration/templates/qa-complete.md.j2
     - skills/atm-bd-orchestration/templates/qa-findings.md.j2
@@ -156,8 +182,13 @@ artifacts:
     - skills/atm-bd-orchestration/templates/review-complete.md.j2
     - skills/atm-bd-orchestration/templates/review-template.xml.j2
     - skills/atm-bd-orchestration/templates/ruthless-boundary-qa-assignment.json.j2
+    - skills/atm-bd-orchestration/templates/sanity-bead-repair.xml.j2
+    - skills/atm-bd-orchestration/templates/sanity-close-error.md.j2
+    - skills/atm-bd-orchestration/templates/sanity-dev-close.md.j2
     - skills/atm-bd-orchestration/templates/sanity-fail.xml.j2
+    - skills/atm-bd-orchestration/templates/sanity-failed-template.md.j2
     - skills/atm-bd-orchestration/templates/sanity-run-record.json.j2
+    - skills/atm-bd-orchestration/templates/sanity-task-close.md.j2
     - skills/atm-bd-orchestration/templates/schema-reviewer-assignment.json.j2
     - skills/atm-bd-orchestration/templates/task-close-vars.j2
     - skills/atm-bd-orchestration/templates/task-refused.md.j2
@@ -186,6 +217,7 @@ artifacts:
     - skills/atm-beads/schemas/stack-bead.schema.json
     - skills/atm-beads/scripts/bead_schema.py
     - skills/atm-beads/scripts/check-phase-artifact
+    - skills/atm-beads/scripts/close_fields.py
     - skills/atm-beads/scripts/phase-config
     - skills/atm-beads/scripts/phase-index-path
     - skills/atm-beads/scripts/plan_contract.py

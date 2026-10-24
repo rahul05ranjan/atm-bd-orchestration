@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-24
+
+Task-close hooks and the bd-cache (#557). Every validated open task bead carries its close fields from the pour, so a close reads one bead and no agent assembles vars by hand.
+
+### Added
+- `bd_cache.py`: a per-dolt-database SQLite bead cache and write journal (`scripts/BD-CACHE.md`).
+  - The journal drain has one writer (flock). It re-reads pending beads once, skips writes already achieved, checks each write's precondition and stores bd's read-back.
+  - A bead whose write keeps failing is escalated after 5 attempts.
+  - Sync is incremental.
+  - An unreachable backend is an outage: no attempt is counted, it is announced once, and it clears on the first successful `bd list`.
+  - Every failure ends in applied, refused or escalated, with a typed error.
+- `bd_cache_cron.py`: the ATM cron module that syncs active phases, drains the journal, and announces outages and sync failures once per cause.
+- `sanity_task_close_hook.py`: the ATM `task.close` hook for sanity tasks (`scripts/SANITY-CLOSE-HOOK.md`).
+  - PASS closes the sanity bead, and FAIL reopens the dev bead.
+  - Bead writes are journaled through bd-cache.
+  - Failures escalate to the phase lead with a durable repair obligation (`sanity-close-repair.py`).
+  - `sanity_close_legacy.py` finishes repairs assigned before the cutover.
+- `close-vars.py`: prints a poured bead's close vars, or with `--qa-assignment` the `templates.qa` vars.
+  - It reads the cache and re-reads bd once only when a needed field is missing.
+  - A checked bead with no recorded PR is refused, never sent with an empty PR.
+- `close_fields_backfill.py`: fills the close fields on open task beads poured before this release.
+- `close_fields` (atm-beads) and bead-schema `CloseFields`: the close fields every open dev, fix, sanity and QA bead must carry. `validate-plan` checks them.
+- New templates: `sanity-task-close.md.j2`, `sanity-dev-close.md.j2`, `sanity-failed-template.md.j2`, `sanity-close-error.md.j2`, `sanity-bead-repair.xml.j2`, `hook-close-escalation.xml.j2` and `pr-body.md.j2`, each with example vars.
+
+### Changed
+- `atm-task-close.py` writes every bead update and close through the bd-cache journal and drains at once.
+  - A write not yet applied is `BEADS.WRITE_PENDING`; rerunning with the same vars applies it once.
+  - A write bd refuses is `BEADS.WRITE_ESCALATED`.
+- The sprint-group and finding-group formulas, the QA bead and the dev-sanity bead pour the close fields.
+- The dev, fix and dev-sanity templates take `close_vars_path`.
+- `dev-sanity` gains a daemon-mode verification override.
+- The console makes QA dispatch take the checked bead's recorded PR and resolves relative bead worktrees (one producer of QA vars).
+
+### Install notes
+- Add to the repository's `.gitignore`:
+  `.atm-bd/sanity-close/`, `.atm-bd/*.bd-cache.sqlite3*`, `.atm-bd/*.bd-cache.drain.*`.
+- Run `close_fields_backfill.py` once per active phase so its open beads pass validation.
+
 ## [0.18.4] - 2026-10-20
 
 ### Fixed
