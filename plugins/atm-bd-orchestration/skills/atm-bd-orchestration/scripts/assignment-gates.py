@@ -39,8 +39,8 @@ def invoke(runner: Runner, argv: list[str], *, timeout: float | None = None, **k
 
 
 def run(runner: Runner, *args: str, cwd: str | None = None) -> str:
-    options = {"cwd": cwd} if cwd is not None else {}
-    result = invoke(runner, list(args), capture_output=True, text=True, **options)
+    result = (invoke(runner, list(args), capture_output=True, text=True)
+              if cwd is None else invoke(runner, list(args), capture_output=True, text=True, cwd=cwd))
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "command failed")
     return result.stdout.strip()

@@ -28,6 +28,7 @@ def test_repo_root_resolves_the_current_directory(monkeypatch, tmp_path) -> None
 def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:
     _team_config(tmp_path)
     default = load_config(tmp_path, "bh")
+    assert isinstance(default, Ok)
     assert default == Ok(default.value.__class__("bh", "fenix", "atm-dev", "graphql", 60, False, False,
                                                   str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh"),
                                                   code_root=str(tmp_path), github_repo="example/repo"))
@@ -36,6 +37,7 @@ def test_defaults_file_and_flags_have_documented_precedence(tmp_path) -> None:
     path.mkdir(exist_ok=True)
     (path / "console.toml").write_text("[console]\ngithub = 'rest'\ninterval = 90\n")
     loaded = load_config(tmp_path, "bh", github="off", interval_s=120, dry_run=True, no_fetch=True)
+    assert isinstance(loaded, Ok)
     assert loaded == Ok(loaded.value.__class__("bh", "fenix", "atm-dev", "off", 120, True, True,
                                                str(tmp_path), str(tmp_path / ".atm-bd/atm-bd/atm-phase-bh"),
                                                code_root=str(tmp_path), github_repo="example/repo"))
@@ -82,9 +84,10 @@ def test_github_budget_configuration_and_validation(tmp_path) -> None:
     overridden = load_config(tmp_path, "bh", github_poll_interval_s=30, github_quota_threshold=20)
     assert isinstance(overridden, Ok)
     assert (overridden.value.github_poll_interval_s, overridden.value.github_quota_threshold) == (30, 20)
-    for values in ({"github_poll_interval_s": 0}, {"github_poll_interval_s": True},
-                   {"github_quota_threshold": -1}, {"github_quota_threshold": 101}):
-        assert isinstance(load_config(tmp_path, "bh", **values), Err)
+    for value in (0, True):
+        assert isinstance(load_config(tmp_path, "bh", github_poll_interval_s=value), Err)
+    for value in (-1, 101):
+        assert isinstance(load_config(tmp_path, "bh", github_quota_threshold=value), Err)
 
 
 def test_code_checkout_override_uses_phase_path_and_explicit_github_identity(tmp_path, monkeypatch) -> None:

@@ -188,7 +188,9 @@ esac
     updated_template = f".claude/skills/atm-bd-orchestration/templates/updated-{kind}.xml.j2"
     (phase_repo / updated_template).write_text("updated assignment")
     set_setting(phase_repo, kind, updated_template)
-    with acquire_lock(phase_repo, root.id).value as store:
+    acquired = acquire_lock(phase_repo, root.id)
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
         refreshed, _ = runner.step(loaded.value, INITIAL_STATE, False, store)
     assert refreshed.lead == "updated-phase-owner"
     assigned = [argv for argv in fake_bin.argv() if argv[1:3] == ("task", "assign")]
@@ -198,7 +200,9 @@ esac
 
     set_setting(phase_repo, "lead", None, absent=True)
     before = fake_bin.argv()
-    with acquire_lock(phase_repo, root.id).value as store:
+    acquired = acquire_lock(phase_repo, root.id)
+    assert isinstance(acquired, Ok)
+    with acquired.value as store:
         invalid, _ = runner.step(loaded.value, INITIAL_STATE, False, store)
     assert any(isinstance(error, ConfigInvalid) and error.key == "lead" for error in invalid.errors)
     assert fake_bin.argv() == before

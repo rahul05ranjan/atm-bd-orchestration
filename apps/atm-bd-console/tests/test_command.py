@@ -25,7 +25,8 @@ def test_failure_carries_stripped_stderr_and_the_callers_fix(fake_bin) -> None:
 def test_failure_without_stderr_carries_stdout(fake_bin) -> None:
     fake_bin.make("tool", 'printf "{\\"message\\": \\"Not Found\\"}\\n"\nexit 1\n')
     result = command.run(("tool",), "fix it")
-    assert isinstance(result, Err) and result.error.stderr == '{"message": "Not Found"}'
+    assert isinstance(result, Err) and isinstance(result.error, CommandFailed)
+    assert result.error.stderr == '{"message": "Not Found"}'
 
 
 def test_ok_codes_accept_a_nonzero_exit(fake_bin) -> None:

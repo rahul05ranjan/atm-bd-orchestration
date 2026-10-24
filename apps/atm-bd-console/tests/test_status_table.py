@@ -3,18 +3,32 @@ from datetime import UTC, datetime, timedelta
 from inspect import getdoc
 
 from contract_samples import BEAD, CONFIG, GH_STATUS, INPUTS, MEMBER, PHASE, PR_ROW, SNAPSHOT, SPRINT, STEP, TASK
+from type_helpers import rich_text_of
 
 from atm_bd_console import runner, status_table
 from atm_bd_console.enums import AgentIcon, CiState, MergeState, PrState, SprintState
 from atm_bd_console.facts import ActiveAgent, CiFacts, PrFacts, SprintFacts, _gavel, agent_icon_of, sprint_facts
 from atm_bd_console.icons import icon
 from atm_bd_console.model import tick
-from atm_bd_console.result import Ok
+from atm_bd_console.result import Ok, Result
 from atm_bd_console.runner import _durable_state
 from atm_bd_console.status_table import STATE, markdown, rich_table, rows
-from atm_bd_console.types import INITIAL_STATE
+from atm_bd_console.types import INITIAL_STATE, DispatchContext, DispatchSpec, Merge, Phase, Snapshot
 
 NOW = datetime(2026, 10, 17, tzinfo=UTC)
+
+def _phase(snapshot: Snapshot) -> Phase:
+    assert snapshot.phase_data is not None
+    return snapshot.phase_data
+
+
+def _merge() -> Merge:
+    assert PR_ROW.merge is not None
+    return PR_ROW.merge
+
+
+def _unexpected_spec(_: DispatchContext) -> Result[DispatchSpec]:
+    raise AssertionError("this scenario has no dispatch candidate")
 
 
 def _snapshot():
@@ -61,31 +75,31 @@ def test_rows_preserve_ci_and_pr_enum_values_and_absent_source_defaults(monkeypa
 
 def test_child_task_inherits_qa_step_role_through_parent_chain():
     snapshot = _snapshot()
-    qa = replace(snapshot.phase_data.steps[0], kind="qa")
+    qa = replace(_phase(snapshot).steps[0], kind="qa")
     child = replace(BEAD, id="child-task", parent=qa.bead_id)
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(qa,)),
+    snapshot = replace(snapshot, phase_data=replace(_phase(snapshot), steps=(qa,)),
                        task_data=(replace(snapshot.task_data[0], id=child.id),), task_bead_data=(child,))
     assert rows(snapshot)[0].state == (AgentIcon.QA_RUNNING,)
 
 
 def test_sprint_facts_cover_active_queued_qa_and_pr_sources():
     snapshot = _snapshot()
-    sprint = snapshot.phase_data.sprints[0]
+    sprint = _phase(snapshot).sprints[0]
     base = SprintFacts(sprint.id, "bh-6", SprintState.IN_PROGRESS, (), None, None, CiFacts(CiState.NONE), ())
     assert sprint_facts(snapshot) == (replace(base, active=(ActiveAgent("arch-ctm", AgentIcon.TERRA, NOW),)),)
     queued = replace(snapshot, task_data=(replace(snapshot.task_data[0], state="assigned"),))
     assert sprint_facts(queued) == (base,)
-    qa = replace(snapshot.phase_data.steps[0], kind="qa")
-    running_qa = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(qa,)))
+    qa = replace(_phase(snapshot).steps[0], kind="qa")
+    running_qa = replace(snapshot, phase_data=replace(_phase(snapshot), steps=(qa,)))
     assert sprint_facts(running_qa) == (replace(base, active=(ActiveAgent("arch-ctm", AgentIcon.QA_RUNNING, NOW),)),)
     closed_qa = replace(qa, closed_at=NOW, close_reason="PASS")
     fix = replace(qa, bead_id="fix", kind="fix", closed_at=NOW + timedelta(seconds=1))
-    invalidated = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(closed_qa, fix)))
+    invalidated = replace(snapshot, task_data=(), phase_data=replace(_phase(snapshot), steps=(closed_qa, fix)))
     assert sprint_facts(invalidated) == (base,)
     pr = replace(PR_ROW.pr, state=PrState.OPEN, ci=CiState.PASS, head=sprint.branch)
     open_row = replace(PR_ROW, pr=pr, merge=None)
     merged_pr = replace(pr, state=PrState.MERGED, number=pr.number + 1)
-    merge = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.CONFLICT)
+    merge = replace(_merge(), branch=pr.head, target=pr.base, state=MergeState.CONFLICT)
     merged_row = replace(PR_ROW, pr=merged_pr, merge=merge)
     with_prs = replace(snapshot, task_data=(), prs=(merged_row, open_row))
     assert sprint_facts(with_prs) == (replace(base, ci=CiFacts(CiState.PASS), pr=PrFacts(PrState.OPEN, open_row)),)
@@ -98,15 +112,15 @@ def test_sprint_facts_cover_active_queued_qa_and_pr_sources():
 
 def test_gavel_needs_a_closed_dev_step_and_follows_open_finding_children():
     snapshot = _snapshot()
-    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    dev = replace(_phase(snapshot).steps[0], closed_at=NOW)
     finding = replace(STEP, bead_id="finding", kind="finding", carry_forward=None, sprint_bead=SPRINT.id,
                       status=SprintState.OPEN, closed_at=None, severity="blocking")
-    snapshot = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, finding)))
+    snapshot = replace(snapshot, task_data=(), phase_data=replace(_phase(snapshot), steps=(dev, finding)))
     assert rows(snapshot)[0].state == (AgentIcon.QA_FAIL,)
     closed = replace(finding, status=SprintState.CLOSED, closed_at=NOW + timedelta(seconds=1))
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(dev, closed)))
+    snapshot = replace(snapshot, phase_data=replace(_phase(snapshot), steps=(dev, closed)))
     assert rows(snapshot)[0].state == (AgentIcon.QA_PASS,)
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(replace(dev, closed_at=None), finding)))
+    snapshot = replace(snapshot, phase_data=replace(_phase(snapshot), steps=(replace(dev, closed_at=None), finding)))
     assert rows(snapshot)[0].state == (SprintState.IN_PROGRESS,)
 
 
@@ -117,12 +131,12 @@ def test_qa_kind_and_sprint_result_distinction_are_documented():
 
 def test_fix_verification_is_an_active_agent_and_stored_qa_verdicts_never_set_the_gavel():
     snapshot = _snapshot()
-    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    dev = replace(_phase(snapshot).steps[0], closed_at=NOW)
     sprint_qa = replace(STEP, bead_id="sprint-qa", kind="qa", carry_forward=None, sprint_bead=SPRINT.id,
                         closed_at=NOW + timedelta(seconds=1), close_reason="FAIL")
     fix_qa = replace(sprint_qa, bead_id="fix-qa", carry_forward="finding", closed_at=NOW + timedelta(seconds=2),
                      close_reason="FAIL")
-    snapshot = replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, sprint_qa, fix_qa)))
+    snapshot = replace(snapshot, task_data=(), phase_data=replace(_phase(snapshot), steps=(dev, sprint_qa, fix_qa)))
     assert rows(snapshot)[0].state == (AgentIcon.QA_PASS,)
     running = replace(snapshot, task_data=(replace(TASK, id=fix_qa.bead_id, state_since=NOW),))
     assert sprint_facts(running)[0].active[0].icon is AgentIcon.QA_RUNNING
@@ -130,20 +144,20 @@ def test_fix_verification_is_an_active_agent_and_stored_qa_verdicts_never_set_th
 
 
 def _sprint_with(snapshot, status, steps):
-    sprint = replace(snapshot.phase_data.sprints[0], status=status)
-    return replace(snapshot, phase_data=replace(snapshot.phase_data, sprints=(sprint,), steps=steps), task_data=())
+    sprint = replace(_phase(snapshot).sprints[0], status=status)
+    return replace(snapshot, phase_data=replace(_phase(snapshot), sprints=(sprint,), steps=steps), task_data=())
 
 
 def test_only_blocking_children_set_the_gavel():
     snapshot = _snapshot()
-    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    dev = replace(_phase(snapshot).steps[0], closed_at=NOW)
 
     def child(bead_id, kind, severity, status=SprintState.OPEN):
         return replace(STEP, bead_id=bead_id, kind=kind, carry_forward=None, sprint_bead=SPRINT.id,
                        status=status, closed_at=None, severity=severity)
 
     def gavel(*steps):
-        return rows(replace(snapshot, task_data=(), phase_data=replace(snapshot.phase_data, steps=(dev, *steps))))[0].state
+        return rows(replace(snapshot, task_data=(), phase_data=replace(_phase(snapshot), steps=(dev, *steps))))[0].state
 
     assert gavel(child("minor", "finding", "minor")) == (AgentIcon.QA_PASS,)
     assert gavel(child("important", "finding", "important")) == (AgentIcon.QA_PASS,)
@@ -154,7 +168,7 @@ def test_only_blocking_children_set_the_gavel():
 
 def test_blocked_and_ready_sprints_with_no_agent_draw_their_status_icon():
     snapshot = _snapshot()
-    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    dev = replace(_phase(snapshot).steps[0], closed_at=NOW)
     finding = replace(STEP, bead_id="finding", kind="finding", carry_forward=None, sprint_bead=SPRINT.id,
                       status=SprintState.OPEN, closed_at=None)
     assert rows(_sprint_with(snapshot, SprintState.BLOCKED, ()))[0].state == (SprintState.BLOCKED,)
@@ -164,7 +178,7 @@ def test_blocked_and_ready_sprints_with_no_agent_draw_their_status_icon():
 
 def test_closed_sprint_draws_closed_icon_not_gavel():
     snapshot = _snapshot()
-    dev = replace(snapshot.phase_data.steps[0], closed_at=NOW)
+    dev = replace(_phase(snapshot).steps[0], closed_at=NOW)
     assert rows(_sprint_with(snapshot, SprintState.CLOSED, (dev,)))[0].state == (SprintState.CLOSED,)
     assert icon(SprintState.CLOSED)[0] == "\U000f05e0"
 
@@ -172,7 +186,7 @@ def test_closed_sprint_draws_closed_icon_not_gavel():
 def test_pr_preference_and_conflict_require_matching_base():
     snapshot = _snapshot()
     pr = replace(PR_ROW.pr, state=PrState.OPEN, ci=CiState.FAIL_WINDOWS, failed_checks=("windows test",), head=SPRINT.branch)
-    conflict = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.CONFLICT)
+    conflict = replace(_merge(), branch=pr.head, target=pr.base, state=MergeState.CONFLICT)
     open_row = replace(PR_ROW, pr=pr, merge=conflict)
     merged_row = replace(open_row, pr=replace(pr, number=pr.number + 10, state=PrState.MERGED))
     snapshot = replace(snapshot, prs=(merged_row, open_row))
@@ -186,7 +200,7 @@ def test_pr_preference_and_conflict_require_matching_base():
 def test_merged_wins_over_closed_conflict_is_ignored_and_empty_url_is_unlinked():
     snapshot = _snapshot()
     merged = replace(PR_ROW.pr, state=PrState.MERGED, ci=CiState.PASS, head=SPRINT.branch, url="")
-    conflict = replace(PR_ROW.merge, branch=merged.head, target=merged.base, state=MergeState.CONFLICT)
+    conflict = replace(_merge(), branch=merged.head, target=merged.base, state=MergeState.CONFLICT)
     merged_row = replace(PR_ROW, pr=merged, merge=conflict)
     closed_row = replace(merged_row, pr=replace(merged, state=PrState.CLOSED, number=merged.number + 1))
     snapshot = replace(snapshot, prs=(closed_row, merged_row))
@@ -201,18 +215,18 @@ def test_unknown_sprint_and_github_failures_are_reported():
     from atm_bd_console.atm_source import sprint_state_of
 
     snapshot = _snapshot()
-    sprint = replace(snapshot.phase_data.sprints[0], status=sprint_state_of("wat"), raw_status="wat")
-    phase = replace(snapshot.phase_data, sprints=(sprint,), closed=False)
+    sprint = replace(_phase(snapshot).sprints[0], status=sprint_state_of("wat"), raw_status="wat")
+    phase = replace(_phase(snapshot), sprints=(sprint,), closed=False)
     inputs = replace(INPUTS, phase=Ok(phase), tasks=Ok(()), members=Ok(snapshot.member_data),
                      gh=replace(snapshot.gh, mode="off", ok=None, paused=False), prs=Ok(()), merges=(), remotes=None)
-    result, _, _ = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
+    result, _, _ = tick(inputs, INITIAL_STATE, NOW, _unexpected_spec)
     row = rows(result)[0]
     assert row.state == (SprintState.UNKNOWN,)
     assert row.ci is CiState.UNKNOWN and row.pr_state is PrState.UNKNOWN
     table = rich_table((row,))
-    state_cell = table.columns[1]._cells[0]
-    ci_cell = table.columns[2]._cells[0]
-    pr_cell = table.columns[3]._cells[0]
+    state_cell = rich_text_of(table.columns[1]._cells[0])
+    ci_cell = rich_text_of(table.columns[2]._cells[0])
+    pr_cell = rich_text_of(table.columns[3]._cells[0])
     assert (state_cell.plain, state_cell.spans[0].style) == ("?", "#2D81E0")
     assert (ci_cell.plain, ci_cell.style) == ("?", "#2D81E0")
     assert (pr_cell.plain, pr_cell.style) == ("?", "#2D81E0")
@@ -223,12 +237,12 @@ def test_unknown_sprint_and_github_failures_are_reported():
 def test_merge_error_keeps_pr_state_and_reports_problem():
     snapshot = _snapshot()
     pr = replace(PR_ROW.pr, state=PrState.OPEN, head=SPRINT.branch)
-    merge = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.ERROR)
+    merge = replace(_merge(), branch=pr.head, target=pr.base, state=MergeState.ERROR)
     snapshot = replace(snapshot, prs=(replace(PR_ROW, pr=pr, merge=merge),))
     assert rows(snapshot)[0].pr_state is PrState.OPEN
-    inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
+    inputs = replace(INPUTS, phase=Ok(replace(_phase(snapshot), closed=False)), tasks=Ok(()),
                      members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((pr,)), merges=(Ok(merge),), remotes=None)
-    result, _, _ = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
+    result, _, _ = tick(inputs, INITIAL_STATE, NOW, _unexpected_spec)
     # Only a ready step is blocked by an unavailable merge check; the dispatch hold reports it, not a merge fault.
     assert not any("merge check" in problem.text for problem in result.problems)
 
@@ -236,23 +250,23 @@ def test_merge_error_keeps_pr_state_and_reports_problem():
 def test_merge_check_states_are_open_pr_only_and_named():
     snapshot = _snapshot()
     pr = replace(PR_ROW.pr, state=PrState.OPEN, head=SPRINT.branch)
-    error = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.ERROR)
+    error = replace(_merge(), branch=pr.head, target=pr.base, state=MergeState.ERROR)
     closed = replace(pr, state=PrState.CLOSED)
     assert sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=closed, merge=error),)))[0].problems == ()
-    closed_inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
+    closed_inputs = replace(INPUTS, phase=Ok(replace(_phase(snapshot), closed=False)), tasks=Ok(()),
                             members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((closed,)), merges=(Ok(error),),
                             remotes=None)
-    result, _, _ = tick(closed_inputs, INITIAL_STATE, NOW, lambda _: None)
+    result, _, _ = tick(closed_inputs, INITIAL_STATE, NOW, _unexpected_spec)
     assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
-    result, _, _ = tick(replace(closed_inputs, prs=Ok((pr,))), INITIAL_STATE, NOW, lambda _: None)
+    result, _, _ = tick(replace(closed_inputs, prs=Ok((pr,))), INITIAL_STATE, NOW, _unexpected_spec)
     assert not any(problem.key.startswith("merge_error:") for problem in result.problems)
 
     unpushed = replace(error, state=MergeState.HEAD_NOT_PUSHED)
     facts = sprint_facts(replace(snapshot, prs=(replace(PR_ROW, pr=pr, merge=unpushed),)))[0]
     assert facts.problems == (f"head not pushed for {pr.head}",)
-    inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)), tasks=Ok(()),
+    inputs = replace(INPUTS, phase=Ok(replace(_phase(snapshot), closed=False)), tasks=Ok(()),
                      members=Ok(snapshot.member_data), gh=snapshot.gh, prs=Ok((pr,)), merges=(Ok(unpushed),), remotes=None)
-    result, _, _ = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
+    result, _, _ = tick(inputs, INITIAL_STATE, NOW, _unexpected_spec)
     assert not any("merge check failed" in problem.text for problem in result.problems)
 
     deleted = replace(error, state=MergeState.BASE_DELETED)
@@ -262,8 +276,8 @@ def test_merge_check_states_are_open_pr_only_and_named():
 
 def test_markdown_is_stable_and_escapes_sprint_ids():
     snapshot = _snapshot()
-    sprint = replace(snapshot.phase_data.sprints[0], id="atm-bi-1|test\\x")
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, sprints=(sprint,), steps=()), task_data=())
+    sprint = replace(_phase(snapshot).sprints[0], id="atm-bi-1|test\\x")
+    snapshot = replace(snapshot, phase_data=replace(_phase(snapshot), sprints=(sprint,), steps=()), task_data=())
     expected = ("| sprint | state | ci | pr |\n|---|:-:|:-:|---|\n"
                 f"| bi-1\\|test\\\\x | {icon(SprintState.IN_PROGRESS)[0]} | {icon(CiState.NONE)[0]} | - |")
     assert markdown(rows(snapshot)) == expected
@@ -273,10 +287,10 @@ def test_markdown_is_stable_and_escapes_sprint_ids():
 def test_collision_goes_in_the_leads_one_batch_and_failed_delivery_retries():
     snapshot = _snapshot()
     other = replace(snapshot.task_data[0], agent="other")
-    inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)),
+    inputs = replace(INPUTS, phase=Ok(replace(_phase(snapshot), closed=False)),
                      tasks=Ok((*snapshot.task_data, other)), members=Ok(snapshot.member_data),
                      gh=snapshot.gh, prs=Ok(()), merges=(), remotes=None)
-    result, actions, proposed = tick(inputs, INITIAL_STATE, NOW, lambda _: None)
+    result, actions, proposed = tick(inputs, INITIAL_STATE, NOW, _unexpected_spec)
     batches = [action for action in actions if action.kind == "batch"]
     assert [(action.to, action.kind) for action in actions] == [(inputs.lead, "batch")]
     collision = next(problem for problem in result.problems if problem.key.startswith("collision:"))
@@ -284,38 +298,42 @@ def test_collision_goes_in_the_leads_one_batch_and_failed_delivery_retries():
     assert collision.text in batches[0].text
     failed = replace(batches[0], outcome="failed timeout")
     retriable = _durable_state(INITIAL_STATE, proposed, actions, (failed,))
-    _, again, _ = tick(inputs, retriable, NOW, lambda _: None)
+    _, again, _ = tick(inputs, retriable, NOW, _unexpected_spec)
     assert [action.kind for action in again] == ["batch"]
     durable = _durable_state(INITIAL_STATE, proposed, actions, (replace(batches[0], outcome="sent"),))
-    _, again, second = tick(inputs, durable, NOW + timedelta(minutes=5), lambda _: None)
+    _, again, second = tick(inputs, durable, NOW + timedelta(minutes=5), _unexpected_spec)
     assert again == ()
-    _, next_cycle, _ = tick(inputs, second, NOW + timedelta(minutes=10), lambda _: None)
+    _, next_cycle, _ = tick(inputs, second, NOW + timedelta(minutes=10), _unexpected_spec)
     assert [action.kind for action in next_cycle] == ["batch"]
 
 
 def test_collision_is_sent_once_per_cycle_not_once_per_tick(monkeypatch):
     snapshot = _snapshot()
     other = replace(snapshot.task_data[0], agent="other")
-    inputs = replace(INPUTS, phase=Ok(replace(snapshot.phase_data, closed=False)),
+    inputs = replace(INPUTS, phase=Ok(replace(_phase(snapshot), closed=False)),
                      tasks=Ok((*snapshot.task_data, other)), members=Ok(snapshot.member_data),
                      gh=snapshot.gh, prs=Ok(()), merges=(), remotes=None)
     sent = []
     monkeypatch.setattr(runner.atm_source, "send", lambda *args: sent.append(args) or Ok(None))
 
     class Store:
-        def append_action(self, _line):
+        def append_action(self, value):
             return Ok(None)
 
     class Logger:
         def event(self, *_args, **_kwargs):
-            return Ok(None)
+            return None
+
+        def mark_reported(self, error):
+            return None
 
     state = INITIAL_STATE
     for minutes in (0, 3, 6, 10):
         now = NOW + timedelta(minutes=minutes)
         if minutes == 10:
+            assert isinstance(inputs.tasks, Ok)
             inputs = replace(inputs, tasks=Ok((*inputs.tasks.value, replace(other, agent="third"))))
-        result, actions, proposed = tick(inputs, state, now, lambda _: None)
+        result, actions, proposed = tick(inputs, state, now, _unexpected_spec)
         assert len([problem for problem in result.problems if problem.key.startswith("collision:")]) == 1
         reported, errors = runner._run_actions(replace(CONFIG, dry_run=False), actions, Store(), now, Logger())
         assert errors == ()
@@ -369,7 +387,7 @@ def test_twenty_spec_rows_and_rich_colours():
             number, state, ci = pr_values[index]
             pr = replace(PR_ROW.pr, number=number, head=sprint.branch, state=state, ci=ci,
                          url=f"https://example.test/pr/{number}")
-            merge = replace(PR_ROW.merge, branch=pr.head, target=pr.base, state=MergeState.CONFLICT) if index == 14 else None
+            merge = replace(_merge(), branch=pr.head, target=pr.base, state=MergeState.CONFLICT) if index == 14 else None
             prs.append(replace(PR_ROW, pr=pr, merge=merge))
     snapshot = replace(_snapshot(), phase_data=replace(PHASE, sprints=tuple(sprints), steps=tuple(steps)),
                        task_data=tuple(tasks), member_data=tuple(members), prs=tuple(prs))
@@ -402,12 +420,12 @@ def test_twenty_spec_rows_and_rich_colours():
     colours = ("#2DE057", "#4A5AF8", "#E551BA", "#FFE066", "#FF9F80", "#F85149", "#0077FF",
                "#FA8537", "#0077FF", "#2DE057", "#2EA043", "#FFA60D", "#2DE057", "#FFE066",
                "#FF8C66", "#FF784D", "#FF6533", "#FFB726", "#E551BA", "#D97757")
-    assert tuple(cell.spans[0].style for cell in table.columns[1]._cells) == colours
+    assert tuple(rich_text_of(cell).spans[0].style for cell in table.columns[1]._cells) == colours
     ci_colours = ("#2EA043", "#58A6FF", "#F85149", "#2D81E0", "#2D81E0", "#F85149", "#2D81E0",
                   "#2D81E0", "#58A6FF", "#2D81E0", "#2EA043", "#58A6FF", "#F85149", "#F85149",
                   "#2D81E0", "#F85149", "#2EA043", "#2D81E0", "#2EA043", "#2D81E0")
     pr_colours = ("#8957E5", "#2D81E0", "#2D81E0", "#FFA60D", "", "#2D81E0", "", "", "#2D81E0", "",
                   "#2D81E0", "#2D81E0", "#2D81E0", "#F85149", "#FFA60D", "#2D81E0", "#2D81E0",
                   "#F85149", "#8957E5", "")
-    assert tuple(cell.style for cell in table.columns[2]._cells) == ci_colours
-    assert tuple(cell.style for cell in table.columns[3]._cells) == pr_colours
+    assert tuple(rich_text_of(cell).style for cell in table.columns[2]._cells) == ci_colours
+    assert tuple(rich_text_of(cell).style for cell in table.columns[3]._cells) == pr_colours

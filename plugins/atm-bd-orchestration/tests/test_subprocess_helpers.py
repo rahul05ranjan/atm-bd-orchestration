@@ -65,6 +65,7 @@ def test_installed_suite_timeout_reports_blocked_child_output():
             try:
                 ready, _, _ = select.select([ready_read], [], [], HANG_GUARD_SECONDS)
                 assert ready and os.read(ready_read, 1) == b"R", "child did not report readiness"
+                assert child.stdout is not None
                 output = os.read(child.stdout.fileno(), len(b"suite-output-tail\n"))
                 # Inject expiry only after the child has written its tail and blocked.
                 raise subprocess.TimeoutExpired(command, timeout, output=output)

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from release_python import cmd_python_wheel_matrix, wheel_targets, verify_platforms, explicit_asset_patterns
-
 import re
 import shutil
 import tarfile
@@ -13,6 +11,7 @@ import zipfile
 from email import message_from_bytes
 from pathlib import Path
 
+from release_manifest import ChannelPreflight, CredentialRehearsal, RootChannelPreflight
 from release_manifest import (
     _assert_python_package_version,
     _assert_workspace_inherited_version,
@@ -43,6 +42,7 @@ from release_manifest import (
     validate_prerelease,
     validate_publish_order,
 )
+from release_python import cmd_python_wheel_matrix, wheel_targets, verify_platforms, explicit_asset_patterns
 from release_registry import cmd_check_version_unpublished, cmd_registry_status
 
 
@@ -87,14 +87,14 @@ def _channel_credential_rehearsal(
     workflow, _ = _channel_dispatch_config(manifest, channel_name)
     return workflow, rehearsal_inputs
 
-def _post_release_channel_preflight(manifest: dict, channel_name: str) -> dict[str, object]:
+def _post_release_channel_preflight(manifest: dict, channel_name: str) -> ChannelPreflight:
     """Return the non-secret readiness contract a channel worker must consume."""
     contract = _channel_contract(manifest, channel_name)
     if contract["stage"] != "post_release":
         raise SystemExit(f"channel contract {channel_name} is not a post-release channel")
 
     rehearsal = _channel_credential_rehearsal(manifest, channel_name)
-    rehearsal_plan = None
+    rehearsal_plan: CredentialRehearsal | None = None
     if rehearsal is not None:
         workflow, inputs = rehearsal
         rehearsal_plan = {"workflow": workflow, "inputs": inputs}
@@ -108,9 +108,9 @@ def _post_release_channel_preflight(manifest: dict, channel_name: str) -> dict[s
         "credential_rehearsal": rehearsal_plan,
     }
 
-def _root_channel_preflight(manifest: dict) -> list[dict[str, object]]:
+def _root_channel_preflight(manifest: dict) -> list[RootChannelPreflight]:
     """Return non-secret requirements for root-workflow publish channels."""
-    channels: list[dict[str, object]] = []
+    channels: list[RootChannelPreflight] = []
     if manifest["crates"]:
         contract = _channel_contract(manifest, "crates_io")
         channels.append(

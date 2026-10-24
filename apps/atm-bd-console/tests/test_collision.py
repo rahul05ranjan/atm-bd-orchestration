@@ -5,7 +5,12 @@ from dataclasses import replace
 from contract_samples import BEAD, PHASE, SNAPSHOT, SPRINT, STEP, TASK
 
 from atm_bd_console import collision, facts
-from atm_bd_console.types import Worktree
+from atm_bd_console.types import Phase, Snapshot, Worktree
+
+
+def phase(snapshot: Snapshot) -> Phase:
+    assert snapshot.phase_data is not None
+    return snapshot.phase_data
 
 
 def active_snapshot(*paths: str | None):
@@ -44,9 +49,9 @@ def test_separate_shared_paths_produce_separate_notices() -> None:
 def test_same_worktree_across_sprints_is_one_collision() -> None:
     snapshot = active_snapshot("/fix/shared", "/fix/shared")
     other_sprint = replace(SPRINT, id="atm-bh-7", branch="sprint/bh-7")
-    first, second = snapshot.phase_data.steps
+    first, second = phase(snapshot).steps
     second = replace(second, sprint="bh-7", sprint_bead=other_sprint.id)
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, sprints=(SPRINT, other_sprint),
+    snapshot = replace(snapshot, phase_data=replace(phase(snapshot), sprints=(SPRINT, other_sprint),
                                                     steps=(first, second)))
     rows = collision.collisions(snapshot)
     assert len(rows) == 1
@@ -56,7 +61,7 @@ def test_same_worktree_across_sprints_is_one_collision() -> None:
 
 def test_task_branch_resolves_its_own_worktree() -> None:
     snapshot = active_snapshot(None, None)
-    worktrees = tuple(Worktree("/fix/shared", step.branch, "sha") for step in snapshot.phase_data.steps)
+    worktrees = tuple(Worktree("/fix/shared", step.branch, "sha") for step in phase(snapshot).steps)
     assert len(collision.collisions(replace(snapshot, worktree_data=worktrees))) == 1
 
 
@@ -66,7 +71,7 @@ def test_task_bead_worktree_or_branch_resolves_without_a_step() -> None:
                   for task, metadata in zip(snapshot.task_data, (
                       {"worktree": "/fix/shared"}, {"branch": "fix/second"},
                   ), strict=True))
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=()), task_bead_data=beads,
+    snapshot = replace(snapshot, phase_data=replace(phase(snapshot), steps=()), task_bead_data=beads,
                        worktree_data=(Worktree("/fix/shared", "fix/second", "sha"),))
     assert len(collision.collisions(snapshot)) == 1
 
@@ -75,7 +80,7 @@ def test_task_does_not_inherit_ancestor_steps_worktree() -> None:
     snapshot = active_snapshot(None, None)
     parent = replace(STEP, bead_id=SPRINT.id, worktree="/ancestor", sprint_bead=SPRINT.id)
     beads = tuple(replace(BEAD, id=task.id, parent=SPRINT.id, metadata={}) for task in snapshot.task_data)
-    snapshot = replace(snapshot, phase_data=replace(snapshot.phase_data, steps=(parent,)), task_bead_data=beads)
+    snapshot = replace(snapshot, phase_data=replace(phase(snapshot), steps=(parent,)), task_bead_data=beads)
     assert collision.collisions(snapshot) == ()
 
 

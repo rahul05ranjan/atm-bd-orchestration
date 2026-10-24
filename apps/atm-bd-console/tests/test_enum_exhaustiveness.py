@@ -20,5 +20,6 @@ def test_enum_dispatch_ends_in_assert_never(module, function_name):
     fallback = dispatch.cases[-1]
     assert isinstance(fallback.pattern, ast.MatchAs)
     expected = ast.parse("match value:\n    case _ as unreachable:\n        assert_never(unreachable)")
+    assert isinstance(expected.body[0], ast.Match)
     assert ast.dump(fallback.pattern) == ast.dump(expected.body[0].cases[0].pattern)
     assert ast.dump(fallback.body[0]) == ast.dump(ast.parse("assert_never(unreachable)").body[0])

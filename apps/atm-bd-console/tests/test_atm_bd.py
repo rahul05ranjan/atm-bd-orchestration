@@ -24,7 +24,7 @@ import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import get_args
+from typing import TypeVar, get_args
 
 import pytest
 from contract_samples import PHASE_TEMPLATES
@@ -46,7 +46,7 @@ from atm_bd_console.atm_bd import (
     step,
 )
 from atm_bd_console.enums import CiState, SprintState
-from atm_bd_console.result import ConfigInvalid, Err, IoFailed, NotFound, Ok, ParseFailed
+from atm_bd_console.result import ConfigInvalid, Err, Error, IoFailed, NotFound, Ok, ParseFailed, Result
 from atm_bd_console.types import (
     Bead,
     DispatchContext,
@@ -298,9 +298,17 @@ def _replay_bd(fake_bin) -> None:
     ))
 
 
-def _ok(result):
+T = TypeVar("T")
+
+
+def _ok(result: Result[T]) -> T:
     assert isinstance(result, Ok), result
     return result.value
+
+
+def _not_found(error: Error) -> NotFound:
+    assert isinstance(error, NotFound), error
+    return error
 
 
 def _read(fake_bin) -> tuple[tuple[Bead, ...], tuple[Bead, ...], tuple[Bead, ...]]:
@@ -430,7 +438,7 @@ def test_planted_sprint_without_layer_metadata_is_a_step_error(fake_bin) -> None
     result = _phase(tuple(map(strip, open_beads)), tuple(map(strip, ready)), shown)
     assert "atm-bh-3" not in {sprint.id for sprint in result.sprints}
     assert len(result.sprints) == 9
-    assert [(bead_id, error.what) for bead_id, error in result.step_errors] == [
+    assert [(bead_id, _not_found(error).what) for bead_id, error in result.step_errors] == [
         ("atm-bh-3", "atm-bh-3.metadata.layer")]
 
 
@@ -439,10 +447,10 @@ def test_unusable_root_is_err(fake_bin) -> None:
     file = _ok(PLAN_FILE)
     missing = phase(file, None, open_beads, ready, shown)
     assert isinstance(missing, Err) and isinstance(missing.error, NotFound)
-    assert missing.error.what == "atm-phase-bh (no root bead)"
+    assert _not_found(missing.error).what == "atm-phase-bh (no root bead)"
     wrong = phase(file, next(b for b in open_beads if b.id == "atm-bh-4"), open_beads, ready, shown)
     assert isinstance(wrong, Err) and isinstance(wrong.error, NotFound)
-    assert wrong.error.what == "atm-phase-bh (root bead atm-bh-4)"
+    assert _not_found(wrong.error).what == "atm-phase-bh (root bead atm-bh-4)"
     unlabelled = replace(_root(open_beads), labels=("scope:epic",))
     mislabelled = phase(file, unlabelled, open_beads, ready, shown)
     assert isinstance(mislabelled, Err) and isinstance(mislabelled.error, ConfigInvalid)
@@ -463,9 +471,9 @@ def test_step_carries_severity_from_metadata_then_label() -> None:
     fix = _bead("atm-bh-4.finding-r1-fix", "atm-bh-4", ("stage:fix",), {"severity": "blocking", "sprint_bead": "atm-bh-4"})
     labelled = _bead("atm-bh-4.finding-2", "atm-bh-4", ("stage:finding", "severity:minor"), {"sprint_bead": "atm-bh-4"})
     plain = _bead("atm-bh-4.finding-3", "atm-bh-4", ("stage:finding",), {"sprint_bead": "atm-bh-4"})
-    assert step(fix, {}).value.severity == "blocking"
-    assert step(labelled, {}).value.severity == "minor"
-    assert step(plain, {}).value.severity is None
+    assert _ok(step(fix, {})).severity == "blocking"
+    assert _ok(step(labelled, {})).severity == "minor"
+    assert _ok(step(plain, {})).severity is None
 
 
 def test_step_maps_a_dev_bead_with_its_top_epic_and_tag() -> None:
@@ -511,22 +519,22 @@ def test_step_sanity_and_qa_keys_and_err_not_found() -> None:
     from atm_bd_console.atm_bd import step
 
     sanity = _bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",), {"dev_bead": "atm-bh-4.group-dev", "sprint": "bh-4"})
-    assert step(sanity, {}).value.checked_bead == "atm-bh-4.group-dev"
+    assert _ok(step(sanity, {})).checked_bead == "atm-bh-4.group-dev"
     qa = _bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.group-dev", "round": 1, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
-    got = step(qa, {}).value
+    got = _ok(step(qa, {}))
     assert (got.kind, got.checked_bead, got.qa_round, got.sprint_bead, got.carry_forward) == ("qa", "atm-bh-4.group-dev", 1, "atm-bh-4", None)
     closed_qa = replace(qa, close_reason="PASS: 0 findings filed")
-    assert step(closed_qa, {}).value.close_reason == "PASS: 0 findings filed"
+    assert _ok(step(closed_qa, {})).close_reason == "PASS: 0 findings filed"
     fix_qa = _bead("atm-bh-4.f1-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "atm-bh-4.f1", "round": 2, "sprint_bead": "atm-bh-4", "sprint": "bh-4"})
     fix = _bead("atm-bh-4.f1", "atm-bh-4", ("stage:fix",), {"round": 1})
-    fixed = step(fix_qa, {fix.id: fix}).value
+    fixed = _ok(step(fix_qa, {fix.id: fix}))
     assert (fixed.carry_forward, fixed.qa_round) == ("atm-bh-4.f1", 2)
     no_checked = step(_bead("atm-bh-4.group-sanity", "atm-bh-4", ("stage:dev-sanity",)), {})
-    assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.dev_bead" in no_checked.error.what
+    assert isinstance(no_checked, Err) and isinstance(no_checked.error, NotFound) and "atm-bh-4.group-sanity.metadata.dev_bead" in _not_found(no_checked.error).what
     no_round = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "sprint_bead": "atm-bh-4"}), {})
-    assert isinstance(no_round, Err) and "metadata.round" in no_round.error.what
+    assert isinstance(no_round, Err) and "metadata.round" in _not_found(no_round.error).what
     no_sprint = step(_bead("atm-bh-4.group-qa", "atm-bh-4", ("stage:qa",), {"checked_bead": "x", "round": 1}), {})
-    assert isinstance(no_sprint, Err) and no_sprint.error.what == (
+    assert isinstance(no_sprint, Err) and _not_found(no_sprint.error).what == (
         "atm-bh-4.group-qa: neither metadata.sprint_bead nor metadata.sprint")
 
 
@@ -684,7 +692,7 @@ def test_dispatch_spec_uses_named_template_variable_keys(monkeypatch: pytest.Mon
 
 def test_fix_verification_round_is_the_fix_beads_round_plus_one() -> None:
     later = {**PARENTS, FIX.id: bead(FIX.id, "fix", "atm-bh-5", round=2, sprint_bead="atm-bh-5")}
-    assert step(FIX_QA, later).value.qa_round == 3
+    assert _ok(step(FIX_QA, later)).qa_round == 3
     assert mapped(SPRINT_QA).qa_round == 1
 
 
@@ -700,7 +708,7 @@ def test_qa_step_without_round_is_not_found_not_round_one() -> None:
 
     result = dispatch_spec(context(replace(mapped(SPRINT_QA), qa_round=None), PR), PHASE_TEMPLATES)
     assert isinstance(result, Err) and isinstance(result.error, NotFound)
-    assert result.error.what == "atm-bh-5.group-qa.metadata.round"
+    assert _not_found(result.error).what == "atm-bh-5.group-qa.metadata.round"
 
 
 # D4 over recorded and planted beads, read through beads_source from a fake bd.
@@ -727,7 +735,7 @@ def recorded(fake_bin, monkeypatch: pytest.MonkeyPatch, *names: str) -> tuple[Be
 def d4(fake_bin, monkeypatch: pytest.MonkeyPatch) -> tuple[PhaseFile, Phase, dict[str, Bead]]:
     open_beads = recorded(fake_bin, monkeypatch, "list-open.json")
     shown = recorded(fake_bin, monkeypatch, "show-closed.json", "show-findings.json", "planted.json")
-    file = phase_file(str(BEADS / "repo"), "bh").value
+    file = _ok(phase_file(str(BEADS / "repo"), "bh"))
     root = next(item for item in open_beads if item.id == "atm-phase-bh")
     result = phase(file, root, open_beads, (), shown)
     assert isinstance(result, Ok), result

@@ -246,6 +246,7 @@ def test_stale_reason_prints_a_many_id_bd_argv_as_a_count_and_the_error_keeps_th
     text, error = pane_show(pane, FakeMmdflux(), replace(snapshot(), sprints=(), errors=(beads,)), NOW + timedelta(minutes=2))
 
     assert "bd show (28 ids) timed out after 20s" in text and "atm-bk-0" not in text
+    assert isinstance(error, Timeout)
     assert error is beads and error.argv == ("bd", "show", *ids)
 
 

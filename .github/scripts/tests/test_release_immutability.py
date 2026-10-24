@@ -86,8 +86,8 @@ def test_api_transport_is_bounded_read_only_and_does_not_echo_failure_body():
 
 def test_missing_or_failed_prerequisite_blocks_every_channel():
     from release_manifest import _channel_preflight_result
-    channel = {"name": "example", "agent": "publisher"}
-    base = {"ownership": "success", "release_metadata": "success"}
+    channel: dict[str, object] = {"name": "example", "agent": "publisher"}
+    base: dict[str, object] = {"ownership": "success", "release_metadata": "success"}
     assert _channel_preflight_result(channel, base, "v1.2.3")["status"] == "blocked"
     assert _channel_preflight_result(channel, {**base, "immutable_releases": "failure"}, "v1.2.3")["status"] == "failed"
     assert _channel_preflight_result(channel, {**base, "immutable_releases": "success"}, "v1.2.3")["status"] == "passed"

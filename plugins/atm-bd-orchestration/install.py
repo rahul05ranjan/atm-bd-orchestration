@@ -58,6 +58,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -481,7 +482,7 @@ def check_tools() -> None:
         raise InstallError(f"the sc-compose CLI is {cli_version} and the python3 wheel is {wheel_version}; they must "
                            f"be the same version; install {sc_compose_upgrade()} and rerun")
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from importlib.metadata import version
         import sc_compose  # noqa: F401
         interpreter_version = version("sc-compose")
     except (ImportError, PackageNotFoundError) as exc:

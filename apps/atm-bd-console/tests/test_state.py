@@ -287,7 +287,9 @@ def test_action_history_errors_are_replaced_by_each_read_not_added_to(tmp_path):
         path.write_text("{bad\n", encoding="utf-8")
         for _ in range(3):  # one stopped tick per read
             assert isinstance(store.load_actions(), Ok)
-        assert [error.source for error in store.load_errors] == [f"{path}:1"]
+        parse_errors = [error for error in store.load_errors if isinstance(error, ParseFailed)]
+        assert len(parse_errors) == len(store.load_errors)
+        assert [error.source for error in parse_errors] == [f"{path}:1"]
         path.write_text("", encoding="utf-8")
         assert isinstance(store.load_actions(), Ok)
         assert store.load_errors == []

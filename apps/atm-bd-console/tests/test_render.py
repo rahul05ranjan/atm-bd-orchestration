@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 from contract_fixtures import RUNNING
@@ -21,6 +22,7 @@ from atm_bd_console.render import _age, _error_text, dashboard, github_quotas, s
 from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
+    Error,
     IoFailed,
     LockHeld,
     NotFound,
@@ -72,8 +74,10 @@ def pacific_test(operation) -> None:
         time.tzset()
 
 
-def row(task_id: str, state: str, kind: str, difficulty: str | None, age_s: int,
-        marker: str | None = None) -> Row:
+def row(task_id: str, state: Literal["running", "queued"],
+        kind: Literal["dev", "fix", "sprint_qa", "fix_qa", "other"],
+        difficulty: Literal["hard", "normal", "fast"] | None, age_s: int,
+        marker: Literal["red", "yellow"] | None = None) -> Row:
     return Row(task_id, state, kind, difficulty, "bh", marker, age_s, f"description for {task_id}")
 
 
@@ -367,7 +371,7 @@ class NewVariant:
 
 def test_unknown_error_variant_fails_loudly_instead_of_falling_through() -> None:
     with pytest.raises(TypeError, match="unknown error variant NewVariant"):
-        _error_text(NewVariant())
+        _error_text(cast(Error, NewVariant()))
 
 
 def test_stopped_lines_and_age_boundaries() -> None:

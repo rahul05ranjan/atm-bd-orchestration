@@ -316,6 +316,7 @@ class Hook:
 
     def run(self, argv, *, lead=False, git=False, check=True):
         started = self.clock()
+        result = None
         for attempt in range(DOLT_RETRIES + 1):
             began = self.clock()
             result, error = None, None
@@ -323,17 +324,19 @@ class Hook:
                 result = self._run_once(argv, lead=lead, git=git)
             except CloseError as failure:
                 error = failure
-            retry = (error is None and argv[0] == "bd" and bool(result.returncode) and attempt < DOLT_RETRIES
+            retry = (error is None and result is not None and argv[0] == "bd" and bool(result.returncode) and attempt < DOLT_RETRIES
                      and bool(DOLT_DROP.search((result.stderr or "") + (result.stdout or ""))))
             outcome = ("timeout" if error is not None and "timed out" in str(error) else "error" if error is not None
-                       else "dolt_drop_retry" if retry else "failed" if result.returncode else "ok")
+                       else "dolt_drop_retry" if retry else "failed" if result is not None and result.returncode else "ok")
             if outcome != "ok" or attempt:
                 self._log_attempt(argv, attempt + 1, began, outcome, started)
             if error is not None:
                 raise error
+            assert result is not None
             if not retry:
                 break
             self.sleep(DOLT_RETRY_SLEEP_S)
+        assert result is not None
         if check and result.returncode:
             raise CloseError("COMMAND.FAILED", result.stderr.strip() or result.stdout.strip(),
                              f"Repair {' '.join(argv[:3])} and rerun with the same vars file.")
@@ -491,6 +494,7 @@ class Hook:
             raise CloseError("HEAD.DIRTY", dirty, "Commit or remove worktree changes before retrying.")
         remote_available = False
         remote_ref = f"refs/heads/{values['branch']}"
+        argv = ["git", "ls-remote", "origin", remote_ref]
         for _attempt in range(3):
             try:
                 argv = ["git", "ls-remote", "origin", remote_ref]
@@ -780,6 +784,8 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, sleep=time.slee
     parser.add_argument("--result", type=Path, help="the fixer's result file; required for dev and fix")
     parser.add_argument("--skip-checks", action="store_true", help="skips the PR and stack checks. Do NOT use without permission from the phase lead.")
     hook = None
+    args = None
+    output: dict[str, object]
     try:
         args = parser.parse_args(argv)
         try:
@@ -809,7 +815,7 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, sleep=time.slee
         output = {"err": {"code": error.code, "message": str(error), "fix": error.fix}}
     except KeyError as error:
         field = str(error.args[0])
-        producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars)
+        producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars if args is not None else "--vars")
         output = {"err": {"code": "COMMAND.INVALID", "message": f"{producer}: required field {field} is missing",
                           "fix": f"Restore field {field} in `{producer}` before retrying."}}
     except OSError as error:
@@ -817,7 +823,7 @@ def main(argv=None, runner=subprocess.run, clock=time.monotonic, sleep=time.slee
         output = {"err": {"code": "COMMAND.FAILED", "message": str(error),
                           "fix": f"Restore file access for {path} and rerun with the same vars file."}}
     except (ValueError, TypeError) as error:
-        producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars)
+        producer = " ".join(hook.last_json_argv) if hook is not None else str(args.vars if args is not None else "--vars")
         output = {"err": {"code": "COMMAND.INVALID", "message": f"{producer}: {type(error).__name__}: {error}",
                           "fix": f"Repair the invalid value reported by {type(error).__name__} in `{producer}`: {error}."}}
     if hook is not None and hook.attempts:

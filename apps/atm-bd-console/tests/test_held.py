@@ -8,10 +8,10 @@ from datetime import UTC, datetime, timedelta
 from conftest import FakeStep, run_scenario, settle
 from contract_samples import CONFIG, SNAPSHOT, STATE, TIMEOUT
 from textual.containers import VerticalScroll
-from textual.widgets import Static
+from textual.widgets import Static, TabbedContent
 
 from atm_bd_console import ledger_source, runs
-from atm_bd_console.app import ConsoleApp, quality_notes, sanity_pane
+from atm_bd_console.app import ConsoleApp, FindingsMarkdown, quality_notes, sanity_pane
 from atm_bd_console.error_text import error_text
 from atm_bd_console.held import Held, held_view
 from atm_bd_console.result import Err, Ok, ParseFailed
@@ -100,7 +100,7 @@ def test_the_sanity_tab_scrolls_so_every_run_is_reachable_newest_first() -> None
         app = ConsoleApp(replace(CONFIG, interval_s=3600), FakeStep(SNAPSHOT, (many, [], [])), STATE)
         async with app.run_test(size=(120, 30)) as pilot:
             await settle(pilot)
-            app.query_one("TabbedContent").active = "sanity"
+            app.query_one(TabbedContent).active = "sanity"
             await settle(pilot)
             scroller = app.query_one("#sanity").query_one(VerticalScroll)
             assert scroller.max_scroll_y > 0
@@ -137,6 +137,6 @@ def test_findings_pane_says_select_a_run_before_any_is_selected() -> None:
             await settle(pilot)
             app._show_findings("gone")
             await settle(pilot)
-            assert "Select a run" in app.query_one("#quality-findings")._markdown
+            assert "Select a run" in app.query_one("#quality-findings", FindingsMarkdown)._markdown
 
     run_scenario(scenario())

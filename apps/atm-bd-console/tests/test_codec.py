@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import cast, get_args, get_type_hints
 
 import pytest
 from contract_samples import (
@@ -31,6 +31,7 @@ from atm_bd_console.result import (
     CommandFailed,
     ConfigInvalid,
     Err,
+    Error,
     IoFailed,
     LockHeld,
     NotFound,
@@ -152,6 +153,7 @@ def test_nested_literal_rejection_names_the_full_path() -> None:
     assert invalid.error.source == "$.gh.mode"
     invalid = from_json(Snapshot, to_json(SNAPSHOT).replace('"kind":"sprint_qa"', '"kind":"qa"'))
     assert isinstance(invalid, Err)
+    assert isinstance(invalid.error, ParseFailed)
     assert invalid.error.source == "$.agents[0].rows[0].kind"
 
 
@@ -195,14 +197,16 @@ def test_old_pr_cache_decodes_with_quota_defaults() -> None:
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda sample: type(sample).__name__)
 def test_every_contract_type_round_trips(sample: object) -> None:
     text = to_json(sample)
-    assert from_json(type(sample), text) == Ok(sample)
-    assert to_json(from_json(type(sample), text).value) == text
+    decoded = from_json(type(sample), text)
+    assert decoded == Ok(sample)
+    assert isinstance(decoded, Ok)
+    assert to_json(decoded.value) == text
 
 
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda sample: type(sample).__name__)
 def test_ok_and_err_round_trip(sample: object) -> None:
     assert from_json(Ok[type(sample)], to_json(Ok(sample))) == Ok(Ok(sample))
-    error = sample if type(sample) in {type(item) for item in ERRORS} else NOT_FOUND
+    error = cast(Error, sample) if type(sample) in {type(item) for item in ERRORS} else NOT_FOUND
     assert from_json(Err, to_json(Err(error))) == Ok(Err(error))
     assert from_json(Result[type(sample)], to_json(Err(error))) == Ok(Err(error))
 
@@ -212,6 +216,7 @@ def test_non_utc_aware_datetime_is_written_as_utc_z() -> None:
     assert to_json(datetime(2026, 10, 14, 7, 0, tzinfo=timezone(timedelta(hours=-5)))) == '"2026-10-14T12:00:00Z"'
     decoded = from_json(datetime, to_json(PLUS_TWO))
     assert decoded == Ok(PLUS_TWO)
+    assert isinstance(decoded, Ok)
     assert decoded.value.tzinfo is UTC
     assert '"assigned_at":"2026-10-14T11:53:00Z","description":"implement tick rules","id":"atm-bh-6"' in to_json(TASK)
     assert '"state_since":"2026-10-14T11:30:00Z"' in to_json(TASK)
@@ -257,6 +262,7 @@ def test_qa_icon_color_survives_snapshot_codec_round_trip(qa_state: QaState, col
     decoded = from_json(Snapshot, encoded)
 
     assert decoded == Ok(snapshot)
+    assert isinstance(decoded, Ok)
     assert to_json(decoded.value) == encoded
     assert icon_for(decoded.value.agents[0]) == ("\U000f029b", color)
 
@@ -285,6 +291,7 @@ def test_tick_context_missing_contract_fields_report_paths() -> None:
 def test_missing_field_and_datetime_errors_are_results() -> None:
     missing = from_json(Config, '{"phase":"bh"}')
     assert isinstance(missing, Err)
+    assert isinstance(missing.error, ParseFailed)
     assert "lead" in missing.error.message
     invalid = from_json(datetime, '"2026-10-14T10:00:00"')
     assert isinstance(invalid, Err)

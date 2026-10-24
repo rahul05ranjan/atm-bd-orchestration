@@ -24,5 +24,6 @@ def run_process(stage: str, argv, *, cwd=None, env=None, check: bool = True, tex
 
 
 def build_command(*args: str) -> list[str]:
+    assert UV is not None
     return [UV, "build", "--offline", "--no-python-downloads", "--no-build-isolation",
             "--python", sys.executable, *args]

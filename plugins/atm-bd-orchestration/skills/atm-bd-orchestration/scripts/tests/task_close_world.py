@@ -11,6 +11,7 @@ import subprocess
 
 SCRIPTS = Path(__file__).parents[1]
 SPEC = importlib.util.spec_from_file_location("task_close", SCRIPTS / "atm-task-close.py")
+assert SPEC is not None and SPEC.loader is not None
 hook = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(hook)
 EXAMPLES = SCRIPTS.parent / "examples"
@@ -59,7 +60,7 @@ class World:
         self.tasks = {self.values[name]: [] for name in ("dev_task_id", "sanity_task_id", "qa_task_id")}
         self.tasks[self.values["dev_task_id"]].append(self.assignment(1))
         self.messages, self.calls, self.writes = [], [], []
-        self.fail_after = None
+        self.fail_after: int | None = None
         self.github_failure = False
         self.git_network_failure = None
         self.timeout_command = None

@@ -50,9 +50,8 @@ jobs:
       - name: Console tests
         working-directory: apps/atm-bd-console
         run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pytest -q
-      - name: Console source type check
-        working-directory: apps/atm-bd-console
-        run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' pyright src
+      - name: Repository Python type check
+        run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' --project apps/atm-bd-console pyright
       - name: Release tooling tests (no publication)
         run: uv run --frozen --python '${{ steps.python.outputs.python-path }}' --project apps/atm-bd-console pytest -q .github/scripts/tests
       - name: Build distributions and check publisher compatibility

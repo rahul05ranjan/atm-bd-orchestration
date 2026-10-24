@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import TypeVar, cast, get_args, get_type_hints
 
 import pytest
 from conftest import SYSTEM_PATH, FakeBin
@@ -15,12 +15,13 @@ from atm_bd_console.result import Ok, Rejected
 from atm_bd_console.types import ActionLine, Inputs, MergeFile, PrsFile, Snapshot
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract"
+T = TypeVar("T")
 
 
-def _load(name: str, cls: type) -> object:
+def _load(name: str, cls: type[T]) -> T:
     decoded = from_json(cls, (FIXTURES / name).read_text())
     assert isinstance(decoded, Ok), (name, decoded)
-    return decoded.value
+    return cast(T, decoded.value)
 
 
 def test_committed_fixtures_are_the_to_json_output() -> None:

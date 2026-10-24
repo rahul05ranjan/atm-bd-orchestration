@@ -21,7 +21,9 @@ from unittest.mock import Mock, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 loader = importlib.machinery.SourceFileLoader("bead_groups_plan", str(SCRIPTS / "bead-groups"))
-groups = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+assert spec is not None
+groups = importlib.util.module_from_spec(spec)
 loader.exec_module(groups)
 import sc_render
 

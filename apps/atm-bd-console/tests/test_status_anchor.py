@@ -58,7 +58,7 @@ def status_app(panel: FakePanel) -> SimpleNamespace:
             return ui.overflow
         return ui.tabs
 
-    app.query_one = query_one
+    vars(app)["query_one"] = query_one
     app.call_after_refresh = lambda callback, *_: ui.scheduled.append(callback)
     return ui
 
