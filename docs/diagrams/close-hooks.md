@@ -124,7 +124,7 @@ flowchart TB
   CV["close-vars.py bead --out vars.json<br/>reads one bead from bd-cache; re-reads bd once<br/>when a needed field is missing"]:::script
   NP["CLOSE_VARS.NOT_POURED: run the backfill;<br/>never assemble fields from other beads"]:::bad
   VJ[/"vars.json: the role's required_variables_by_role"/]:::file
-  NEXT["next, the manual close: dev or fix writes its result file,<br/>atm-task-close.py --role R --vars --result,<br/>atm task close bead completed"]:::atm
+  NEXT["next, the manual close: dev or fix writes its result file,<br/>atm-task-close.py --role R --vars --result<br/>(it closes the dev task)"]:::atm
   QV["close-vars.py qa --qa-assignment --out vars.json<br/>poured fields + the checked bead's recorded<br/>commit, branch and PR"]:::script
   QR["ASSIGN_VARS.NOT_RECORDED, CONFLICT,<br/>NOT_PLANNED: never sent with an empty PR"]:::bad
   QA["atm task assign qa_member --template templates.qa"]:::atm
