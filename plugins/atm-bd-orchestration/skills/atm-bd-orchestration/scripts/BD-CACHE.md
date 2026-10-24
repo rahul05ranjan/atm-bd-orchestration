@@ -79,8 +79,8 @@ scales with it.
 | New-process CLI `get` (`python3 bd_cache.py get`) | 129 ms median (load 7-10); 80 ms (load 3.5) | < 50 ms |
 | Hook process start + import (`sanity_task_close_hook`, imports pydantic) | 70-80 ms (load 3.5) | Rust binary: no interpreter or pydantic cost |
 | `bd list --id <one bead>` | 160-180 ms (load 3.5); `bd show` 134 ms median, 254 ms max (load 7-10) | n/a (backend) |
-| First full sync, phase bk (810 beads) | 0.42 s (`bd version` + `bd schema` + one `bd list`) | — |
-| Incremental sync, phase bk | 0.20 s | < 1 s for a 1000-bead phase |
+| First full sync, one 810-bead phase | 0.42 s (`bd version` + `bd schema` + one `bd list`) | — |
+| Incremental sync, the same phase | 0.20 s | < 1 s for a 1000-bead phase |
 | Drain | 3 `bd` calls per pass (`bd version`, `bd schema`, batched pre-read), then 2 per entry (write, read-back); 4 entries on 3 beads in 0.85 s | — |
 
 **Hook budget (sanity close, 2.5 s).** Process start plus imports take about

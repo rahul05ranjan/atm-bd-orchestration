@@ -27,7 +27,7 @@ Register from the primary checkout (the hook uses its registered cwd):
 ```
 atm hook register task.close --phase <x> --cwd . \
   --module .claude/skills/atm-bd-orchestration/scripts/sanity_task_close_hook.py \
-  --custom '{"task_prefix":"<prefix>-<x>-","sanity_agents":["atm-sanity"]}'
+  --custom '{"task_prefix":"<prefix>-<x>-","sanity_agents":["<dev_sanity_member>"]}'
 ```
 
 `sanity_agents` selects the enabled agent identities; other identities immediately
