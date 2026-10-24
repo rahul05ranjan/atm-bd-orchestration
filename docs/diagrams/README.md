@@ -10,15 +10,20 @@ or feature bead, picked up by idle devs by priority; they never block a
 sprint. Dependencies are only hard (the dependent sprint needs the
 predecessor's API): the dependent dev bead blocks on the predecessor's initial
 sanity bead; an edge to the predecessor's sprint bead is added only on the
-user's request.
+user's request. Every open dev, fix, sanity and qa bead carries the close
+fields its close needs. Closes run through `atm-task-close.py` (dev, fix, qa)
+and the sanity `task.close` hook, and every bead write they make goes through
+the bd-cache journal.
 
 | File | Level | Shows |
 | --- | --- | --- |
 | [phase.md](phase.md) | phase | root, sprint containers, poured groups, cross-sprint edges, phase-wide beads, non-blocking findings |
 | [sprint.md](sprint.md) | sprint | the sprint group, fix groups per blocking finding, a second fix round, sanity FAIL, closers |
 | [lifecycle.md](lifecycle.md) | sprint | ready, claim and close order; where results and logs are written |
-| [correlation.md](correlation.md) | phase | bead id equals ATM task id, `.atm-bd/<phase>.toml`, who holds each task |
-| [formula.md](formula.md) | detail | pour stages, formula location and override, the beads and edges each formula pours, idempotent attach |
+| [close-hooks.md](close-hooks.md) | detail | dev or fix close script, the sanity `task.close` hook (PASS, FAIL, escalation), the legacy sanity close, close vars and the manual close |
+| [bd-cache.md](bd-cache.md) | detail | cached reads, journaled writes, the drain, journal entry states, the cron tick, sync and outage |
+| [correlation.md](correlation.md) | phase | bead id equals ATM task id, `.atm-bd/` files, who assigns and holds each task, escalation tasks |
+| [formula.md](formula.md) | detail | pour stages, formula location and override, close fields, the beads and edges each formula pours, idempotent attach |
 
 ## Conventions
 
@@ -35,7 +40,10 @@ user's request.
   2. **relations** (the request's `relations`, from `scripts/bead-groups`): dotted arrow `-.->`, for
      `validates`, `discovered-from` and cross-sprint `blocks`.
   3. **template or script**: solid node and arrow `-->`; blue for a template
-     plus `bd import`, green for a package script.
+     plus `bd import`, green for a package script (the close script, the
+     sanity hook and bd-cache are package scripts).
+  - Yellow nodes are ATM tasks, messages and actions. Red nodes are
+    refusals and escalations.
   - Files are parallelograms. A dashed arrow to or from a file is a lookup,
     not a bd edge.
 - bd facts:
@@ -58,4 +66,7 @@ user's request.
 
 ## Not yet implemented
 
-None: the package code matches these diagrams.
+- Dev, fix and qa closes run `atm-task-close.py` by hand; only sanity has an
+  ATM `task.close` hook. Moving them into the hook is planned.
+- `bd ready`, the TUI and the plan tools read bd directly, so they see a
+  journaled write only after the drain applies it (bd-cache.md).

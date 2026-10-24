@@ -17,6 +17,16 @@ Pouring has three stages:
    in dependency order, then findings.
 3. Everything else is created from templates or by package scripts.
 
+Every step a formula pours carries the close fields (`close_fields.POURED`:
+`role`, `phase`, `sprint`, `sprint_bead`, `stack`, `stack_bead`, `branch`,
+`worktree`, `pr_target`, `base`, `checked_bead`, `checked_title`,
+`sanity_bead`, `qa_bead`, `phase_feature`, `lint_command`, `policy_path`,
+`max_sanity_rounds`), so its close reads no other bead. bead-groups fills
+them from the sprint container, the repository configuration and the
+relations file; `bead_schema.CloseFields` and `validate-plan` reject an open
+task bead without them, and `close_fields_backfill.py` stamps beads poured
+before them (close-hooks.md, "Close vars").
+
 `scripts/bead-groups` runs stages 1 and 2. Targets: one sprint (`--sprint`), a
 list (`--sprint a,b`), a whole phase (`--phase`), or one QA round's blocking
 findings (`--findings FILE`). `--validate` (`sc-compose bead preview-attach`) changes no bead and reports what is
@@ -67,9 +77,9 @@ flowchart TB
 
   SPR["p-x-2 sprint container<br/>parent = p-x-2, ref = group"]:::tmpl
   subgraph POUR["poured: sprint-group"]
-    DEV["dev: p-x-2.group-dev<br/>metadata: phase, sprint, stack, layer, difficulty, sprint_bead"]:::poured
-    SAN["sanity: p-x-2.group-sanity, needs dev<br/>metadata.dev_bead"]:::poured
-    QA["qa: p-x-2.group-qa, needs sanity<br/>metadata: checked_bead, round = 1"]:::poured
+    DEV["dev: p-x-2.group-dev<br/>metadata: layer, difficulty, close fields"]:::poured
+    SAN["sanity: p-x-2.group-sanity, needs dev<br/>metadata: dev_bead, close fields"]:::poured
+    QA["qa: p-x-2.group-qa, needs sanity<br/>metadata: round = 1, close fields"]:::poured
   end
   PRED["predecessor's initial sanity bead"]:::tmpl
 
@@ -93,9 +103,9 @@ flowchart TB
   SPR["p-x-2 sprint container<br/>parent = p-x-2, ref = qa1-f3-r1"]:::tmpl
   QA1["p-x-2.group-qa (FAIL)<br/>filed_by; closed after this pour"]:::closed
   subgraph POUR["poured by quality-mgr: finding-group"]
-    FX["fix: p-x-2.qa1-f3-r1-fix<br/>finding_ref, severity, reviewer, remedy,<br/>filed_by, round, difficulty"]:::poured
-    FS["sanity: p-x-2.qa1-f3-r1-sanity, needs fix<br/>metadata.dev_bead"]:::poured
-    FQ["qa: p-x-2.qa1-f3-r1-qa, needs sanity<br/>checked_bead, reviewer, round"]:::poured
+    FX["fix: p-x-2.qa1-f3-r1-fix<br/>finding_ref, severity, reviewer, remedy,<br/>filed_by, round, difficulty, close fields"]:::poured
+    FS["sanity: p-x-2.qa1-f3-r1-sanity, needs fix<br/>metadata: dev_bead, close fields"]:::poured
+    FQ["qa: p-x-2.qa1-f3-r1-qa, needs sanity<br/>reviewer, reviewers_round1, round, close fields"]:::poured
   end
 
   FX ==>|parent-child| SPR
