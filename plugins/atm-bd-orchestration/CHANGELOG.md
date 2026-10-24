@@ -17,8 +17,8 @@ Task-close hooks and the bd-cache (#557). Every validated open task bead carries
 - `sanity_task_close_hook.py`: the ATM `task.close` hook for sanity tasks (`scripts/SANITY-CLOSE-HOOK.md`).
   - PASS closes the sanity bead, and FAIL reopens the dev bead.
   - Bead writes are journaled through bd-cache.
-  - Failures escalate to the phase lead with a durable repair obligation (`sanity-close-repair.py`).
-  - `sanity_close_legacy.py` finishes repairs assigned before the cutover.
+  - A failure the hook cannot finish escalates to the phase lead as a `<task>.close-error-<id>` task.
+  - Repair tasks assigned before the cutover finish through `sanity-close-repair.py` and `sanity_close_legacy.py`.
 - `close-vars.py`: prints a poured bead's close vars, or with `--qa-assignment` the `templates.qa` vars.
   - It reads the cache and re-reads bd once only when a needed field is missing.
   - A checked bead with no recorded PR is refused, never sent with an empty PR.
@@ -31,7 +31,6 @@ Task-close hooks and the bd-cache (#557). Every validated open task bead carries
   - A write not yet applied is `BEADS.WRITE_PENDING`; rerunning with the same vars applies it once.
   - A write bd refuses is `BEADS.WRITE_ESCALATED`.
 - The sprint-group and finding-group formulas, the QA bead and the dev-sanity bead pour the close fields.
-- The dev, fix and dev-sanity templates take `close_vars_path`.
 - `dev-sanity` gains a daemon-mode verification override.
 - The console makes QA dispatch take the checked bead's recorded PR and resolves relative bead worktrees (one producer of QA vars).
 
